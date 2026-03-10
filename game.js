@@ -26,23 +26,25 @@ const WORLD = { w: 120, h: 78 };
 // Camera view keeps the same aspect ratio as the canvas while following Eric.
 const CAMERA = { w: 64, h: 35, x: 0, y: 0 };
 
-// ZX Spectrum-inspired 8-color palette (plus bright variants where useful).
-const ZX = {
-  black: '#000000',
-  blue: '#0000d7',
-  red: '#d70000',
-  magenta: '#d700d7',
-  green: '#00d700',
-  cyan: '#00d7d7',
-  yellow: '#d7d700',
-  white: '#d7d7d7',
-  brightBlue: '#0000ff',
-  brightRed: '#ff0000',
-  brightMagenta: '#ff00ff',
-  brightGreen: '#00ff00',
-  brightCyan: '#00ffff',
-  brightYellow: '#ffff00',
-  brightWhite: '#ffffff',
+// Full retro-inspired palette so every room/entity can have richer color identity.
+const PALETTE = {
+  ink: '#0f1426',
+  deepBlue: '#1d2f6f',
+  skyBlue: '#4f86f7',
+  teal: '#2a9d8f',
+  mint: '#a8dadc',
+  brick: '#b23a48',
+  salmon: '#ff7f6a',
+  amber: '#ffb703',
+  cream: '#fff1d0',
+  violet: '#7b2cbf',
+  plum: '#5a189a',
+  grass: '#4caf50',
+  moss: '#2e7d32',
+  concrete: '#9aa0a6',
+  steel: '#5f6b7a',
+  chalk: '#f8f9fa',
+  line: '#1f2937',
 };
 
 const rooms = [
@@ -526,93 +528,146 @@ function worldToScreen(x, y) {
   };
 }
 
-// Draw an 8x8 checker dither to mimic classic ZX color-cell shading.
-function fillDitherRect(x, y, w, h, colorA, colorB) {
+// Draw a subtle checker dither so large surfaces feel textured, not flat.
+function fillDitherRect(x, y, w, h, colorA, colorB, step = 4) {
   ctx.fillStyle = colorA;
   ctx.fillRect(x, y, w, h);
   ctx.fillStyle = colorB;
-  for (let py = y; py < y + h; py += 2) {
-    for (let px = x + ((py / 2) % 2); px < x + w; px += 2) {
-      ctx.fillRect(px, py, 1, 1);
+  for (let py = y; py < y + h; py += step) {
+    for (let px = x + ((py / step) % 2) * step; px < x + w; px += step * 2) {
+      ctx.fillRect(px, py, step, step);
     }
   }
+}
+
+// Render inner textures for floors/walls so the school reads as built spaces.
+function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
+  if (room.type === 'corridor') {
+    // Corridor tile stripes to suggest worn linoleum.
+    fillDitherRect(drawX, drawY, drawW, drawH, '#6f95c7', '#5b80b1', 3);
+    ctx.strokeStyle = '#7ea5d8';
+    for (let x = drawX + 8; x < drawX + drawW; x += 16) {
+      ctx.beginPath();
+      ctx.moveTo(x, drawY + 2);
+      ctx.lineTo(x, drawY + drawH - 2);
+      ctx.stroke();
+    }
+  } else if (room.type === 'outdoor') {
+    // Grass stipple with slightly brighter specks.
+    fillDitherRect(drawX, drawY, drawW, drawH, PALETTE.grass, PALETTE.moss, 3);
+    ctx.fillStyle = '#75c96b';
+    for (let y = drawY + 2; y < drawY + drawH; y += 10) {
+      for (let x = drawX + 2; x < drawX + drawW; x += 14) {
+        ctx.fillRect(x, y, 2, 2);
+      }
+    }
+  } else {
+    // Classroom/hall checker flooring.
+    fillDitherRect(drawX, drawY, drawW, drawH, '#dbc8a8', '#cfba95', 4);
+    ctx.strokeStyle = '#c9b38e';
+    for (let y = drawY + 8; y < drawY + drawH; y += 16) {
+      ctx.beginPath();
+      ctx.moveTo(drawX + 2, y);
+      ctx.lineTo(drawX + drawW - 2, y);
+      ctx.stroke();
+    }
+  }
+}
+
+// Draw thick walls around each room; these give the campus stronger structure.
+function drawRoomWalls(drawX, drawY, drawW, drawH, room) {
+  const wallColor = room.type === 'outdoor' ? '#2c5b2f' : '#6e4f3a';
+  ctx.fillStyle = wallColor;
+  ctx.fillRect(drawX - 2, drawY - 2, drawW + 4, 2);
+  ctx.fillRect(drawX - 2, drawY + drawH, drawW + 4, 2);
+  ctx.fillRect(drawX - 2, drawY, 2, drawH);
+  ctx.fillRect(drawX + drawW, drawY, 2, drawH);
 }
 
 function drawWorld() {
   const sx = canvas.width / CAMERA.w;
   const sy = canvas.height / CAMERA.h;
 
-  // Base dark blue screen with scanline bars for CRT-like feel.
-  ctx.fillStyle = ZX.blue;
+  // Layered sky gradient keeps the scene colorful while remaining lightweight.
+  const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  sky.addColorStop(0, PALETTE.deepBlue);
+  sky.addColorStop(0.45, PALETTE.skyBlue);
+  sky.addColorStop(1, '#95c8ff');
+  ctx.fillStyle = sky;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = 'rgba(0,0,0,0.15)';
-  for (let y = 0; y < canvas.height; y += 4) ctx.fillRect(0, y, canvas.width, 1);
 
-  // Room blocks and labels in constrained Spectrum-like color pairings.
+  // Subtle scanlines maintain retro feel without reducing readability.
+  ctx.fillStyle = 'rgba(15, 20, 38, 0.12)';
+  for (let y = 0; y < canvas.height; y += 5) ctx.fillRect(0, y, canvas.width, 1);
+
   for (const room of rooms) {
     const drawX = Math.floor((room.x - CAMERA.x) * sx);
     const drawY = Math.floor((room.y - CAMERA.y) * sy);
     const drawW = Math.ceil(room.w * sx);
     const drawH = Math.ceil(room.h * sy);
 
-    if (room.type === 'outdoor') {
-      fillDitherRect(drawX, drawY, drawW, drawH, ZX.green, ZX.brightGreen);
-    } else if (room.type === 'corridor') {
-      fillDitherRect(drawX, drawY, drawW, drawH, ZX.cyan, ZX.blue);
-    } else {
-      fillDitherRect(drawX, drawY, drawW, drawH, ZX.magenta, ZX.red);
+    drawRoomTexture(drawX, drawY, drawW, drawH, room);
+    drawRoomWalls(drawX, drawY, drawW, drawH, room);
+
+    // Doorway markers communicate where corridors connect rooms.
+    if (room.type !== 'outdoor') {
+      ctx.fillStyle = '#3e7e9c';
+      ctx.fillRect(drawX + drawW / 2 - 7, drawY + drawH - 2, 14, 4);
     }
 
-    ctx.strokeStyle = ZX.brightWhite;
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = PALETTE.line;
+    ctx.lineWidth = 1;
     ctx.strokeRect(drawX, drawY, drawW, drawH);
 
-    ctx.fillStyle = ZX.brightYellow;
+    ctx.fillStyle = room.type === 'outdoor' ? PALETTE.cream : PALETTE.plum;
     ctx.font = 'bold 10px monospace';
     ctx.fillText(room.name.toUpperCase(), drawX + 6, drawY + 12);
   }
 
-  // Stair markers shown as chunky striped blocks.
+  // Stair markers are larger with textured treads for readability.
   for (const stair of stairs) {
     const pos = worldToScreen(stair.x, stair.y);
-    fillDitherRect(pos.sx - 11, pos.sy - 8, 22, 16, ZX.yellow, ZX.brightYellow);
-    ctx.fillStyle = ZX.black;
+    fillDitherRect(pos.sx - 14, pos.sy - 10, 28, 20, '#f4d06f', '#ffbf3c', 4);
+    ctx.fillStyle = '#8f5a00';
+    for (let i = 0; i < 4; i += 1) ctx.fillRect(pos.sx - 12 + i * 6, pos.sy - 8, 2, 16);
+    ctx.fillStyle = PALETTE.ink;
     ctx.font = 'bold 8px monospace';
-    ctx.fillText('STAIR', pos.sx - 12, pos.sy - 10);
+    ctx.fillText('STAIR', pos.sx - 13, pos.sy - 12);
   }
 
-  // Floor orientation strip with very Spectrum-style high-contrast text.
-  ctx.fillStyle = ZX.black;
-  ctx.fillRect(6, 6, 180, 48);
-  ctx.strokeStyle = ZX.brightCyan;
-  ctx.strokeRect(6, 6, 180, 48);
-  ctx.fillStyle = ZX.brightWhite;
+  // Floor orientation strip in a modern full-color treatment.
+  ctx.fillStyle = 'rgba(15,20,38,0.82)';
+  ctx.fillRect(6, 6, 190, 52);
+  ctx.strokeStyle = PALETTE.mint;
+  ctx.strokeRect(6, 6, 190, 52);
+  ctx.fillStyle = PALETTE.chalk;
   ctx.font = 'bold 11px monospace';
   ctx.fillText('UPPER FLOOR', 12, 20);
-  ctx.fillText('MIDDLE FLOOR', 12, 34);
-  ctx.fillText('GROUND FLOOR', 12, 48);
+  ctx.fillText('MIDDLE FLOOR', 12, 36);
+  ctx.fillText('GROUND FLOOR', 12, 52);
 
-  // Blackboard visuals and text snippets.
   for (const board of blackboards) {
     const p = worldToScreen(board.x, board.y);
-    fillDitherRect(p.sx - 22, p.sy - 10, 44, 14, ZX.green, ZX.black);
-    ctx.strokeStyle = ZX.brightGreen;
-    ctx.strokeRect(p.sx - 22, p.sy - 10, 44, 14);
+    fillDitherRect(p.sx - 23, p.sy - 11, 46, 16, '#194b31', '#23633f', 3);
+    ctx.strokeStyle = '#93d5a9';
+    ctx.strokeRect(p.sx - 23, p.sy - 11, 46, 16);
     if (board.text) {
-      ctx.fillStyle = ZX.brightWhite;
+      ctx.fillStyle = PALETTE.chalk;
       ctx.font = '8px monospace';
-      ctx.fillText(board.text.slice(0, 28).toUpperCase(), p.sx - 20, p.sy - 1);
+      ctx.fillText(board.text.slice(0, 28).toUpperCase(), p.sx - 21, p.sy - 1);
     }
   }
 
-  // Shield pickups rendered as pixel diamonds.
+  // Shield pickups now use a richer gem-like sprite with highlight.
   for (const shield of shields) {
     if (shield.found) continue;
     const p = worldToScreen(shield.x, shield.y);
-    ctx.fillStyle = ZX.brightYellow;
-    ctx.fillRect(p.sx - 2, p.sy - 6, 4, 12);
-    ctx.fillRect(p.sx - 6, p.sy - 2, 12, 4);
-    ctx.fillStyle = ZX.black;
+    ctx.fillStyle = '#ffd166';
+    ctx.fillRect(p.sx - 4, p.sy - 7, 8, 14);
+    ctx.fillRect(p.sx - 7, p.sy - 4, 14, 8);
+    ctx.fillStyle = '#fff4c2';
+    ctx.fillRect(p.sx - 2, p.sy - 5, 3, 3);
+    ctx.fillStyle = '#5a3b00';
     ctx.font = 'bold 8px monospace';
     ctx.fillText('?', p.sx - 3, p.sy + 3);
   }
@@ -627,40 +682,58 @@ function drawEntities() {
     const px = Math.floor((entity.x - CAMERA.x) * sx);
     const py = Math.floor((entity.y - CAMERA.y) * sy);
 
-    // 8-bit character sprite: head, torso, legs in blocky rectangles.
-    const body = entity.role === 'player' ? ZX.brightYellow : entity.role === 'teacher' ? ZX.brightCyan : ZX.brightMagenta;
-    const accent = knocked ? ZX.white : ZX.black;
+    // Larger sprites for readability at scroll scale.
+    const body =
+      entity.role === 'player' ? '#ffca3a'
+      : entity.role === 'teacher' ? '#4cc9f0'
+      : entity.role === 'bully' ? '#f94144'
+      : entity.role === 'swot' ? '#43aa8b'
+      : entity.role === 'weird' ? '#9d4edd'
+      : '#f9844a';
 
     if (knocked) {
-      ctx.fillStyle = ZX.white;
-      ctx.fillRect(px - 8, py - 3, 16, 5);
+      ctx.fillStyle = '#b0b6c2';
+      ctx.fillRect(px - 11, py - 4, 22, 7);
     } else {
-      ctx.fillStyle = ZX.white;
-      ctx.fillRect(px - 3, py - 15, 6, 4);
+      // Head
+      ctx.fillStyle = '#ffd7b5';
+      ctx.fillRect(px - 5, py - 24, 10, 6);
+      // Hair cap
+      ctx.fillStyle = '#513b2f';
+      ctx.fillRect(px - 5, py - 24, 10, 2);
+      // Body jacket
       ctx.fillStyle = body;
-      ctx.fillRect(px - 4, py - 11, 8, 10);
-      ctx.fillStyle = accent;
-      ctx.fillRect(px - 4, py - 1, 3, 5);
-      ctx.fillRect(px + 1, py - 1, 3, 5);
+      ctx.fillRect(px - 7, py - 18, 14, 12);
+      // Arms
+      ctx.fillStyle = '#ffd7b5';
+      ctx.fillRect(px - 10, py - 17, 3, 8);
+      ctx.fillRect(px + 7, py - 17, 3, 8);
+      // Legs
+      ctx.fillStyle = '#1f2a44';
+      ctx.fillRect(px - 6, py - 6, 5, 8);
+      ctx.fillRect(px + 1, py - 6, 5, 8);
+      // Shoe details
+      ctx.fillStyle = '#13151a';
+      ctx.fillRect(px - 6, py + 2, 5, 2);
+      ctx.fillRect(px + 1, py + 2, 5, 2);
     }
 
-    // Mood marker for AI readability.
+    // Mood marker remains concise and readable.
     if (!knocked) {
-      ctx.fillStyle = ZX.brightWhite;
-      ctx.font = '9px monospace';
+      ctx.fillStyle = PALETTE.chalk;
+      ctx.font = '10px monospace';
       const moodGlyph = entity.mood === 'angry' ? '!' : entity.mood === 'furious' ? '*' : '.';
-      ctx.fillText(moodGlyph, px - 2, py - 18);
+      ctx.fillText(moodGlyph, px - 2, py - 26);
     }
 
-    ctx.fillStyle = ZX.brightWhite;
-    ctx.font = '8px monospace';
-    ctx.fillText(entity.name.toUpperCase(), px - 18, py - 20);
+    ctx.fillStyle = PALETTE.chalk;
+    ctx.font = 'bold 9px monospace';
+    ctx.fillText(entity.name.toUpperCase(), px - 22, py - 29);
   }
 
-  // Catapult pellets are intentionally tiny 1-bit pixels.
   for (const pellet of game.pellets) {
-    ctx.fillStyle = ZX.brightWhite;
-    ctx.fillRect((pellet.x - CAMERA.x - 0.08) * sx, (pellet.y - CAMERA.y - 0.08) * sy, 2, 2);
+    ctx.fillStyle = '#f8f9fa';
+    ctx.fillRect((pellet.x - CAMERA.x - 0.08) * sx, (pellet.y - CAMERA.y - 0.08) * sy, 3, 3);
   }
 }
 
