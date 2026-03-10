@@ -160,18 +160,19 @@ const lessonTasks = [
 ];
 
 const personalities = {
-  bully: { speed: 0.66, aggression: 0.72, diligence: 0.2, focus: 0.5 },
-  swot: { speed: 0.54, aggression: 0.04, diligence: 0.96, focus: 0.9 },
-  hero: { speed: 0.6, aggression: 0.2, diligence: 0.75, focus: 0.7 },
-  weird: { speed: 0.7, aggression: 0.35, diligence: 0.45, focus: 0.4 },
-  teacher: { speed: 0.56, aggression: 0.55, diligence: 1.0, focus: 1.0 },
+  // Everyone now has Eric-level baseline speed; lateness triggers extra running pace.
+  bully: { speed: 1.26, aggression: 0.72, diligence: 0.2, focus: 0.5 },
+  swot: { speed: 1.26, aggression: 0.04, diligence: 0.96, focus: 0.9 },
+  hero: { speed: 1.26, aggression: 0.2, diligence: 0.75, focus: 0.7 },
+  weird: { speed: 1.26, aggression: 0.35, diligence: 0.45, focus: 0.4 },
+  teacher: { speed: 1.26, aggression: 0.55, diligence: 1.0, focus: 1.0 },
   player: { speed: 1.26, aggression: 0, diligence: 0, focus: 0 },
 };
 
 const game = {
   timeMinutes: 8 * 60 + 20,
-  // Minutes advanced per real-time second to slow bell pacing.
-  timeScale: 0.08,
+  // Minutes advanced per real-time second; tuned so lesson travel windows are fair.
+  timeScale: 0.06,
   periodIndex: 0,
   periodElapsed: 0,
   paused: false,
@@ -221,6 +222,10 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     carryingTrash: false,
     litterWarnUntil: 0,
     assignedWaste: null,
+    // Every NPC now mirrors Eric's stamina + bladder simulation.
+    energy: 100,
+    bladder: Math.random() * 8,
+    running: false,
   };
 }
 
@@ -723,6 +728,11 @@ function updateMission() {
 // AI systems
 // -----------------------------------------------------------------------------
 function chooseTarget(entity, currentPeriod) {
+  // High bladder urgency overrides normal timetable targets.
+  if (entity.bladder >= 80) {
+    return roomCenter('Toilets');
+  }
+
   const p = entity.personality;
   const shouldAttend = game.rng() < p.diligence;
 
@@ -757,8 +767,31 @@ function chooseTarget(entity, currentPeriod) {
   return shouldAttend ? roomCenter(currentPeriod.room) : roomCenter('P.E. Field');
 }
 
+function isTeacherPresentForPeriod(currentPeriod) {
+  if (currentPeriod.mode !== 'lesson' && currentPeriod.period !== 'Tutorial') return true;
+  return game.entities.some((entity) => entity.role === 'teacher' && entityRoom(entity) === currentPeriod.room);
+}
+
+function updateNpcVitals(entity, dt, isRunning) {
+  const deltaMins = (dt / 1000) * game.timeScale;
+  // NPC bladder rises over time, slightly quicker while running.
+  entity.bladder = Math.min(100, entity.bladder + deltaMins * (0.34 + (isRunning ? 0.2 : 0)));
+
+  if (entityRoom(entity) === 'Toilets' && entity.bladder >= 15) {
+    entity.bladder = 0;
+  }
+
+  if (isRunning) {
+    entity.energy = Math.max(12, entity.energy - dt * 0.0125);
+  } else {
+    entity.energy = Math.min(100, entity.energy + dt * 0.0045);
+  }
+}
+
 function updateAI(dt) {
   const current = schedule[game.periodIndex];
+  const supervised = current.mode === 'lesson' || current.period === 'Tutorial';
+  const teacherPresent = isTeacherPresentForPeriod(current);
 
   for (const entity of game.entities) {
     if (entity === player) continue;
@@ -769,8 +802,7 @@ function updateAI(dt) {
     }
 
     // Teacher discipline: if they catch player in wrong room, assign lines.
-    const supervised = current.mode === 'lesson' || current.period === 'Tutorial';
-    if (entity.role === 'teacher' && distance(entity, player) < 1.8 && entityRoom(player) !== current.room && supervised) {
+    if (entity.role === 'teacher' && distance(entity, player) < 1.8 && entityRoom(player) !== current.room && supervised && teacherPresent) {
       addLines(40, `${entity.name} caught you bunking ${current.period}`);
     }
 
@@ -837,8 +869,14 @@ function updateAI(dt) {
     }
 
     const len = Math.hypot(dx, dy) || 1;
-    entity.vx = (dx / len) * entity.personality.speed * 2.15;
-    entity.vy = (dy / len) * entity.personality.speed * 2.15;
+    const lateForClass = supervised && teacherPresent && entityRoom(entity) !== current.room;
+    const canRun = entity.energy > 20;
+    entity.running = lateForClass && canRun;
+    const runBoost = entity.running ? 1.7 : 1;
+    const speed = entity.personality.speed * (entity.energy / 100) * 2.15 * runBoost;
+
+    entity.vx = (dx / len) * speed;
+    entity.vy = (dy / len) * speed;
 
     entity.x += entity.vx * (dt / 1000);
     entity.y += entity.vy * (dt / 1000);
@@ -850,6 +888,7 @@ function updateAI(dt) {
     }
 
     constrain(entity);
+    updateNpcVitals(entity, dt, entity.running);
 
     if (len < 0.9) entity.target = null;
 
@@ -889,7 +928,13 @@ function updatePellets(dt) {
 function updateSchedule(dt) {
   const current = schedule[game.periodIndex];
   const deltaMins = (dt / 1000) * game.timeScale;
-  game.periodElapsed += deltaMins;
+  const teacherPresent = isTeacherPresentForPeriod(current);
+  const periodWaiting = (current.mode === 'lesson' || current.period === 'Tutorial') && !teacherPresent;
+
+  // Lessons now wait for the teacher before period time can advance.
+  if (!periodWaiting) {
+    game.periodElapsed += deltaMins;
+  }
   game.timeMinutes += deltaMins;
 
   if (current.period === 'Tutorial' && !game.registrationTaken && game.periodElapsed > 8) {
@@ -910,7 +955,8 @@ function updateSchedule(dt) {
   game.lastLateTick += dt;
   if (game.lastLateTick > 2000) {
     const monitored = current.mode === 'lesson' || current.period === 'Tutorial';
-    if (entityRoom(player) !== current.room && monitored) addLines(10, `late for ${current.period}`);
+    const graceWindow = game.periodElapsed < 2.5;
+    if (entityRoom(player) !== current.room && monitored && teacherPresent && !graceWindow) addLines(10, `late for ${current.period}`);
     game.lastLateTick = 0;
   }
 
@@ -924,7 +970,7 @@ function updateSchedule(dt) {
   }
 
   clockEl.textContent = `🕘 Time: ${formatTime(game.timeMinutes)}`;
-  periodEl.textContent = `🔔 Period: ${current.period}`;
+  periodEl.textContent = `🔔 Period: ${current.period}${periodWaiting ? ' (waiting for teacher)' : ''}`;
   roomTargetEl.textContent = `📍 Target: ${current.room}`;
   updateFloorStatus();
 }
@@ -1241,6 +1287,17 @@ function drawEntities() {
       ctx.fillStyle = '#f4a261';
       ctx.fillRect(px + 8, py - 14, 4, 4);
     }
+
+    // Each person gets mini vitals bars (energy + bladder) like Eric.
+    const barW = 18;
+    const barX = px - barW / 2;
+    ctx.fillStyle = '#1c2439';
+    ctx.fillRect(barX, py - 37, barW, 2);
+    ctx.fillRect(barX, py - 33, barW, 2);
+    ctx.fillStyle = '#f6bd60';
+    ctx.fillRect(barX, py - 37, (barW * entity.energy) / 100, 2);
+    ctx.fillStyle = '#4cc9f0';
+    ctx.fillRect(barX, py - 33, (barW * entity.bladder) / 100, 2);
 
     ctx.fillStyle = PALETTE.chalk;
     ctx.font = 'bold 9px monospace';

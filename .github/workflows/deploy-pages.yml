@@ -5,9 +5,11 @@
 name: Deploy HTML5 Game to GitHub Pages
 
 on:
-  # Deploy after every code update pushed to any branch.
-  # This ensures local merges and direct updates always publish automatically.
+  # Deploy only when the main branch is updated.
+  # Feature branches can iterate safely without publishing to production Pages.
   push:
+    branches:
+      - main
   workflow_dispatch:
 
 # Required permissions for Pages deployment.
