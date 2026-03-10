@@ -1,0 +1,118 @@
+:root {
+  --bg: #11161f;
+  --panel: #1f2734;
+  --text: #f5f7fa;
+  --accent: #4dd7ff;
+  --danger: #ff5c5c;
+  --ok: #82ff9b;
+  --warn: #ffd66f;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: Inter, Segoe UI, Tahoma, sans-serif;
+  color: var(--text);
+  background: linear-gradient(120deg, #0b0f17, #152033);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 1rem;
+  background: #060a11;
+  border-bottom: 1px solid #31415e;
+}
+
+.topbar h1 { margin: 0; font-size: 1.2rem; }
+.hud { display: flex; flex-wrap: wrap; gap: 0.8rem; font-size: 0.9rem; }
+.top-controls { display: flex; gap: 0.4rem; }
+
+.control {
+  border: 1px solid #38648a;
+  background: #0b1a2e;
+  color: #d8efff;
+  font-size: 1.05rem;
+  border-radius: 8px;
+  min-width: 2.2rem;
+  min-height: 2.2rem;
+  cursor: pointer;
+}
+.control:hover { background: #102640; }
+
+main {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.canvas-wrap {
+  background: #0d1623;
+  border: 1px solid #31415e;
+  border-radius: 10px;
+  padding: 0.5rem;
+}
+
+canvas {
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  display: block;
+  image-rendering: pixelated;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid #31415e;
+  border-radius: 10px;
+  padding: 0.8rem;
+}
+
+.panel h2, .panel h3 { margin-top: 0.4rem; }
+
+.dot {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  margin-right: 0.4rem;
+}
+
+.player { background: #ffe04d; }
+.teacher { background: #8eb2ff; }
+.bully { background: #ff5f88; }
+.swot { background: #8effd3; }
+.hero { background: #ffd58e; }
+.weird { background: #c58eff; }
+
+.todo {
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.88rem;
+}
+.todo li { margin-bottom: 0.25rem; }
+
+.events {
+  margin-top: 0.4rem;
+  max-height: 240px;
+  overflow: auto;
+  border-top: 1px dashed #43597d;
+  padding-top: 0.6rem;
+  font-size: 0.86rem;
+}
+
+dialog {
+  max-width: 560px;
+  border-radius: 12px;
+  border: 1px solid #4a628c;
+  background: #0e1726;
+  color: white;
+}
+
+@media (max-width: 1200px) {
+  main { grid-template-columns: 1fr; }
+}
