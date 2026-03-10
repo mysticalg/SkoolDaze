@@ -126,6 +126,12 @@ const trashCans = [
   { x: 45, y: 97, label: 'Hall Bin' },
 ];
 
+// Outdoor drinking fountains let pupils hydrate without buying from vending machines.
+const waterFountains = [
+  { x: 109, y: 86, label: 'Field Fountain' },
+  { x: 151, y: 86, label: 'Gate Fountain' },
+];
+
 // Bell schedule approximating school-day flow.
 const schedule = [
   { period: 'Arrival', room: 'School Gates', mins: 10, mode: 'transition' },
@@ -280,6 +286,15 @@ function bullyFightChance(currentPeriod) {
   if (currentPeriod.period === 'Arrival' || currentPeriod.period === 'Tutorial') return 0.0001;
   if (currentPeriod.mode !== 'break') return 0.00035;
   return 0.006;
+}
+
+function findWitnessingTeacher(actor, range = 5.4) {
+  // Keep witness logic cheap: same room + distance approximates line-of-sight.
+  return game.entities.find((entity) => (
+    entity.role === 'teacher'
+    && entityRoom(entity) === entityRoom(actor)
+    && distance(entity, actor) < range
+  ));
 }
 
 function nearestPoint(origin, points) {
@@ -472,7 +487,9 @@ function updateTodo() {
     `Bladder: ${Math.round(game.bladder)}%`,
     `Auto mode: ${game.autoMode ? 'ON' : 'OFF'}`,
     `Energy should stay above 25`,
-    `Use vending machines for snacks/drinks, then bin the packaging`,
+    `Use vending machines for snacks/drinks, then bin packaging`,
+    `Use outside fountains (H2O) to lower bladder pressure`,
+    `Throwing rubbish (V) can KO pupils but teachers punish witnesses`,
     `Avoid teachers while bunking`,
   ];
   todoEl.innerHTML = todoItems.map((t) => `<li>${t}</li>`).join('');
@@ -607,6 +624,11 @@ function handleInput(dt) {
     }
     game.keys.c = false;
   }
+
+  if (game.keys.v) {
+    throwRubbish(player);
+    game.keys.v = false;
+  }
 }
 
 function meleeAttack(attacker) {
@@ -635,6 +657,37 @@ function fireCatapult(attacker) {
   announce(`🏹 ${attacker.name} fired a catapult`);
   if (attacker === player) addLines(20, 'catapult use');
   spendEnergy(5);
+}
+
+function throwRubbish(attacker) {
+  const isPlayer = attacker === player;
+  if (!attacker.carryingTrash && !(isPlayer && game.playerCarryingTrash)) {
+    if (isPlayer) announce('🧻 Eric has no rubbish to throw. Buy from VM or pick up litter first.');
+    return;
+  }
+
+  game.pellets.push({
+    x: attacker.x,
+    y: attacker.y - 0.4,
+    vx: attacker.facing * 0.2,
+    vy: -0.02,
+    owner: attacker,
+    kind: 'rubbish',
+  });
+
+  if (isPlayer) {
+    game.playerCarryingTrash = false;
+    announce('🧻 Eric threw rubbish. If a teacher sees it, detention lines are coming.');
+    const teacherWitness = findWitnessingTeacher(attacker);
+    if (teacherWitness) {
+      addLines(35, 'throwing rubbish at pupils');
+      announce(`🧑‍🏫 ${teacherWitness.name}: "Eric! Stop throwing rubbish right now!"`);
+    }
+  } else {
+    attacker.carryingTrash = false;
+    attacker.assignedWaste = null;
+    announce(`🧻 ${attacker.name} hurled rubbish across the yard.`);
+  }
 }
 
 function knockout(entity, by) {
@@ -667,6 +720,17 @@ function interact() {
   if (nearbyBin && game.playerCarryingTrash) {
     game.playerCarryingTrash = false;
     announce(`🗑️ Eric used ${nearbyBin.label} and binned his rubbish.`);
+    return;
+  }
+
+  // Outdoor fountains lower bladder pressure and provide a tiny stamina top-up.
+  const nearbyFountain = waterFountains.find((fountain) => distance(player, fountain) < 2.1);
+  if (nearbyFountain) {
+    game.bladder = Math.max(0, game.bladder - 30);
+    game.energy = Math.min(100, game.energy + 4);
+    updateBladderHud();
+    energyEl.textContent = `⚡ Energy: ${Math.round(game.energy)}`;
+    announce(`🚰 Eric drinks from ${nearbyFountain.label}. Refreshed and ready.`);
     return;
   }
 
@@ -817,6 +881,21 @@ function updateAI(dt) {
       meleeAttack(entity);
     }
 
+    const teacherWatchingBully = findWitnessingTeacher(entity, 6.2);
+    // Bullies are bolder with rubbish when staff are out of sight.
+    if (entity.role === 'bully' && !teacherWatchingBully) {
+      const victim = game.entities.find((candidate) => (
+        candidate !== entity
+        && candidate.role !== 'teacher'
+        && candidate.knockedUntil < performance.now()
+        && distance(entity, candidate) < 4.4
+      ));
+      if (victim && entity.carryingTrash && game.rng() < 0.0045) {
+        entity.facing = victim.x >= entity.x ? 1 : -1;
+        throwRubbish(entity);
+      }
+    }
+
     // Students can buy food/drink at vending machines and then carry packaging.
     if (entity.role !== 'teacher' && !entity.carryingTrash && current.mode === 'break' && game.rng() < 0.0018) {
       entity.carryingTrash = true;
@@ -912,14 +991,35 @@ function updatePellets(dt) {
     for (const entity of game.entities) {
       if (entity === pellet.owner || entity.knockedUntil > performance.now()) continue;
       if (distance(pellet, entity) < 0.75) {
-        entity.hp -= 60;
-        entity.mood = 'furious';
-        if (entity.hp <= 0) knockout(entity, pellet.owner);
+        if (pellet.kind === 'rubbish') {
+          // Rubbish throws are prank weapons: they instantly topple students.
+          if (entity.role !== 'teacher') {
+            knockout(entity, pellet.owner);
+            entity.mood = 'furious';
+          }
+          game.litter.push({ x: entity.x, y: entity.y, offender: pellet.owner, warned: false });
+          if (pellet.owner === player) {
+            const witness = findWitnessingTeacher(player, 6.2);
+            if (witness) {
+              addLines(20, 'throwing rubbish where staff could see');
+              announce(`🧑‍🏫 ${witness.name} saw the flying rubbish and gave Eric lines.`);
+            }
+          }
+        } else {
+          entity.hp -= 60;
+          entity.mood = 'furious';
+          if (entity.hp <= 0) knockout(entity, pellet.owner);
+        }
         pellet.dead = true;
       }
     }
 
-    if (pellet.x < 0 || pellet.x > WORLD.w || pellet.y > WORLD.h) pellet.dead = true;
+    if (pellet.x < 0 || pellet.x > WORLD.w || pellet.y > WORLD.h) {
+      if (pellet.kind === 'rubbish') {
+        game.litter.push({ x: Math.max(0, Math.min(WORLD.w, pellet.x)), y: Math.max(0, Math.min(WORLD.h, pellet.y)), offender: pellet.owner, warned: false });
+      }
+      pellet.dead = true;
+    }
   }
 
   game.pellets = game.pellets.filter((p) => !p.dead);
@@ -1190,6 +1290,18 @@ function drawWorld() {
     ctx.fillStyle = '#d3dee8';
     ctx.font = 'bold 7px monospace';
     ctx.fillText('BIN', p.sx - 7, p.sy - 12);
+  }
+
+  for (const fountain of waterFountains) {
+    const p = worldToScreen(fountain.x, fountain.y);
+    fillDitherRect(p.sx - 8, p.sy - 11, 16, 20, '#4ea8de', '#72c6f5', 3);
+    ctx.fillStyle = '#dff6ff';
+    ctx.fillRect(p.sx - 2, p.sy - 8, 4, 9);
+    ctx.fillStyle = '#95d5ff';
+    ctx.fillRect(p.sx - 5, p.sy - 1, 10, 3);
+    ctx.fillStyle = '#f1fbff';
+    ctx.font = 'bold 7px monospace';
+    ctx.fillText('H2O', p.sx - 7, p.sy - 13);
   }
 
   for (const waste of game.litter) {
