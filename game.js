@@ -232,6 +232,10 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     energy: 100,
     bladder: Math.random() * 8,
     running: false,
+    // Combat animation timers keep punch/fall visuals readable and lightweight.
+    punchUntil: 0,
+    fallStartedAt: 0,
+    fallDuration: 520,
   };
 }
 
@@ -632,6 +636,7 @@ function handleInput(dt) {
 }
 
 function meleeAttack(attacker) {
+  attacker.punchUntil = performance.now() + 220;
   for (const target of game.entities) {
     if (target === attacker || target.knockedUntil > performance.now()) continue;
     if (distance(attacker, target) < 1.45) {
@@ -691,8 +696,11 @@ function throwRubbish(attacker) {
 }
 
 function knockout(entity, by) {
+  const now = performance.now();
   entity.hp = 100;
-  entity.knockedUntil = performance.now() + 6200;
+  entity.knockedUntil = now + 6200;
+  entity.fallStartedAt = now;
+  entity.punchUntil = 0;
   entity.mood = 'dazed';
   announce(`💫 ${entity.name} knocked out by ${by.name}`);
 }
@@ -1342,7 +1350,9 @@ function drawEntities() {
   const sy = canvas.height / CAMERA.h;
 
   for (const entity of game.entities) {
-    const knocked = entity.knockedUntil > performance.now();
+    const now = performance.now();
+    const knocked = entity.knockedUntil > now;
+    const isPunching = entity.punchUntil > now;
     const px = Math.floor((entity.x - CAMERA.x) * sx);
     const py = Math.floor((entity.y - CAMERA.y) * sy);
 
@@ -1356,13 +1366,44 @@ function drawEntities() {
       : '#f9844a';
 
     if (knocked) {
-      ctx.fillStyle = '#b0b6c2';
-      ctx.fillRect(px - 11, py - 4, 22, 7);
+      // Falling animation: a quick 3-step rotation before the flattened dazed frame.
+      const fallProgress = entity.fallStartedAt ? (now - entity.fallStartedAt) / entity.fallDuration : 1;
+      const clampedFall = Math.max(0, Math.min(1, fallProgress));
+      const fallFrame = Math.min(2, Math.floor(clampedFall * 3));
+
+      if (clampedFall < 1) {
+        ctx.save();
+        const tilt = (Math.PI / 2.6) * (fallFrame + 1) / 3;
+        ctx.translate(px, py - 9);
+        ctx.rotate(entity.facing >= 0 ? tilt : -tilt);
+        ctx.fillStyle = body;
+        ctx.fillRect(-6, -8, 12, 15);
+        ctx.fillStyle = '#ffd7b5';
+        ctx.fillRect(-5, -14, 10, 6);
+        ctx.fillStyle = '#1f2a44';
+        ctx.fillRect(-5, 7, 4, 5);
+        ctx.fillRect(1, 7, 4, 5);
+        ctx.restore();
+      } else {
+        ctx.fillStyle = '#b0b6c2';
+        ctx.fillRect(px - 11, py - 4, 22, 7);
+      }
     } else {
       const moving = Math.abs(entity.vx) + Math.abs(entity.vy) > 0.05;
-      const bob = moving ? Math.sin(entity.animPhase) * 2 : 0;
-      const legKick = moving ? Math.sin(entity.animPhase) * 2.5 : 0;
-      const armKick = moving ? Math.sin(entity.animPhase + Math.PI / 2) * 2 : 0;
+      // 5-frame walk cycle to replace the previous 2-pose sine swing.
+      const walkFrame = moving ? Math.floor(entity.animPhase) % 5 : 2;
+      const walkBobOffsets = [-1.5, -0.5, 0.75, -0.5, -1.5];
+      const legSwingOffsets = [-3, -1.5, 0, 1.5, 3];
+      const armSwingOffsets = [3, 1.5, 0, -1.5, -3];
+      const bob = walkBobOffsets[walkFrame];
+      const legKick = legSwingOffsets[walkFrame];
+      const armKick = armSwingOffsets[walkFrame];
+
+      // Punching uses a short forward-thrust frame and a recoil frame.
+      const punchElapsed = Math.max(0, 220 - (entity.punchUntil - now));
+      const punchFrame = isPunching ? (punchElapsed > 110 ? 1 : 0) : -1;
+      const punchReach = punchFrame === 0 ? 5 : punchFrame === 1 ? 2 : 0;
+      const punchLift = punchFrame === 0 ? -2 : 0;
 
       // Head
       ctx.fillStyle = '#ffd7b5';
@@ -1375,8 +1416,11 @@ function drawEntities() {
       ctx.fillRect(px - 7, py - 18 + bob, 14, 12);
       // Arms
       ctx.fillStyle = '#ffd7b5';
-      ctx.fillRect(px - 10, py - 17 + armKick, 3, 8);
-      ctx.fillRect(px + 7, py - 17 - armKick, 3, 8);
+      const strikeDir = entity.facing >= 0 ? 1 : -1;
+      const rightArmX = strikeDir > 0 ? px + 7 + punchReach : px + 7;
+      const leftArmX = strikeDir < 0 ? px - 10 - punchReach : px - 10;
+      ctx.fillRect(leftArmX, py - 17 + armKick + (strikeDir < 0 ? punchLift : 0), 3, 8);
+      ctx.fillRect(rightArmX, py - 17 - armKick + (strikeDir > 0 ? punchLift : 0), 3, 8);
       // Legs
       ctx.fillStyle = '#1f2a44';
       ctx.fillRect(px - 6, py - 6 + legKick, 5, 8);
