@@ -1,0 +1,51 @@
+# GitHub Pages deployment workflow for the static HTML5 game.
+#
+# This workflow publishes the repository root (index.html, game.js, styles.css, etc.)
+# to GitHub Pages whenever changes are pushed to the default branch.
+name: Deploy HTML5 Game to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+# Required permissions for Pages deployment.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Avoid overlapping deploys so the latest commit wins cleanly.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      # Checkout repository so we can package static site files.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Configure GitHub Pages for this job.
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      # Upload the repository root as the Pages artifact.
+      # For this project, the site is plain static files at repo root.
+      - name: Upload static site artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      # Deploy artifact to GitHub Pages.
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Skool Daze Tribute (HTML5)</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>🏫 Skool Daze Tribute</h1>
+    <div class="hud" aria-live="polite">
+      <span id="clock">🕘 Time: 08:00</span>
+      <span id="period">🔔 Period: Registration</span>
+      <span id="roomTarget">📍 Target: Assembly Hall</span>
+      <span id="trouble">📝 Lines: 0</span>
+      <span id="energy">⚡ Energy: 100</span>
+      <span id="mission">🛡️ Mission: Discover all shield letters</span>
+    </div>
+    <div class="top-controls">
+      <button id="pauseBtn" class="control" title="Pause or resume game">⏯️</button>
+      <button id="helpBtn" class="control" title="Open controls and tips" aria-label="Help">❔</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="canvas-wrap" title="Use arrow keys or WASD to move. Z punch, X catapult, E interact.">
+      <canvas id="game" width="1280" height="700" aria-label="School game area"></canvas>
+    </section>
+
+    <aside class="panel">
+      <h2>Legend</h2>
+      <ul>
+        <li><span class="dot player"></span> Eric (you)</li>
+        <li><span class="dot teacher"></span> Teachers</li>
+        <li><span class="dot bully"></span> Bully</li>
+        <li><span class="dot swot"></span> Swot</li>
+        <li><span class="dot hero"></span> Hero</li>
+        <li><span class="dot weird"></span> Weird kid</li>
+      </ul>
+
+      <h3>Controls</h3>
+      <p title="Move around rooms and corridors."><strong>Move:</strong> Arrow Keys / WASD</p>
+      <p title="Close range punch."><strong>Punch:</strong> Z</p>
+      <p title="Long range projectile prank."><strong>Catapult:</strong> X</p>
+      <p title="Read board / pick shields / answer lessons."><strong>Interact:</strong> E</p>
+      <p title="Pause game logic and rendering updates."><strong>Pause:</strong> P or ⏯️</p>
+
+      <h3>Daily Objectives</h3>
+      <ul id="todo" class="todo" aria-live="polite"></ul>
+
+      <h3>Event Feed</h3>
+      <div id="events" class="events" aria-live="polite"></div>
+    </aside>
+  </main>
+
+  <dialog id="helpDialog">
+    <h2>How this tribute works</h2>
+    <p>
+      This is an original HTML5 fan tribute inspired by classic school chaos gameplay.
+      It includes bell schedules, lesson routines, personality-driven AI, discipline, and shield objectives.
+    </p>
+    <ul>
+      <li>Attend the right room after each bell to avoid lines.</li>
+      <li>Teachers give lesson tasks on blackboards and quiz you.</li>
+      <li>Pupils have personalities (bully, swot, hero, oddball), affecting behaviour.</li>
+      <li>Knockouts can be used tactically to reach difficult shields.</li>
+      <li>Collect all shield letters to reveal the safe code.</li>
+    </ul>
+    <button id="closeHelp">Close</button>
+  </dialog>
+
+  <script type="module" src="game.js"></script>
+</body>
+</html>
