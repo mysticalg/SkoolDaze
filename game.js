@@ -1079,6 +1079,86 @@ function drawEntities() {
   }
 }
 
+function drawMiniMap() {
+  // Compact mini-map with objective locators for fast orientation.
+  const mapW = 220;
+  const mapH = 132;
+  const mapX = canvas.width - mapW - 10;
+  const mapY = 10;
+
+  const scaleX = mapW / WORLD.w;
+  const scaleY = mapH / WORLD.h;
+
+  ctx.fillStyle = 'rgba(8,12,20,0.86)';
+  ctx.fillRect(mapX, mapY, mapW, mapH);
+  ctx.strokeStyle = '#89b2d9';
+  ctx.strokeRect(mapX, mapY, mapW, mapH);
+
+  // Render room blocks lightly so floors and spaces remain distinguishable.
+  for (const room of rooms) {
+    const rx = mapX + room.x * scaleX;
+    const ry = mapY + room.y * scaleY;
+    const rw = Math.max(1, room.w * scaleX);
+    const rh = Math.max(1, room.h * scaleY);
+    ctx.fillStyle = room.type === 'outdoor' ? 'rgba(88,173,102,0.65)' : room.type === 'corridor' ? 'rgba(116,151,210,0.65)' : 'rgba(219,200,168,0.65)';
+    ctx.fillRect(rx, ry, rw, rh);
+  }
+
+  const current = schedule[game.periodIndex];
+  const objectiveRoom = roomByName(current.room);
+
+  // Objective locator: class target for the current period.
+  if (objectiveRoom) {
+    const ox = mapX + (objectiveRoom.x + objectiveRoom.w / 2) * scaleX;
+    const oy = mapY + (objectiveRoom.y + objectiveRoom.h / 2) * scaleY;
+    ctx.fillStyle = '#ff6b6b';
+    ctx.beginPath();
+    ctx.arc(ox, oy, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Objective locator: nearest uncollected shield.
+  const missingShields = shields.filter((shield) => !shield.found);
+  if (missingShields.length) {
+    let nearestShield = missingShields[0];
+    let nearestDist = distance(player, nearestShield);
+    for (const shield of missingShields) {
+      const d = distance(player, shield);
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearestShield = shield;
+      }
+    }
+    ctx.fillStyle = '#ffd166';
+    ctx.fillRect(mapX + nearestShield.x * scaleX - 3, mapY + nearestShield.y * scaleY - 3, 6, 6);
+  }
+
+  // Urgent objective locator: toilets when bladder is high.
+  if (game.bladder >= 70) {
+    const toilets = roomByName('Toilets');
+    if (toilets) {
+      const tx = mapX + (toilets.x + toilets.w / 2) * scaleX;
+      const ty = mapY + (toilets.y + toilets.h / 2) * scaleY;
+      ctx.fillStyle = '#5eead4';
+      ctx.beginPath();
+      ctx.arc(tx, ty, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Player marker.
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(mapX + player.x * scaleX, mapY + player.y * scaleY, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#d9ecff';
+  ctx.font = 'bold 9px monospace';
+  ctx.fillText('MINI MAP', mapX + 6, mapY + 12);
+  ctx.font = '8px monospace';
+  ctx.fillText('● Class  ■ Shield  ● Toilet  ○ You', mapX + 6, mapY + mapH - 6);
+}
+
 function drawStatusOverlay() {
   if (!game.paused) return;
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
@@ -1130,6 +1210,7 @@ function loop(now) {
 
   drawWorld();
   drawEntities();
+  drawMiniMap();
   drawStatusOverlay();
 
   requestAnimationFrame(loop);
