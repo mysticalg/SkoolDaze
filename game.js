@@ -110,6 +110,22 @@ const shields = [
   { x: 154, y: 88, letter: 'K', found: false },
 ];
 
+// Vending + waste system for school-life flavour and discipline interactions.
+const vendingMachines = [
+  { x: 18, y: 78, label: 'Corridor VM' },
+  { x: 80, y: 52, label: 'Middle VM' },
+  { x: 132, y: 17, label: 'Upper VM' },
+  { x: 116, y: 91, label: 'Field VM' },
+];
+
+const trashCans = [
+  { x: 15, y: 76, label: 'North Bin' },
+  { x: 62, y: 52, label: 'Middle Bin' },
+  { x: 126, y: 17, label: 'Upper Bin' },
+  { x: 98, y: 90, label: 'Field Bin' },
+  { x: 45, y: 97, label: 'Hall Bin' },
+];
+
 // Bell schedule approximating school-day flow.
 const schedule = [
   { period: 'Arrival', room: 'School Gates', mins: 10, mode: 'transition' },
@@ -177,6 +193,8 @@ const game = {
   drinksToday: 0,
   warnedNeedToilet: false,
   registrationTaken: false,
+  litter: [],
+  playerCarryingTrash: false,
 };
 
 let seatCounter = 0;
@@ -200,6 +218,9 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     mood: 'calm',
     animPhase: Math.random() * Math.PI * 2,
     seatIndex: seatCounter++,
+    carryingTrash: false,
+    litterWarnUntil: 0,
+    assignedWaste: null,
   };
 }
 
@@ -254,6 +275,19 @@ function bullyFightChance(currentPeriod) {
   if (currentPeriod.period === 'Arrival' || currentPeriod.period === 'Tutorial') return 0.0001;
   if (currentPeriod.mode !== 'break') return 0.00035;
   return 0.006;
+}
+
+function nearestPoint(origin, points) {
+  let best = points[0];
+  let bestDist = Infinity;
+  for (const point of points) {
+    const d = distance(origin, point);
+    if (d < bestDist) {
+      bestDist = d;
+      best = point;
+    }
+  }
+  return best;
 }
 
 function entityRoom(entity) {
@@ -339,6 +373,8 @@ function resetToSchoolMorning() {
   game.dailyToiletVisits = 0;
   game.warnedNeedToilet = false;
   game.bladder = 0;
+  game.litter = [];
+  game.playerCarryingTrash = false;
 
   const gate = roomByName('School Gates');
   for (const entity of game.entities) {
@@ -348,6 +384,9 @@ function resetToSchoolMorning() {
     entity.target = null;
     entity.vx = 0;
     entity.vy = 0;
+    entity.carryingTrash = false;
+    entity.litterWarnUntil = 0;
+    entity.assignedWaste = null;
   }
 
   setPeriod(0);
@@ -428,6 +467,7 @@ function updateTodo() {
     `Bladder: ${Math.round(game.bladder)}%`,
     `Auto mode: ${game.autoMode ? 'ON' : 'OFF'}`,
     `Energy should stay above 25`,
+    `Use vending machines for snacks/drinks, then bin the packaging`,
     `Avoid teachers while bunking`,
   ];
   todoEl.innerHTML = todoItems.map((t) => `<li>${t}</li>`).join('');
@@ -492,7 +532,10 @@ resetToSchoolMorning();
 // Player input and actions
 // -----------------------------------------------------------------------------
 function handleInput(dt) {
-  const speed = (player.personality.speed * game.energy) / 100;
+  // Slower default walk pace; hold Shift to run and spend extra stamina.
+  const baseSpeed = (player.personality.speed * game.energy) / 100;
+  const running = Boolean(game.keys.Shift || game.keys.shift || game.keys.r);
+  const speed = baseSpeed * (running ? 1.65 : 0.76);
   player.vx = 0;
   player.vy = 0;
 
@@ -517,8 +560,10 @@ function handleInput(dt) {
   if (game.keys.ArrowUp || game.keys.w) player.vy = -speed;
   if (game.keys.ArrowDown || game.keys.s) player.vy = speed;
 
-  // Use a little stamina while moving to create pacing and tactical choices.
-  if (Math.abs(player.vx) + Math.abs(player.vy) > 0.1) spendEnergy(0.6 * (dt / 1000));
+  // Running drains stamina faster than walking.
+  if (Math.abs(player.vx) + Math.abs(player.vy) > 0.1) {
+    spendEnergy((running ? 1.45 : 0.45) * (dt / 1000));
+  }
 
   if (game.keys.z) {
     meleeAttack(player);
@@ -533,13 +578,28 @@ function handleInput(dt) {
     game.keys.e = false;
   }
   if (game.keys.c) {
-    // Drinking gives quick energy but increases bladder pressure.
-    game.drinksToday += 1;
-    game.energy = Math.min(100, game.energy + 10);
-    energyEl.textContent = `⚡ Energy: ${Math.round(game.energy)}`;
-    game.bladder = Math.min(100, game.bladder + 18);
-    updateBladderHud();
-    announce('🥤 Eric had a drink. Energy up, bladder filling faster.');
+    // Vending requires proximity and leaves packaging that should be binned.
+    const machine = nearestPoint(player, vendingMachines);
+    if (machine && distance(player, machine) < 2.1) {
+      if (!game.playerCarryingTrash) {
+        if (game.rng() < 0.5) {
+          game.drinksToday += 1;
+          game.energy = Math.min(100, game.energy + 9);
+          game.bladder = Math.min(100, game.bladder + 16);
+          announce('🥤 Eric bought a drink. Energy up, bladder rising.');
+        } else {
+          game.energy = Math.min(100, game.energy + 14);
+          announce('🍫 Eric bought a snack. Energy boosted.');
+        }
+        energyEl.textContent = `⚡ Energy: ${Math.round(game.energy)}`;
+        updateBladderHud();
+        game.playerCarryingTrash = true;
+      } else {
+        announce('🧻 Eric is already carrying rubbish. Use a bin first.');
+      }
+    } else {
+      announce('🥤 Find a vending machine first (marked VM).');
+    }
     game.keys.c = false;
   }
 }
@@ -594,6 +654,14 @@ function interact() {
     player.x = nearbyStair.x;
     announce(`🪜 Used ${nearbyStair.label} to ${movingUp ? 'go up' : 'go down'} a floor.`);
     updateFloorStatus();
+    return;
+  }
+
+  // Use nearby bins to dispose of packaging.
+  const nearbyBin = trashCans.find((bin) => distance(player, bin) < 2.1);
+  if (nearbyBin && game.playerCarryingTrash) {
+    game.playerCarryingTrash = false;
+    announce(`🗑️ Eric used ${nearbyBin.label} and binned his rubbish.`);
     return;
   }
 
@@ -717,6 +785,41 @@ function updateAI(dt) {
       meleeAttack(entity);
     }
 
+    // Students can buy food/drink at vending machines and then carry packaging.
+    if (entity.role !== 'teacher' && !entity.carryingTrash && current.mode === 'break' && game.rng() < 0.0018) {
+      entity.carryingTrash = true;
+      entity.target = nearestPoint(entity, vendingMachines);
+    }
+
+    // Most students bin litter; some occasionally drop it and get told off.
+    if (entity.role !== 'teacher' && entity.carryingTrash) {
+      const nearestBin = nearestPoint(entity, trashCans);
+      const littering = game.rng() < 0.001;
+      if (littering) {
+        entity.carryingTrash = false;
+        entity.assignedWaste = { x: entity.x, y: entity.y, offender: entity, warned: false };
+        game.litter.push(entity.assignedWaste);
+      } else if (nearestBin && distance(entity, nearestBin) < 1.5) {
+        entity.carryingTrash = false;
+        entity.assignedWaste = null;
+      } else {
+        entity.target = nearestBin;
+      }
+    }
+
+    if (entity.role === 'teacher') {
+      const seenLitter = game.litter.find((item) => !item.warned && distance(entity, item) < 2.1 && item.offender);
+      if (seenLitter) {
+        seenLitter.warned = true;
+        seenLitter.offender.carryingTrash = true;
+        seenLitter.offender.target = nearestPoint(seenLitter.offender, trashCans);
+        seenLitter.offender.litterWarnUntil = performance.now() + 4000;
+        // Teacher makes pupil pick it up immediately, then walk it to a bin.
+        game.litter = game.litter.filter((item) => item !== seenLitter);
+        announce(`🧑‍🏫 ${entity.name}: "Pick that litter up and use the bin!"`);
+      }
+    }
+
     let dx = entity.target.x - entity.x;
     let dy = entity.target.y - entity.y;
 
@@ -809,6 +912,15 @@ function updateSchedule(dt) {
     const monitored = current.mode === 'lesson' || current.period === 'Tutorial';
     if (entityRoom(player) !== current.room && monitored) addLines(10, `late for ${current.period}`);
     game.lastLateTick = 0;
+  }
+
+  // Teachers discipline Eric if he litters and is spotted before he bins it.
+  if (game.playerCarryingTrash) {
+    const nearbyTeacher = game.entities.find((e) => e.role === 'teacher' && distance(e, player) < 1.9);
+    if (nearbyTeacher && game.rng() < 0.003) {
+      addLines(15, 'dropping or carrying litter carelessly');
+      announce(`🧑‍🏫 ${nearbyTeacher.name}: "Use a bin, Eric. No littering!"`);
+    }
   }
 
   clockEl.textContent = `🕘 Time: ${formatTime(game.timeMinutes)}`;
@@ -1015,6 +1127,31 @@ function drawWorld() {
   ctx.fillStyle = '#bdf6c4';
   ctx.fillText('GROUND FLOOR', 12, 52);
 
+  // Vending machines and bins are rendered as interactable landmarks.
+  for (const vm of vendingMachines) {
+    const p = worldToScreen(vm.x, vm.y);
+    fillDitherRect(p.sx - 10, p.sy - 14, 20, 28, '#2b4e7c', '#3f6aa0', 3);
+    ctx.fillStyle = '#9ff3ff';
+    ctx.fillRect(p.sx - 6, p.sy - 10, 12, 7);
+    ctx.fillStyle = '#f6d365';
+    ctx.font = 'bold 7px monospace';
+    ctx.fillText('VM', p.sx - 5, p.sy + 10);
+  }
+
+  for (const bin of trashCans) {
+    const p = worldToScreen(bin.x, bin.y);
+    fillDitherRect(p.sx - 7, p.sy - 9, 14, 16, '#4b5a66', '#6a7a88', 2);
+    ctx.fillStyle = '#d3dee8';
+    ctx.font = 'bold 7px monospace';
+    ctx.fillText('BIN', p.sx - 7, p.sy - 12);
+  }
+
+  for (const waste of game.litter) {
+    const p = worldToScreen(waste.x, waste.y);
+    ctx.fillStyle = '#f4a261';
+    ctx.fillRect(p.sx - 3, p.sy - 2, 6, 4);
+  }
+
   for (const board of blackboards) {
     const p = worldToScreen(board.x, board.y);
     fillDitherRect(p.sx - 23, p.sy - 11, 46, 16, '#194b31', '#23633f', 3);
@@ -1098,6 +1235,11 @@ function drawEntities() {
       ctx.font = '10px monospace';
       const moodGlyph = entity.mood === 'angry' ? '!' : entity.mood === 'furious' ? '*' : '.';
       ctx.fillText(moodGlyph, px - 2, py - 26);
+    }
+
+    if (entity.carryingTrash) {
+      ctx.fillStyle = '#f4a261';
+      ctx.fillRect(px + 8, py - 14, 4, 4);
     }
 
     ctx.fillStyle = PALETTE.chalk;
