@@ -76,6 +76,7 @@ const rooms = [
   { name: 'Assembly Hall', x: 44, y: 94, w: 40, h: 14, floor: 'ground', type: 'hall' },
   { name: 'P.E. Field', x: 90, y: 80, w: 70, h: 28, floor: 'ground', type: 'outdoor' },
   { name: 'Bike Sheds', x: 92, y: 94, w: 22, h: 12, floor: 'ground', type: 'outdoor' },
+  { name: 'School Gates', x: 148, y: 80, w: 18, h: 28, floor: 'ground', type: 'outdoor' },
 ];
 
 const stairs = [
@@ -111,15 +112,17 @@ const shields = [
 
 // Bell schedule approximating school-day flow.
 const schedule = [
-  { period: 'Registration', room: 'Assembly Hall', mins: 14 },
-  { period: 'Maths', room: 'Maths', mins: 24 },
-  { period: 'English', room: 'English', mins: 24 },
-  { period: 'Science', room: 'Science Lab', mins: 24 },
-  { period: 'P.E.', room: 'P.E. Field', mins: 16 },
-  { period: 'Geography', room: 'Geography', mins: 20 },
-  { period: 'Art', room: 'Art Room', mins: 20 },
-  { period: 'History', room: 'History', mins: 20 },
-  { period: 'Assembly', room: 'Assembly Hall', mins: 16 },
+  { period: 'Arrival', room: 'School Gates', mins: 10, mode: 'transition' },
+  { period: 'Tutorial', room: 'Science Lab', mins: 30, mode: 'lesson' },
+  { period: 'Lesson 1', room: 'Maths', mins: 60, mode: 'lesson' },
+  { period: 'Lesson 2', room: 'English', mins: 60, mode: 'lesson' },
+  { period: 'Break', room: 'P.E. Field', mins: 20, mode: 'break' },
+  { period: 'Lesson 3', room: 'Geography', mins: 60, mode: 'lesson' },
+  { period: 'Lesson 4', room: 'History', mins: 60, mode: 'lesson' },
+  { period: 'Lunch', room: 'P.E. Field', mins: 60, mode: 'break' },
+  { period: 'Lesson 5', room: 'Art Room', mins: 120, mode: 'lesson' },
+  { period: 'Lesson 6', room: 'Computer Room', mins: 120, mode: 'lesson' },
+  { period: 'Home Time', room: 'School Gates', mins: 30, mode: 'home' },
 ];
 
 const floorMeta = {
@@ -150,7 +153,7 @@ const personalities = {
 };
 
 const game = {
-  timeMinutes: 8 * 60,
+  timeMinutes: 8 * 60 + 20,
   // Minutes advanced per real-time second to slow bell pacing.
   timeScale: 0.08,
   periodIndex: 0,
@@ -173,7 +176,10 @@ const game = {
   dailyToiletVisits: 0,
   drinksToday: 0,
   warnedNeedToilet: false,
+  registrationTaken: false,
 };
+
+let seatCounter = 0;
 
 function mkEntity(name, role, x, y, color, traits = {}) {
   return {
@@ -193,6 +199,7 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     profile: traits,
     mood: 'calm',
     animPhase: Math.random() * Math.PI * 2,
+    seatIndex: seatCounter++,
   };
 }
 
@@ -286,7 +293,48 @@ function chooseAutoDestination() {
   // Toilets become top priority when bladder is urgent.
   if (game.bladder >= 75) return roomCenter('Toilets');
   const current = schedule[game.periodIndex];
+  if (current.mode === 'home') return roomCenter('School Gates');
   return roomCenter(current.room);
+}
+
+function getSeatPosition(roomName, seatIndex) {
+  const room = roomByName(roomName);
+  if (!room) return null;
+  // Simple desk grid so pupils remain seated during tutorial/lesson periods.
+  const cols = 4;
+  const rows = 3;
+  const slot = seatIndex % (cols * rows);
+  const col = slot % cols;
+  const row = Math.floor(slot / cols);
+  return {
+    x: room.x + 4 + col * Math.max(3, (room.w - 8) / cols),
+    y: room.y + 4 + row * Math.max(2.6, (room.h - 8) / rows),
+  };
+}
+
+function resetToSchoolMorning() {
+  // New morning: everyone starts outside school gates before being led inside.
+  game.timeMinutes = 8 * 60 + 20;
+  game.periodElapsed = 0;
+  game.registrationTaken = false;
+  game.drinksToday = 0;
+  game.dailyToiletVisits = 0;
+  game.warnedNeedToilet = false;
+  game.bladder = 0;
+
+  const gate = roomByName('School Gates');
+  for (const entity of game.entities) {
+    const lane = entity.seatIndex % 6;
+    entity.x = gate.x + 2 + lane * 2.3;
+    entity.y = gate.y + 3 + Math.floor(entity.seatIndex / 6) * 2.4;
+    entity.target = null;
+    entity.vx = 0;
+    entity.vy = 0;
+  }
+
+  setPeriod(0);
+  updateBladderHud();
+  announce('🌅 New school day: students gather at the gates ready for tutorial.');
 }
 
 function updateAutoPilot(dt) {
@@ -391,17 +439,10 @@ function constrain(entity) {
 }
 
 function setPeriod(index) {
-  if (index > 0 && index % schedule.length === 0) {
-    // New school day reset for daily routines.
-    game.drinksToday = 0;
-    game.dailyToiletVisits = 0;
-    game.warnedNeedToilet = false;
-    game.bladder = Math.max(0, game.bladder - 30);
-  }
-
   game.periodIndex = index % schedule.length;
   game.periodElapsed = 0;
   const current = schedule[game.periodIndex];
+  if (current.period === 'Tutorial') game.registrationTaken = false;
 
   // Board content changes each bell to emulate lesson instructions.
   blackboards.forEach((board) => {
@@ -414,13 +455,20 @@ function setPeriod(index) {
     }
   });
 
+  if (current.period === 'Arrival') {
+    announce('👨‍🏫 Teachers line the students up at the gates and lead them inside.');
+  }
+
   announce(`🔔 Bell! ${current.period} in ${current.room}`);
+  if (current.period === 'Home Time') {
+    announce('🏠 Home time! Students may leave through the school gates.');
+  }
   periodEl.textContent = `🔔 Period: ${current.period}`;
   roomTargetEl.textContent = `📍 Target: ${current.room}`;
   updateFloorStatus();
   updateTodo();
 }
-setPeriod(0);
+resetToSchoolMorning();
 
 // -----------------------------------------------------------------------------
 // Player input and actions
@@ -592,6 +640,18 @@ function chooseTarget(entity, currentPeriod) {
   const p = entity.personality;
   const shouldAttend = game.rng() < p.diligence;
 
+  if (currentPeriod.period === 'Arrival') {
+    return roomCenter('School Gates');
+  }
+
+  if (currentPeriod.mode === 'lesson') {
+    return getSeatPosition(currentPeriod.room, entity.seatIndex) || roomCenter(currentPeriod.room);
+  }
+
+  if (currentPeriod.mode === 'home') {
+    return roomCenter('School Gates');
+  }
+
   if (entity.role === 'teacher') {
     return roomCenter(currentPeriod.room);
   }
@@ -623,7 +683,8 @@ function updateAI(dt) {
     }
 
     // Teacher discipline: if they catch player in wrong room, assign lines.
-    if (entity.role === 'teacher' && distance(entity, player) < 1.8 && entityRoom(player) !== current.room && current.period !== 'P.E.') {
+    const supervised = current.mode === 'lesson' || current.period === 'Tutorial';
+    if (entity.role === 'teacher' && distance(entity, player) < 1.8 && entityRoom(player) !== current.room && supervised) {
       addLines(40, `${entity.name} caught you bunking ${current.period}`);
     }
 
@@ -646,6 +707,13 @@ function updateAI(dt) {
 
     entity.x += entity.vx * (dt / 1000);
     entity.y += entity.vy * (dt / 1000);
+
+    // Pupils stay seated once in class/tutorial to match a structured school day.
+    if ((current.mode === 'lesson' || current.period === 'Tutorial') && entity.role !== 'teacher' && len < 0.5) {
+      entity.vx = 0;
+      entity.vy = 0;
+    }
+
     constrain(entity);
 
     if (len < 0.9) entity.target = null;
@@ -689,12 +757,25 @@ function updateSchedule(dt) {
   game.periodElapsed += deltaMins;
   game.timeMinutes += deltaMins;
 
-  if (game.periodElapsed >= current.mins) setPeriod(game.periodIndex + 1);
+  if (current.period === 'Tutorial' && !game.registrationTaken && game.periodElapsed > 8) {
+    game.registrationTaken = true;
+    announce('📘 Tutorial registration complete: all students marked present by tutors.');
+  }
+
+  if (game.periodElapsed >= current.mins) {
+    if (game.periodIndex === schedule.length - 1) {
+      // Keep home-time active until player exits via gates.
+      game.periodElapsed = current.mins;
+    } else {
+      setPeriod(game.periodIndex + 1);
+    }
+  }
 
   // Late checks are throttled to avoid line spam and keep simulation smooth.
   game.lastLateTick += dt;
   if (game.lastLateTick > 2000) {
-    if (entityRoom(player) !== current.room && current.period !== 'P.E.') addLines(10, `late for ${current.period}`);
+    const monitored = current.mode === 'lesson' || current.period === 'Tutorial';
+    if (entityRoom(player) !== current.room && monitored) addLines(10, `late for ${current.period}`);
     game.lastLateTick = 0;
   }
 
@@ -706,7 +787,14 @@ function updateSchedule(dt) {
 
 function checkSchoolExit() {
   // Leaving via the gate triggers immediate discipline and a forced return.
+  const current = schedule[game.periodIndex];
   if (player.x >= schoolExit.x && player.y >= schoolExit.yMin && player.y <= schoolExit.yMax) {
+    if (current.mode === 'home') {
+      announce('✅ Eric leaves at home time. School day complete.');
+      resetToSchoolMorning();
+      return;
+    }
+
     const nearestTeacher = game.entities.find((entity) => entity.role === 'teacher');
     addLines(35, 'trying to leave school grounds');
     player.x = 148;
