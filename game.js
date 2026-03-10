@@ -4,8 +4,11 @@ const ctx = canvas.getContext('2d');
 const clockEl = document.getElementById('clock');
 const periodEl = document.getElementById('period');
 const roomTargetEl = document.getElementById('roomTarget');
+const floorStatusEl = document.getElementById('floorStatus');
 const troubleEl = document.getElementById('trouble');
 const energyEl = document.getElementById('energy');
+const bladderEl = document.getElementById('bladder');
+const autoStatusEl = document.getElementById('autoStatus');
 const missionEl = document.getElementById('mission');
 const eventsEl = document.getElementById('events');
 const todoEl = document.getElementById('todo');
@@ -50,25 +53,29 @@ const PALETTE = {
 const rooms = [
   // Upper level classrooms + corridor.
   { name: 'Upper Corridor', x: 4, y: 15, w: 160, h: 4, floor: 'upper', type: 'corridor' },
-  { name: 'Upper Left', x: 8, y: 4, w: 24, h: 11, floor: 'upper', type: 'classroom' },
-  { name: 'Upper Middle', x: 38, y: 4, w: 24, h: 11, floor: 'upper', type: 'classroom' },
-  { name: 'Upper Right Lab', x: 68, y: 4, w: 24, h: 11, floor: 'upper', type: 'classroom' },
-  { name: 'Art Room', x: 98, y: 4, w: 20, h: 11, floor: 'upper', type: 'classroom' },
+  { name: 'Science Lab', x: 8, y: 4, w: 24, h: 11, floor: 'upper', type: 'classroom' },
+  { name: 'Upper Common', x: 38, y: 4, w: 24, h: 11, floor: 'upper', type: 'classroom' },
+  { name: 'Physics Lab', x: 68, y: 4, w: 24, h: 11, floor: 'upper', type: 'classroom' },
+  { name: 'Chem Prep', x: 98, y: 4, w: 20, h: 11, floor: 'upper', type: 'classroom' },
   { name: 'Computer Room', x: 124, y: 4, w: 36, h: 11, floor: 'upper', type: 'classroom' },
 
   // Middle level corridors and rooms.
   { name: 'Middle Corridor', x: 4, y: 50, w: 160, h: 4, floor: 'middle', type: 'corridor' },
-  { name: 'Lower Hall', x: 8, y: 38, w: 30, h: 12, floor: 'middle', type: 'hall' },
-  { name: 'Library', x: 44, y: 38, w: 24, h: 12, floor: 'middle', type: 'classroom' },
+  { name: 'Maths', x: 8, y: 38, w: 30, h: 12, floor: 'middle', type: 'classroom' },
+  { name: 'English', x: 44, y: 38, w: 24, h: 12, floor: 'middle', type: 'classroom' },
   { name: 'Staff Room', x: 74, y: 38, w: 24, h: 12, floor: 'middle', type: 'classroom' },
   { name: 'Music Room', x: 104, y: 38, w: 24, h: 12, floor: 'middle', type: 'classroom' },
   { name: 'Gym', x: 134, y: 38, w: 26, h: 12, floor: 'middle', type: 'hall' },
 
   // Ground level circulation and outside area.
   { name: 'Ground Corridor', x: 4, y: 76, w: 160, h: 4, floor: 'ground', type: 'corridor' },
-  { name: 'Canteen', x: 8, y: 80, w: 30, h: 14, floor: 'ground', type: 'hall' },
-  { name: 'Assembly Hall', x: 44, y: 80, w: 40, h: 14, floor: 'ground', type: 'hall' },
-  { name: 'Playground', x: 90, y: 80, w: 70, h: 28, floor: 'ground', type: 'outdoor' },
+  { name: 'Geography', x: 8, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
+  { name: 'Art Room', x: 34, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
+  { name: 'History', x: 60, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
+  { name: 'Toilets', x: 8, y: 94, w: 20, h: 14, floor: 'ground', type: 'hall' },
+  { name: 'Assembly Hall', x: 44, y: 94, w: 40, h: 14, floor: 'ground', type: 'hall' },
+  { name: 'P.E. Field', x: 90, y: 80, w: 70, h: 28, floor: 'ground', type: 'outdoor' },
+  { name: 'Bike Sheds', x: 92, y: 94, w: 22, h: 12, floor: 'ground', type: 'outdoor' },
 ];
 
 const stairs = [
@@ -83,13 +90,14 @@ const stairs = [
 ];
 
 const blackboards = [
-  { room: 'Upper Left', x: 21, y: 6, text: '' },
-  { room: 'Upper Middle', x: 50, y: 6, text: '' },
-  { room: 'Upper Right Lab', x: 80, y: 6, text: '' },
+  { room: 'Science Lab', x: 21, y: 6, text: '' },
+  { room: 'Maths', x: 23, y: 40, text: '' },
+  { room: 'English', x: 56, y: 40, text: '' },
   { room: 'Computer Room', x: 144, y: 6, text: '' },
-  { room: 'Lower Hall', x: 23, y: 40, text: '' },
-  { room: 'Library', x: 56, y: 40, text: '' },
-  { room: 'Assembly Hall', x: 65, y: 83, text: '' },
+  { room: 'Geography', x: 18, y: 83, text: '' },
+  { room: 'Art Room', x: 46, y: 83, text: '' },
+  { room: 'History', x: 74, y: 83, text: '' },
+  { room: 'Assembly Hall', x: 65, y: 97, text: '' },
 ];
 
 const shields = [
@@ -104,14 +112,24 @@ const shields = [
 // Bell schedule approximating school-day flow.
 const schedule = [
   { period: 'Registration', room: 'Assembly Hall', mins: 14 },
-  { period: 'Math', room: 'Upper Left', mins: 24 },
-  { period: 'English', room: 'Upper Middle', mins: 24 },
-  { period: 'Science', room: 'Upper Right Lab', mins: 24 },
-  { period: 'Break', room: 'Playground', mins: 16 },
-  { period: 'History', room: 'Upper Left', mins: 22 },
-  { period: 'Library Study', room: 'Library', mins: 20 },
+  { period: 'Maths', room: 'Maths', mins: 24 },
+  { period: 'English', room: 'English', mins: 24 },
+  { period: 'Science', room: 'Science Lab', mins: 24 },
+  { period: 'P.E.', room: 'P.E. Field', mins: 16 },
+  { period: 'Geography', room: 'Geography', mins: 20 },
+  { period: 'Art', room: 'Art Room', mins: 20 },
+  { period: 'History', room: 'History', mins: 20 },
   { period: 'Assembly', room: 'Assembly Hall', mins: 16 },
 ];
+
+const floorMeta = {
+  upper: { label: 'Upper', color: 'Purple' },
+  middle: { label: 'Middle', color: 'Blue' },
+  ground: { label: 'Ground', color: 'Green' },
+};
+
+const schoolExit = { x: 159.2, yMin: 84, yMax: 107 };
+const floorOrder = { upper: 2, middle: 1, ground: 0 };
 
 const lessonTasks = [
   'Write 10x: I must not fire catapults.',
@@ -149,6 +167,12 @@ const game = {
   rng: Math.random,
   quizActive: null,
   lastLateTick: 0,
+  autoMode: false,
+  idleMs: 0,
+  bladder: 0,
+  dailyToiletVisits: 0,
+  drinksToday: 0,
+  warnedNeedToilet: false,
 };
 
 function mkEntity(name, role, x, y, color, traits = {}) {
@@ -174,7 +198,7 @@ function mkEntity(name, role, x, y, color, traits = {}) {
 
 const player = mkEntity('Eric', 'player', 48, 64, '#ffe04d', {
   title: 'Troublemaker with potential',
-  prefers: ['Playground'],
+  prefers: ['P.E. Field'],
   quotes: ['Not me, sir!', 'I was only looking!'],
 });
 
@@ -211,6 +235,113 @@ function entityRoom(entity) {
   return rooms.find((r) => entity.x > r.x && entity.x < r.x + r.w && entity.y > r.y && entity.y < r.y + r.h)?.name || 'Corridor';
 }
 
+function entityFloor(entity) {
+  const room = rooms.find((r) => entity.x > r.x && entity.x < r.x + r.w && entity.y > r.y && entity.y < r.y + r.h);
+  return room?.floor || 'ground';
+}
+
+function updateFloorStatus() {
+  const meta = floorMeta[entityFloor(player)] || floorMeta.ground;
+  floorStatusEl.textContent = `🧭 Floor: ${meta.label} (${meta.color})`;
+}
+
+function updateAutoStatus() {
+  autoStatusEl.textContent = `🤖 Auto: ${game.autoMode ? 'ON' : 'OFF'}`;
+}
+
+function updateBladderHud() {
+  bladderEl.textContent = `🚻 Bladder: ${Math.round(game.bladder)}%`;
+}
+
+function getStairLink(fromFloor, toFloor) {
+  // Stairs directly connect upper<->middle and middle<->ground using shared x positions.
+  if (fromFloor === toFloor) return null;
+  if (fromFloor === 'upper' && toFloor === 'middle') return stairs.filter((stair) => stair.y < stair.toY);
+  if (fromFloor === 'middle' && toFloor === 'upper') return stairs.filter((stair) => stair.y < stair.toY);
+  if (fromFloor === 'middle' && toFloor === 'ground') return stairs.filter((stair) => stair.y > 40);
+  if (fromFloor === 'ground' && toFloor === 'middle') return stairs.filter((stair) => stair.y > 40);
+  return stairs;
+}
+
+function nearestStairTarget(fromFloor, targetFloor) {
+  const relevant = getStairLink(fromFloor, targetFloor);
+  if (!relevant || !relevant.length) return null;
+
+  let best = null;
+  let bestDist = Infinity;
+  for (const stair of relevant) {
+    const onStepY = fromFloor === 'upper' ? stair.y : fromFloor === 'ground' ? stair.toY :
+      (targetFloor === 'upper' ? stair.toY : stair.y);
+    const candidate = { x: stair.x, y: onStepY };
+    const dist = distance(player, candidate);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+function chooseAutoDestination() {
+  // Toilets become top priority when bladder is urgent.
+  if (game.bladder >= 75) return roomCenter('Toilets');
+  const current = schedule[game.periodIndex];
+  return roomCenter(current.room);
+}
+
+function updateAutoPilot(dt) {
+  const speed = (player.personality.speed * game.energy) / 100;
+  const destination = chooseAutoDestination();
+  const destinationFloor = roomByName(entityRoom({ x: destination.x, y: destination.y }))?.floor || 'ground';
+  const currentFloor = entityFloor(player);
+
+  let waypoint = destination;
+  if (destinationFloor !== currentFloor) {
+    const floorDelta = floorOrder[destinationFloor] - floorOrder[currentFloor];
+    const nextFloor = floorDelta > 0 ? (currentFloor === 'ground' ? 'middle' : 'upper') : (currentFloor === 'upper' ? 'middle' : 'ground');
+    waypoint = nearestStairTarget(currentFloor, nextFloor) || destination;
+  }
+
+  const dx = waypoint.x - player.x;
+  const dy = waypoint.y - player.y;
+  const len = Math.hypot(dx, dy) || 1;
+  player.vx = (dx / len) * speed;
+  player.vy = (dy / len) * speed;
+
+  // Auto mode uses stairs when Eric reaches them and occasionally reads boards.
+  if (len < 1.1) interact();
+  spendEnergy(0.35 * (dt / 1000));
+}
+
+function updateBladder(dt) {
+  const deltaMins = (dt / 1000) * game.timeScale;
+  const baseRate = 0.55; // ~once per school day if Eric does not over-drink.
+  const drinkBonus = game.drinksToday * 0.35;
+  game.bladder = Math.min(100, game.bladder + (baseRate + drinkBonus) * deltaMins);
+
+  if (game.bladder >= 75 && !game.warnedNeedToilet) {
+    game.warnedNeedToilet = true;
+    announce('🚻 Eric needs the toilet soon. Head to TOILETS quickly.');
+  }
+
+  if (entityRoom(player) === 'Toilets' && game.bladder >= 20) {
+    game.bladder = 0;
+    game.dailyToiletVisits += 1;
+    game.warnedNeedToilet = false;
+    announce('✅ Eric used the toilet in time.');
+  }
+
+  if (game.bladder >= 100) {
+    game.bladder = 20;
+    game.warnedNeedToilet = false;
+    addLines(60, 'wetting himself in school');
+    announce('😳 Eric wet himself! Other students laugh loudly.');
+    announce('🧑‍🏫 Mr Wacker lectures Eric: "Use the toilet before it is urgent!"');
+  }
+
+  updateBladderHud();
+}
+
 function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -228,6 +359,8 @@ function updateTodo() {
     `Be in: ${current.room}`,
     `Period: ${current.period}`,
     `Shields: ${found}/${shields.length}`,
+    `Bladder: ${Math.round(game.bladder)}%`,
+    `Auto mode: ${game.autoMode ? 'ON' : 'OFF'}`,
     `Energy should stay above 25`,
     `Avoid teachers while bunking`,
   ];
@@ -258,6 +391,14 @@ function constrain(entity) {
 }
 
 function setPeriod(index) {
+  if (index > 0 && index % schedule.length === 0) {
+    // New school day reset for daily routines.
+    game.drinksToday = 0;
+    game.dailyToiletVisits = 0;
+    game.warnedNeedToilet = false;
+    game.bladder = Math.max(0, game.bladder - 30);
+  }
+
   game.periodIndex = index % schedule.length;
   game.periodElapsed = 0;
   const current = schedule[game.periodIndex];
@@ -276,6 +417,7 @@ function setPeriod(index) {
   announce(`🔔 Bell! ${current.period} in ${current.room}`);
   periodEl.textContent = `🔔 Period: ${current.period}`;
   roomTargetEl.textContent = `📍 Target: ${current.room}`;
+  updateFloorStatus();
   updateTodo();
 }
 setPeriod(0);
@@ -287,6 +429,22 @@ function handleInput(dt) {
   const speed = (player.personality.speed * game.energy) / 100;
   player.vx = 0;
   player.vy = 0;
+
+  const manualMovement = game.keys.ArrowLeft || game.keys.a || game.keys.ArrowRight || game.keys.d || game.keys.ArrowUp || game.keys.w || game.keys.ArrowDown || game.keys.s;
+  if (manualMovement || game.keys.z || game.keys.x || game.keys.e || game.keys.c) {
+    // Manual control immediately overrides autopilot for responsiveness.
+    if (game.autoMode) {
+      game.autoMode = false;
+      updateAutoStatus();
+      announce('🤖 Auto mode disabled by player input.');
+    }
+    game.idleMs = 0;
+  }
+
+  if (game.autoMode) {
+    updateAutoPilot(dt);
+    return;
+  }
 
   if (game.keys.ArrowLeft || game.keys.a) player.vx = -speed;
   if (game.keys.ArrowRight || game.keys.d) player.vx = speed;
@@ -307,6 +465,16 @@ function handleInput(dt) {
   if (game.keys.e) {
     interact();
     game.keys.e = false;
+  }
+  if (game.keys.c) {
+    // Drinking gives quick energy but increases bladder pressure.
+    game.drinksToday += 1;
+    game.energy = Math.min(100, game.energy + 10);
+    energyEl.textContent = `⚡ Energy: ${Math.round(game.energy)}`;
+    game.bladder = Math.min(100, game.bladder + 18);
+    updateBladderHud();
+    announce('🥤 Eric had a drink. Energy up, bladder filling faster.');
+    game.keys.c = false;
   }
 }
 
@@ -346,6 +514,23 @@ function knockout(entity, by) {
 }
 
 function interact() {
+  // Stairs are intentionally activated with interact for predictable movement.
+  const nearbyStair = stairs.find((stair) => {
+    const nearStepA = distance(player, { x: stair.x, y: stair.y }) < 1.6;
+    const nearStepB = distance(player, { x: stair.x, y: stair.toY }) < 1.6;
+    return nearStepA || nearStepB;
+  });
+  if (nearbyStair) {
+    const nearStepA = distance(player, { x: nearbyStair.x, y: nearbyStair.y }) < 1.6;
+    const destinationY = nearStepA ? nearbyStair.toY : nearbyStair.y;
+    const movingUp = destinationY < player.y;
+    player.y = movingUp ? destinationY + 0.4 : destinationY - 0.4;
+    player.x = nearbyStair.x;
+    announce(`🪜 Used ${nearbyStair.label} to ${movingUp ? 'go up' : 'go down'} a floor.`);
+    updateFloorStatus();
+    return;
+  }
+
   // Read blackboard instructions.
   const board = blackboards.find((b) => distance(player, b) < 2.2);
   if (board && board.text) {
@@ -416,14 +601,14 @@ function chooseTarget(entity, currentPeriod) {
   }
 
   if (entity.role === 'bully' && game.rng() < 0.45) {
-    return roomCenter('Playground');
+    return roomCenter('P.E. Field');
   }
 
   if (entity.role === 'weird' && game.rng() < 0.45) {
-    return roomCenter(game.rng() < 0.5 ? 'Staff Room' : 'Library');
+    return roomCenter(game.rng() < 0.5 ? 'Staff Room' : 'English');
   }
 
-  return shouldAttend ? roomCenter(currentPeriod.room) : roomCenter('Playground');
+  return shouldAttend ? roomCenter(currentPeriod.room) : roomCenter('P.E. Field');
 }
 
 function updateAI(dt) {
@@ -438,7 +623,7 @@ function updateAI(dt) {
     }
 
     // Teacher discipline: if they catch player in wrong room, assign lines.
-    if (entity.role === 'teacher' && distance(entity, player) < 1.8 && entityRoom(player) !== current.room && current.period !== 'Break') {
+    if (entity.role === 'teacher' && distance(entity, player) < 1.8 && entityRoom(player) !== current.room && current.period !== 'P.E.') {
       addLines(40, `${entity.name} caught you bunking ${current.period}`);
     }
 
@@ -509,13 +694,25 @@ function updateSchedule(dt) {
   // Late checks are throttled to avoid line spam and keep simulation smooth.
   game.lastLateTick += dt;
   if (game.lastLateTick > 2000) {
-    if (entityRoom(player) !== current.room && current.period !== 'Break') addLines(10, `late for ${current.period}`);
+    if (entityRoom(player) !== current.room && current.period !== 'P.E.') addLines(10, `late for ${current.period}`);
     game.lastLateTick = 0;
   }
 
   clockEl.textContent = `🕘 Time: ${formatTime(game.timeMinutes)}`;
   periodEl.textContent = `🔔 Period: ${current.period}`;
   roomTargetEl.textContent = `📍 Target: ${current.room}`;
+  updateFloorStatus();
+}
+
+function checkSchoolExit() {
+  // Leaving via the gate triggers immediate discipline and a forced return.
+  if (player.x >= schoolExit.x && player.y >= schoolExit.yMin && player.y <= schoolExit.yMax) {
+    const nearestTeacher = game.entities.find((entity) => entity.role === 'teacher');
+    addLines(35, 'trying to leave school grounds');
+    player.x = 148;
+    player.y = 90;
+    announce(`🚫 ${nearestTeacher?.name || 'A teacher'} caught you at the school exit and dragged you back in.`);
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -548,9 +745,15 @@ function fillDitherRect(x, y, w, h, colorA, colorB, step = 4) {
 
 // Render inner textures for floors/walls so the school reads as built spaces.
 function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
+  const floorTint = room.floor === 'upper'
+    ? { a: '#7a62c7', b: '#674fb4' }
+    : room.floor === 'middle'
+      ? { a: '#6f95c7', b: '#5b80b1' }
+      : { a: '#67aa71', b: '#4f905a' };
+
   if (room.type === 'corridor') {
-    // Corridor tile stripes to suggest worn linoleum.
-    fillDitherRect(drawX, drawY, drawW, drawH, '#6f95c7', '#5b80b1', 3);
+    // Corridor tile stripes to suggest worn linoleum with floor-level color coding.
+    fillDitherRect(drawX, drawY, drawW, drawH, floorTint.a, floorTint.b, 3);
     ctx.strokeStyle = '#7ea5d8';
     for (let x = drawX + 8; x < drawX + drawW; x += 16) {
       ctx.beginPath();
@@ -568,8 +771,10 @@ function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
       }
     }
   } else {
-    // Classroom/hall checker flooring.
-    fillDitherRect(drawX, drawY, drawW, drawH, '#dbc8a8', '#cfba95', 4);
+    // Classroom/hall checker flooring with per-floor tint for orientation.
+    const baseA = room.floor === 'upper' ? '#c8b7f4' : room.floor === 'middle' ? '#bcd2f1' : '#cbe9ce';
+    const baseB = room.floor === 'upper' ? '#b59ee9' : room.floor === 'middle' ? '#a9c1e4' : '#b6dcb9';
+    fillDitherRect(drawX, drawY, drawW, drawH, baseA, baseB, 4);
     ctx.strokeStyle = '#c9b38e';
     for (let y = drawY + 8; y < drawY + drawH; y += 16) {
       ctx.beginPath();
@@ -652,15 +857,29 @@ function drawWorld() {
     ctx.fillText(room.name.toUpperCase(), drawX + 6, drawY + 12);
   }
 
+  // Exit gate warning so players clearly see where escaping gets blocked.
+  const gateTop = worldToScreen(schoolExit.x, schoolExit.yMin);
+  const gateBottom = worldToScreen(schoolExit.x, schoolExit.yMax);
+  ctx.fillStyle = '#ff4d4d';
+  ctx.fillRect(gateTop.sx - 2, gateTop.sy, 4, gateBottom.sy - gateTop.sy);
+  ctx.fillStyle = '#fff1d0';
+  ctx.font = 'bold 9px monospace';
+  ctx.fillText('EXIT', gateTop.sx - 10, gateTop.sy - 4);
+
   // Stair markers are larger with textured treads for readability.
   for (const stair of stairs) {
-    const pos = worldToScreen(stair.x, stair.y);
-    fillDitherRect(pos.sx - 14, pos.sy - 10, 28, 20, '#f4d06f', '#ffbf3c', 4);
-    ctx.fillStyle = '#8f5a00';
-    for (let i = 0; i < 4; i += 1) ctx.fillRect(pos.sx - 12 + i * 6, pos.sy - 8, 2, 16);
-    ctx.fillStyle = PALETTE.ink;
-    ctx.font = 'bold 8px monospace';
-    ctx.fillText('STAIR', pos.sx - 13, pos.sy - 12);
+    const points = [stair.y, stair.toY];
+    for (const y of points) {
+      const pos = worldToScreen(stair.x, y);
+      fillDitherRect(pos.sx - 14, pos.sy - 10, 28, 20, '#f4d06f', '#ffbf3c', 4);
+      ctx.fillStyle = '#8f5a00';
+      for (let i = 0; i < 4; i += 1) ctx.fillRect(pos.sx - 12 + i * 6, pos.sy - 8, 2, 16);
+      ctx.fillStyle = PALETTE.ink;
+      ctx.font = 'bold 8px monospace';
+      ctx.fillText('STAIR', pos.sx - 13, pos.sy - 12);
+      ctx.font = 'bold 7px monospace';
+      ctx.fillText('E', pos.sx - 2, pos.sy + 15);
+    }
   }
 
   // Floor orientation strip in a modern full-color treatment.
@@ -668,10 +887,12 @@ function drawWorld() {
   ctx.fillRect(6, 6, 190, 52);
   ctx.strokeStyle = PALETTE.mint;
   ctx.strokeRect(6, 6, 190, 52);
-  ctx.fillStyle = PALETTE.chalk;
   ctx.font = 'bold 11px monospace';
+  ctx.fillStyle = '#d8cbff';
   ctx.fillText('UPPER FLOOR', 12, 20);
+  ctx.fillStyle = '#b9ddff';
   ctx.fillText('MIDDLE FLOOR', 12, 36);
+  ctx.fillStyle = '#bdf6c4';
   ctx.fillText('GROUND FLOOR', 12, 52);
 
   for (const board of blackboards) {
@@ -790,6 +1011,14 @@ function loop(now) {
   if (!game.paused) {
     handleInput(dt);
 
+    if (!game.autoMode) game.idleMs += dt;
+    if (!game.autoMode && game.idleMs > 8000) {
+      game.autoMode = true;
+      updateAutoStatus();
+      announce('🤖 Auto mode enabled (idle detected).');
+      updateTodo();
+    }
+
     player.x += player.vx * dt * 0.011;
     player.y += player.vy * dt * 0.011;
     constrain(player);
@@ -803,7 +1032,10 @@ function loop(now) {
     updateAI(dt);
     updatePellets(dt);
     updateSchedule(dt);
+    checkSchoolExit();
+    updateBladder(dt);
     recoverEnergy(dt / 1000);
+    updateTodo();
   }
 
   updateCamera();
@@ -822,6 +1054,13 @@ function togglePause() {
 
 window.addEventListener('keydown', (event) => {
   if (event.key.toLowerCase() === 'p') togglePause();
+  if (event.key.toLowerCase() === 'u') {
+    game.autoMode = !game.autoMode;
+    game.idleMs = 0;
+    updateAutoStatus();
+    announce(`🤖 Auto mode ${game.autoMode ? 'enabled' : 'disabled'} by key.`);
+    updateTodo();
+  }
   game.keys[event.key] = true;
   game.keys[event.key.toLowerCase()] = true;
 });
@@ -835,5 +1074,7 @@ pauseBtn.onclick = togglePause;
 
 announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
 updateMission();
+updateAutoStatus();
+updateBladderHud();
 updateTodo();
 requestAnimationFrame(loop);
