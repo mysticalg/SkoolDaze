@@ -1,5 +1,7 @@
 # Skool Daze Tribute (HTML5)
 
+🎮 **Play now:** https://mysticalg.github.io/SkoolDaze/
+
 This project is an **original fan tribute** inspired by classic ZX Spectrum school-day gameplay.
 It does **not** include or reuse original ROM code/assets.
 
