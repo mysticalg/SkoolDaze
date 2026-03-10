@@ -1,14 +1,13 @@
 # GitHub Pages deployment workflow for the static HTML5 game.
 #
 # This workflow publishes the repository root (index.html, game.js, styles.css, etc.)
-# to GitHub Pages whenever changes are pushed to the default branch.
+# to GitHub Pages whenever code updates are pushed.
 name: Deploy HTML5 Game to GitHub Pages
 
 on:
+  # Deploy after every code update pushed to any branch.
+  # This ensures local merges and direct updates always publish automatically.
   push:
-    branches:
-      - main
-      - master
   workflow_dispatch:
 
 # Required permissions for Pages deployment.
