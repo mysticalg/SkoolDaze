@@ -238,6 +238,24 @@ function roomCenter(name) {
   return { x: r.x + r.w / 2, y: r.y + r.h / 2 };
 }
 
+function gateQueuePosition(entity) {
+  const gates = roomByName('School Gates');
+  // Spread pupils into lanes near the gate so they do not pile on one pixel.
+  const lane = entity.seatIndex % 7;
+  const row = Math.floor(entity.seatIndex / 7) % 3;
+  return {
+    x: gates.x + 2 + lane * 2.05,
+    y: gates.y + 3 + row * 1.9,
+  };
+}
+
+function bullyFightChance(currentPeriod) {
+  // Keep mornings civil: fights are very unlikely until break starts.
+  if (currentPeriod.period === 'Arrival' || currentPeriod.period === 'Tutorial') return 0.0001;
+  if (currentPeriod.mode !== 'break') return 0.00035;
+  return 0.006;
+}
+
 function entityRoom(entity) {
   return rooms.find((r) => entity.x > r.x && entity.x < r.x + r.w && entity.y > r.y && entity.y < r.y + r.h)?.name || 'Corridor';
 }
@@ -641,7 +659,7 @@ function chooseTarget(entity, currentPeriod) {
   const shouldAttend = game.rng() < p.diligence;
 
   if (currentPeriod.period === 'Arrival') {
-    return roomCenter('School Gates');
+    return gateQueuePosition(entity);
   }
 
   if (currentPeriod.mode === 'lesson') {
@@ -694,13 +712,27 @@ function updateAI(dt) {
       announce(`📣 ${entity.name}: "Sir! Eric is being bad!"`);
     }
 
-    // Bully may assault nearby pupils.
-    if (entity.role === 'bully' && game.rng() < 0.006) {
+    // Bully behaviour is period-aware so mornings stay mostly calm.
+    if (entity.role === 'bully' && game.rng() < bullyFightChance(current)) {
       meleeAttack(entity);
     }
 
-    const dx = entity.target.x - entity.x;
-    const dy = entity.target.y - entity.y;
+    let dx = entity.target.x - entity.x;
+    let dy = entity.target.y - entity.y;
+
+    // Lightweight separation avoids visual clumping at start-of-day queues.
+    for (const other of game.entities) {
+      if (other === entity || other.knockedUntil > performance.now()) continue;
+      const gapX = entity.x - other.x;
+      const gapY = entity.y - other.y;
+      const gap = Math.hypot(gapX, gapY) || 0.001;
+      if (gap < 1.2) {
+        const push = ((1.2 - gap) / 1.2) * 0.28;
+        dx += (gapX / gap) * push;
+        dy += (gapY / gap) * push;
+      }
+    }
+
     const len = Math.hypot(dx, dy) || 1;
     entity.vx = (dx / len) * entity.personality.speed * 2.15;
     entity.vy = (dy / len) * entity.personality.speed * 2.15;

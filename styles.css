@@ -24,33 +24,35 @@ body {
 
 .topbar {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 1rem;
-  padding: 0.6rem 1rem;
+  gap: 0.8rem;
+  padding: 0.45rem 0.75rem;
   background: #060a11;
   border-bottom: 1px solid #31415e;
 }
 
-.topbar h1 { margin: 0; font-size: 1.2rem; }
-.hud { display: flex; flex-wrap: wrap; gap: 0.8rem; font-size: 0.9rem; }
-.top-controls { display: flex; gap: 0.4rem; }
+/* Smaller heading keeps HUD readable on laptop-height displays. */
+.topbar h1 { margin: 0; font-size: 0.84rem; line-height: 1.2; max-width: 9ch; }
+/* Compact HUD text/gaps reduce wrapping and preserve canvas space. */
+.hud { display: flex; flex-wrap: wrap; gap: 0.45rem 0.65rem; font-size: 0.74rem; line-height: 1.2; }
+.top-controls { display: flex; gap: 0.32rem; }
 
 .control {
   border: 1px solid #38648a;
   background: #0b1a2e;
   color: #d8efff;
-  font-size: 1.05rem;
+  font-size: 0.88rem;
   border-radius: 8px;
-  min-width: 2.2rem;
-  min-height: 2.2rem;
+  min-width: 1.9rem;
+  min-height: 1.9rem;
   cursor: pointer;
 }
 .control:hover { background: #102640; }
 
 main {
   display: grid;
-  grid-template-columns: 1fr 320px;
+  grid-template-columns: 1fr minmax(250px, 280px);
   gap: 1rem;
   padding: 1rem;
   /* Allow the content area to shrink under a flexible header. */
@@ -81,18 +83,20 @@ canvas {
   background: var(--panel);
   border: 1px solid #31415e;
   border-radius: 10px;
-  padding: 0.8rem;
+  padding: 0.7rem;
   /* Keep instructions accessible at all resolutions. */
   min-height: 0;
   overflow: auto;
+  font-size: 0.78rem;
 }
 
-.panel h2, .panel h3 { margin-top: 0.4rem; }
+.panel h2, .panel h3 { margin-top: 0.35rem; margin-bottom: 0.35rem; line-height: 1.15; }
+.panel p, .panel li { margin: 0.2rem 0; line-height: 1.22; }
 
 .dot {
   display: inline-block;
-  width: 0.7rem;
-  height: 0.7rem;
+  width: 0.58rem;
+  height: 0.58rem;
   border-radius: 50%;
   margin-right: 0.4rem;
 }
@@ -106,18 +110,18 @@ canvas {
 
 .todo {
   margin: 0;
-  padding-left: 1.2rem;
-  font-size: 0.88rem;
+  padding-left: 1rem;
+  font-size: 0.76rem;
 }
 .todo li { margin-bottom: 0.25rem; }
 
 .events {
-  margin-top: 0.4rem;
-  max-height: 240px;
+  margin-top: 0.35rem;
+  max-height: 220px;
   overflow: auto;
   border-top: 1px dashed #43597d;
-  padding-top: 0.6rem;
-  font-size: 0.86rem;
+  padding-top: 0.45rem;
+  font-size: 0.74rem;
 }
 
 dialog {
