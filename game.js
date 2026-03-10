@@ -19,52 +19,93 @@ helpBtn.onclick = () => helpDialog.showModal();
 // -----------------------------------------------------------------------------
 // World model
 // -----------------------------------------------------------------------------
-// 64x35 tile-like coordinate space. We render everything in this local unit
-// space so simulation and drawing can scale cleanly with canvas size.
-const WORLD = { w: 64, h: 35 };
+// Large campus coordinate space. We now render through a camera window so
+// players can scroll through multiple levels and corridors.
+const WORLD = { w: 120, h: 78 };
+
+// Camera view keeps the same aspect ratio as the canvas while following Eric.
+const CAMERA = { w: 64, h: 35, x: 0, y: 0 };
+
+// Full retro-inspired palette so every room/entity can have richer color identity.
+const PALETTE = {
+  ink: '#0f1426',
+  deepBlue: '#1d2f6f',
+  skyBlue: '#4f86f7',
+  teal: '#2a9d8f',
+  mint: '#a8dadc',
+  brick: '#b23a48',
+  salmon: '#ff7f6a',
+  amber: '#ffb703',
+  cream: '#fff1d0',
+  violet: '#7b2cbf',
+  plum: '#5a189a',
+  grass: '#4caf50',
+  moss: '#2e7d32',
+  concrete: '#9aa0a6',
+  steel: '#5f6b7a',
+  chalk: '#f8f9fa',
+  line: '#1f2937',
+};
 
 const rooms = [
-  { name: 'Upper Left', x: 2, y: 2, w: 18, h: 8, floor: 'upper' },
-  { name: 'Upper Middle', x: 23, y: 2, w: 18, h: 8, floor: 'upper' },
-  { name: 'Upper Right Lab', x: 44, y: 2, w: 18, h: 8, floor: 'upper' },
-  { name: 'Lower Hall', x: 2, y: 12, w: 22, h: 9, floor: 'lower' },
-  { name: 'Library', x: 27, y: 12, w: 14, h: 9, floor: 'lower' },
-  { name: 'Staff Room', x: 44, y: 12, w: 18, h: 9, floor: 'lower' },
-  { name: 'Playground', x: 1, y: 24, w: 62, h: 10, floor: 'ground' },
+  // Upper level classrooms + corridor.
+  { name: 'Upper Corridor', x: 5, y: 12, w: 110, h: 4, floor: 'upper', type: 'corridor' },
+  { name: 'Upper Left', x: 8, y: 4, w: 23, h: 8, floor: 'upper', type: 'classroom' },
+  { name: 'Upper Middle', x: 37, y: 4, w: 23, h: 8, floor: 'upper', type: 'classroom' },
+  { name: 'Upper Right Lab', x: 66, y: 4, w: 23, h: 8, floor: 'upper', type: 'classroom' },
+  { name: 'Art Room', x: 95, y: 4, w: 18, h: 8, floor: 'upper', type: 'classroom' },
+
+  // Middle level corridors and rooms.
+  { name: 'Middle Corridor', x: 5, y: 35, w: 110, h: 4, floor: 'middle', type: 'corridor' },
+  { name: 'Lower Hall', x: 8, y: 26, w: 28, h: 9, floor: 'middle', type: 'hall' },
+  { name: 'Library', x: 41, y: 26, w: 22, h: 9, floor: 'middle', type: 'classroom' },
+  { name: 'Staff Room', x: 68, y: 26, w: 22, h: 9, floor: 'middle', type: 'classroom' },
+  { name: 'Music Room', x: 95, y: 26, w: 18, h: 9, floor: 'middle', type: 'classroom' },
+
+  // Ground level circulation and outside area.
+  { name: 'Ground Corridor', x: 5, y: 56, w: 110, h: 4, floor: 'ground', type: 'corridor' },
+  { name: 'Canteen', x: 8, y: 60, w: 28, h: 8, floor: 'ground', type: 'hall' },
+  { name: 'Assembly Hall', x: 41, y: 60, w: 32, h: 8, floor: 'ground', type: 'hall' },
+  { name: 'Playground', x: 78, y: 60, w: 35, h: 14, floor: 'ground', type: 'outdoor' },
 ];
 
 const stairs = [
-  { x: 20, y: 10, toY: 12, label: 'West Stairs' },
-  { x: 43, y: 10, toY: 12, label: 'East Stairs' },
+  { x: 20, y: 14, toY: 37, label: 'West Stairs' },
+  { x: 57, y: 14, toY: 37, label: 'Central Stairs' },
+  { x: 95, y: 14, toY: 37, label: 'East Stairs' },
+  { x: 20, y: 37, toY: 58, label: 'West Stairs' },
+  { x: 57, y: 37, toY: 58, label: 'Central Stairs' },
+  { x: 95, y: 37, toY: 58, label: 'East Stairs' },
 ];
 
 const blackboards = [
-  { room: 'Upper Left', x: 10, y: 3, text: '' },
-  { room: 'Upper Middle', x: 32, y: 3, text: '' },
-  { room: 'Upper Right Lab', x: 53, y: 3, text: '' },
-  { room: 'Lower Hall', x: 12, y: 13, text: '' },
-  { room: 'Library', x: 34, y: 13, text: '' },
+  { room: 'Upper Left', x: 20, y: 5, text: '' },
+  { room: 'Upper Middle', x: 49, y: 5, text: '' },
+  { room: 'Upper Right Lab', x: 78, y: 5, text: '' },
+  { room: 'Lower Hall', x: 22, y: 27, text: '' },
+  { room: 'Library', x: 52, y: 27, text: '' },
+  { room: 'Assembly Hall', x: 57, y: 61, text: '' },
 ];
 
 const shields = [
-  { x: 7, y: 4, letter: 'D', found: false },
-  { x: 31, y: 4, letter: 'A', found: false },
-  { x: 55, y: 4, letter: 'Z', found: false },
-  { x: 17, y: 14, letter: 'E', found: false },
-  { x: 34, y: 14, letter: 'S', found: false },
-  { x: 58, y: 14, letter: 'K', found: false },
+  { x: 13, y: 6, letter: 'D', found: false },
+  { x: 49, y: 6, letter: 'A', found: false },
+  { x: 84, y: 6, letter: 'Z', found: false },
+  { x: 18, y: 28, letter: 'E', found: false },
+  { x: 57, y: 28, letter: 'S', found: false },
+  { x: 103, y: 63, letter: 'K', found: false },
 ];
 
 // Bell schedule approximating school-day flow.
 const schedule = [
-  { period: 'Registration', room: 'Lower Hall', mins: 10 },
+  { period: 'Registration', room: 'Assembly Hall', mins: 10 },
   { period: 'Math', room: 'Upper Left', mins: 18 },
   { period: 'English', room: 'Upper Middle', mins: 18 },
   { period: 'Science', room: 'Upper Right Lab', mins: 18 },
   { period: 'Break', room: 'Playground', mins: 10 },
   { period: 'History', room: 'Upper Left', mins: 15 },
   { period: 'Library Study', room: 'Library', mins: 14 },
-  { period: 'Assembly', room: 'Lower Hall', mins: 12 },
+  { period: 'Assembly', room: 'Assembly Hall', mins: 12 },
 ];
 
 const lessonTasks = [
@@ -82,12 +123,13 @@ const personalities = {
   hero: { speed: 1.0, aggression: 0.2, diligence: 0.75, focus: 0.7 },
   weird: { speed: 1.08, aggression: 0.35, diligence: 0.45, focus: 0.4 },
   teacher: { speed: 0.88, aggression: 0.55, diligence: 1.0, focus: 1.0 },
-  player: { speed: 1.22, aggression: 0, diligence: 0, focus: 0 },
+  player: { speed: 0.82, aggression: 0, diligence: 0, focus: 0 },
 };
 
 const game = {
   timeMinutes: 8 * 60,
-  timeScale: 0.085,
+  // Minutes advanced per real-time second to slow bell pacing.
+  timeScale: 0.16,
   periodIndex: 0,
   periodElapsed: 0,
   paused: false,
@@ -110,6 +152,7 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     role,
     x,
     y,
+    color,
     vx: 0,
     vy: 0,
     hp: 100,
@@ -123,7 +166,7 @@ function mkEntity(name, role, x, y, color, traits = {}) {
   };
 }
 
-const player = mkEntity('Eric', 'player', 3, 26, '#ffe04d', {
+const player = mkEntity('Eric', 'player', 48, 64, '#ffe04d', {
   title: 'Troublemaker with potential',
   prefers: ['Playground'],
   quotes: ['Not me, sir!', 'I was only looking!'],
@@ -131,16 +174,16 @@ const player = mkEntity('Eric', 'player', 3, 26, '#ffe04d', {
 
 game.entities.push(
   player,
-  mkEntity('Mr Wacker', 'teacher', 10, 14, '#8eb2ff', { title: 'Headmaster', strict: 0.9 }),
-  mkEntity('Ms Take', 'teacher', 50, 14, '#82a4ff', { title: 'Science Teacher', strict: 0.8 }),
-  mkEntity('Mr Creak', 'teacher', 30, 14, '#7e9aff', { title: 'History Teacher', strict: 0.7 }),
-  mkEntity('Angelface', 'hero', 5, 26, '#ffd58e', { title: 'Handsome kid' }),
-  mkEntity('Einstein', 'swot', 9, 26, '#8effd3', { title: 'Teacher pet', tattles: true }),
-  mkEntity('Bully Boy', 'bully', 13, 26, '#ff5f88', { title: 'Playground terror' }),
-  mkEntity('Boy Wander', 'weird', 16, 26, '#c58eff', { title: 'Chaotic drifter' }),
-  mkEntity('Slugger', 'bully', 20, 27, '#ff7ca0', { title: 'Fighter' }),
-  mkEntity('Precious', 'hero', 24, 27, '#ffe6ae', { title: 'Narcissist' }),
-  mkEntity('Nerdy Ned', 'swot', 28, 27, '#78ffcf', { title: 'Homework machine', tattles: true }),
+  mkEntity('Mr Wacker', 'teacher', 22, 29, '#8eb2ff', { title: 'Headmaster', strict: 0.9 }),
+  mkEntity('Ms Take', 'teacher', 75, 29, '#82a4ff', { title: 'Science Teacher', strict: 0.8 }),
+  mkEntity('Mr Creak', 'teacher', 56, 63, '#7e9aff', { title: 'History Teacher', strict: 0.7 }),
+  mkEntity('Angelface', 'hero', 82, 65, '#ffd58e', { title: 'Handsome kid' }),
+  mkEntity('Einstein', 'swot', 86, 64, '#8effd3', { title: 'Teacher pet', tattles: true }),
+  mkEntity('Bully Boy', 'bully', 90, 66, '#ff5f88', { title: 'Playground terror' }),
+  mkEntity('Boy Wander', 'weird', 94, 65, '#c58eff', { title: 'Chaotic drifter' }),
+  mkEntity('Slugger', 'bully', 98, 66, '#ff7ca0', { title: 'Fighter' }),
+  mkEntity('Precious', 'hero', 102, 66, '#ffe6ae', { title: 'Narcissist' }),
+  mkEntity('Nerdy Ned', 'swot', 106, 66, '#78ffcf', { title: 'Homework machine', tattles: true }),
 );
 
 function formatTime(mins) {
@@ -196,8 +239,8 @@ function spendEnergy(amount) {
   energyEl.textContent = `⚡ Energy: ${Math.round(game.energy)}`;
 }
 
-function recoverEnergy(dt) {
-  game.energy = Math.min(100, game.energy + dt * 0.0025);
+function recoverEnergy(dtSeconds) {
+  game.energy = Math.min(100, game.energy + dtSeconds * 2.2);
   energyEl.textContent = `⚡ Energy: ${Math.round(game.energy)}`;
 }
 
@@ -245,7 +288,7 @@ function handleInput(dt) {
   if (game.keys.ArrowDown || game.keys.s) player.vy = speed;
 
   // Use a little stamina while moving to create pacing and tactical choices.
-  if (Math.abs(player.vx) + Math.abs(player.vy) > 0.1) spendEnergy(0.012 * dt);
+  if (Math.abs(player.vx) + Math.abs(player.vy) > 0.1) spendEnergy(0.6 * (dt / 1000));
 
   if (game.keys.z) {
     meleeAttack(player);
@@ -407,11 +450,11 @@ function updateAI(dt) {
     const dx = entity.target.x - entity.x;
     const dy = entity.target.y - entity.y;
     const len = Math.hypot(dx, dy) || 1;
-    entity.vx = (dx / len) * entity.personality.speed * 0.42;
-    entity.vy = (dy / len) * entity.personality.speed * 0.42;
+    entity.vx = (dx / len) * entity.personality.speed * 3.2;
+    entity.vy = (dy / len) * entity.personality.speed * 3.2;
 
-    entity.x += entity.vx * dt;
-    entity.y += entity.vy * dt;
+    entity.x += entity.vx * (dt / 1000);
+    entity.y += entity.vy * (dt / 1000);
     constrain(entity);
 
     if (len < 0.9) entity.target = null;
@@ -429,9 +472,9 @@ function updateAI(dt) {
 
 function updatePellets(dt) {
   for (const pellet of game.pellets) {
-    pellet.x += pellet.vx * dt * 3;
-    pellet.y += pellet.vy * dt * 3;
-    pellet.vy += 0.003 * dt;
+    pellet.x += pellet.vx * dt * 0.09;
+    pellet.y += pellet.vy * dt * 0.09;
+    pellet.vy += 0.0008 * dt;
 
     for (const entity of game.entities) {
       if (entity === pellet.owner || entity.knockedUntil > performance.now()) continue;
@@ -451,8 +494,9 @@ function updatePellets(dt) {
 
 function updateSchedule(dt) {
   const current = schedule[game.periodIndex];
-  game.periodElapsed += dt * game.timeScale;
-  game.timeMinutes += dt * game.timeScale;
+  const deltaMins = (dt / 1000) * game.timeScale;
+  game.periodElapsed += deltaMins;
+  game.timeMinutes += deltaMins;
 
   if (game.periodElapsed >= current.mins) setPeriod(game.periodIndex + 1);
 
@@ -471,95 +515,225 @@ function updateSchedule(dt) {
 // -----------------------------------------------------------------------------
 // Rendering
 // -----------------------------------------------------------------------------
+function updateCamera() {
+  // Keep player near center while clamping camera edges to world bounds.
+  CAMERA.x = Math.max(0, Math.min(WORLD.w - CAMERA.w, player.x - CAMERA.w / 2));
+  CAMERA.y = Math.max(0, Math.min(WORLD.h - CAMERA.h, player.y - CAMERA.h / 2));
+}
+
 function worldToScreen(x, y) {
-  return { sx: (x / WORLD.w) * canvas.width, sy: (y / WORLD.h) * canvas.height };
+  return {
+    sx: ((x - CAMERA.x) / CAMERA.w) * canvas.width,
+    sy: ((y - CAMERA.y) / CAMERA.h) * canvas.height,
+  };
+}
+
+// Draw a subtle checker dither so large surfaces feel textured, not flat.
+function fillDitherRect(x, y, w, h, colorA, colorB, step = 4) {
+  ctx.fillStyle = colorA;
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = colorB;
+  for (let py = y; py < y + h; py += step) {
+    for (let px = x + ((py / step) % 2) * step; px < x + w; px += step * 2) {
+      ctx.fillRect(px, py, step, step);
+    }
+  }
+}
+
+// Render inner textures for floors/walls so the school reads as built spaces.
+function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
+  if (room.type === 'corridor') {
+    // Corridor tile stripes to suggest worn linoleum.
+    fillDitherRect(drawX, drawY, drawW, drawH, '#6f95c7', '#5b80b1', 3);
+    ctx.strokeStyle = '#7ea5d8';
+    for (let x = drawX + 8; x < drawX + drawW; x += 16) {
+      ctx.beginPath();
+      ctx.moveTo(x, drawY + 2);
+      ctx.lineTo(x, drawY + drawH - 2);
+      ctx.stroke();
+    }
+  } else if (room.type === 'outdoor') {
+    // Grass stipple with slightly brighter specks.
+    fillDitherRect(drawX, drawY, drawW, drawH, PALETTE.grass, PALETTE.moss, 3);
+    ctx.fillStyle = '#75c96b';
+    for (let y = drawY + 2; y < drawY + drawH; y += 10) {
+      for (let x = drawX + 2; x < drawX + drawW; x += 14) {
+        ctx.fillRect(x, y, 2, 2);
+      }
+    }
+  } else {
+    // Classroom/hall checker flooring.
+    fillDitherRect(drawX, drawY, drawW, drawH, '#dbc8a8', '#cfba95', 4);
+    ctx.strokeStyle = '#c9b38e';
+    for (let y = drawY + 8; y < drawY + drawH; y += 16) {
+      ctx.beginPath();
+      ctx.moveTo(drawX + 2, y);
+      ctx.lineTo(drawX + drawW - 2, y);
+      ctx.stroke();
+    }
+  }
+}
+
+// Draw thick walls around each room; these give the campus stronger structure.
+function drawRoomWalls(drawX, drawY, drawW, drawH, room) {
+  const wallColor = room.type === 'outdoor' ? '#2c5b2f' : '#6e4f3a';
+  ctx.fillStyle = wallColor;
+  ctx.fillRect(drawX - 2, drawY - 2, drawW + 4, 2);
+  ctx.fillRect(drawX - 2, drawY + drawH, drawW + 4, 2);
+  ctx.fillRect(drawX - 2, drawY, 2, drawH);
+  ctx.fillRect(drawX + drawW, drawY, 2, drawH);
 }
 
 function drawWorld() {
-  ctx.fillStyle = '#1f2b44';
+  const sx = canvas.width / CAMERA.w;
+  const sy = canvas.height / CAMERA.h;
+
+  // Layered sky gradient keeps the scene colorful while remaining lightweight.
+  const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  sky.addColorStop(0, PALETTE.deepBlue);
+  sky.addColorStop(0.45, PALETTE.skyBlue);
+  sky.addColorStop(1, '#95c8ff');
+  ctx.fillStyle = sky;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  const sx = canvas.width / WORLD.w;
-  const sy = canvas.height / WORLD.h;
+  // Subtle scanlines maintain retro feel without reducing readability.
+  ctx.fillStyle = 'rgba(15, 20, 38, 0.12)';
+  for (let y = 0; y < canvas.height; y += 5) ctx.fillRect(0, y, canvas.width, 1);
 
-  // Room blocks and labels.
   for (const room of rooms) {
-    ctx.fillStyle = room.name === 'Playground' ? '#385130' : '#27354f';
-    ctx.fillRect(room.x * sx, room.y * sy, room.w * sx, room.h * sy);
-    ctx.strokeStyle = '#8898ba';
-    ctx.strokeRect(room.x * sx, room.y * sy, room.w * sx, room.h * sy);
+    const drawX = Math.floor((room.x - CAMERA.x) * sx);
+    const drawY = Math.floor((room.y - CAMERA.y) * sy);
+    const drawW = Math.ceil(room.w * sx);
+    const drawH = Math.ceil(room.h * sy);
 
-    ctx.fillStyle = '#e3efff';
-    ctx.font = '12px monospace';
-    ctx.fillText(room.name, (room.x + 0.6) * sx, (room.y + 1) * sy);
+    drawRoomTexture(drawX, drawY, drawW, drawH, room);
+    drawRoomWalls(drawX, drawY, drawW, drawH, room);
+
+    // Doorway markers communicate where corridors connect rooms.
+    if (room.type !== 'outdoor') {
+      ctx.fillStyle = '#3e7e9c';
+      ctx.fillRect(drawX + drawW / 2 - 7, drawY + drawH - 2, 14, 4);
+    }
+
+    ctx.strokeStyle = PALETTE.line;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(drawX, drawY, drawW, drawH);
+
+    ctx.fillStyle = room.type === 'outdoor' ? PALETTE.cream : PALETTE.plum;
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText(room.name.toUpperCase(), drawX + 6, drawY + 12);
   }
 
-  // Stair markers for school structure detail.
+  // Stair markers are larger with textured treads for readability.
   for (const stair of stairs) {
     const pos = worldToScreen(stair.x, stair.y);
-    ctx.fillStyle = '#7aa4d1';
-    ctx.fillRect(pos.sx - 8, pos.sy - 6, 16, 12);
-    ctx.fillStyle = '#f4fbff';
-    ctx.font = '9px monospace';
-    ctx.fillText('STAIR', pos.sx - 12, pos.sy - 8);
+    fillDitherRect(pos.sx - 14, pos.sy - 10, 28, 20, '#f4d06f', '#ffbf3c', 4);
+    ctx.fillStyle = '#8f5a00';
+    for (let i = 0; i < 4; i += 1) ctx.fillRect(pos.sx - 12 + i * 6, pos.sy - 8, 2, 16);
+    ctx.fillStyle = PALETTE.ink;
+    ctx.font = 'bold 8px monospace';
+    ctx.fillText('STAIR', pos.sx - 13, pos.sy - 12);
   }
 
-  // Blackboard visuals and text snippets.
+  // Floor orientation strip in a modern full-color treatment.
+  ctx.fillStyle = 'rgba(15,20,38,0.82)';
+  ctx.fillRect(6, 6, 190, 52);
+  ctx.strokeStyle = PALETTE.mint;
+  ctx.strokeRect(6, 6, 190, 52);
+  ctx.fillStyle = PALETTE.chalk;
+  ctx.font = 'bold 11px monospace';
+  ctx.fillText('UPPER FLOOR', 12, 20);
+  ctx.fillText('MIDDLE FLOOR', 12, 36);
+  ctx.fillText('GROUND FLOOR', 12, 52);
+
   for (const board of blackboards) {
     const p = worldToScreen(board.x, board.y);
-    ctx.fillStyle = '#0f301f';
-    ctx.fillRect(p.sx - 20, p.sy - 10, 40, 13);
-    ctx.strokeStyle = '#4e735f';
-    ctx.strokeRect(p.sx - 20, p.sy - 10, 40, 13);
+    fillDitherRect(p.sx - 23, p.sy - 11, 46, 16, '#194b31', '#23633f', 3);
+    ctx.strokeStyle = '#93d5a9';
+    ctx.strokeRect(p.sx - 23, p.sy - 11, 46, 16);
     if (board.text) {
-      ctx.fillStyle = '#ccffe6';
+      ctx.fillStyle = PALETTE.chalk;
       ctx.font = '8px monospace';
-      ctx.fillText(board.text.slice(0, 30), p.sx - 18, p.sy - 1);
+      ctx.fillText(board.text.slice(0, 28).toUpperCase(), p.sx - 21, p.sy - 1);
     }
   }
 
-  // Shield pickups.
+  // Shield pickups now use a richer gem-like sprite with highlight.
   for (const shield of shields) {
     if (shield.found) continue;
     const p = worldToScreen(shield.x, shield.y);
-    ctx.fillStyle = '#ffd75e';
-    ctx.beginPath();
-    ctx.arc(p.sx, p.sy, 7, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#1a1a1a';
-    ctx.font = '10px monospace';
+    ctx.fillStyle = '#ffd166';
+    ctx.fillRect(p.sx - 4, p.sy - 7, 8, 14);
+    ctx.fillRect(p.sx - 7, p.sy - 4, 14, 8);
+    ctx.fillStyle = '#fff4c2';
+    ctx.fillRect(p.sx - 2, p.sy - 5, 3, 3);
+    ctx.fillStyle = '#5a3b00';
+    ctx.font = 'bold 8px monospace';
     ctx.fillText('?', p.sx - 3, p.sy + 3);
   }
 }
 
 function drawEntities() {
-  const sx = canvas.width / WORLD.w;
-  const sy = canvas.height / WORLD.h;
+  const sx = canvas.width / CAMERA.w;
+  const sy = canvas.height / CAMERA.h;
 
   for (const entity of game.entities) {
     const knocked = entity.knockedUntil > performance.now();
-    ctx.fillStyle = knocked ? '#666' : entity.role === 'player' ? '#ffe04d' : entity.color;
+    const px = Math.floor((entity.x - CAMERA.x) * sx);
+    const py = Math.floor((entity.y - CAMERA.y) * sy);
 
-    const h = knocked ? 0.35 : 1.2;
-    ctx.fillRect((entity.x - 0.35) * sx, (entity.y - h) * sy, 0.7 * sx, h * sy);
+    // Larger sprites for readability at scroll scale.
+    const body =
+      entity.role === 'player' ? '#ffca3a'
+      : entity.role === 'teacher' ? '#4cc9f0'
+      : entity.role === 'bully' ? '#f94144'
+      : entity.role === 'swot' ? '#43aa8b'
+      : entity.role === 'weird' ? '#9d4edd'
+      : '#f9844a';
 
-    // Mood marker for AI readability.
-    if (!knocked) {
-      ctx.fillStyle = '#fff';
-      ctx.font = '9px monospace';
-      const moodGlyph = entity.mood === 'angry' ? '😠' : entity.mood === 'furious' ? '💢' : '🙂';
-      ctx.fillText(moodGlyph, (entity.x - 0.2) * sx, (entity.y - 1.3) * sy);
+    if (knocked) {
+      ctx.fillStyle = '#b0b6c2';
+      ctx.fillRect(px - 11, py - 4, 22, 7);
+    } else {
+      // Head
+      ctx.fillStyle = '#ffd7b5';
+      ctx.fillRect(px - 5, py - 24, 10, 6);
+      // Hair cap
+      ctx.fillStyle = '#513b2f';
+      ctx.fillRect(px - 5, py - 24, 10, 2);
+      // Body jacket
+      ctx.fillStyle = body;
+      ctx.fillRect(px - 7, py - 18, 14, 12);
+      // Arms
+      ctx.fillStyle = '#ffd7b5';
+      ctx.fillRect(px - 10, py - 17, 3, 8);
+      ctx.fillRect(px + 7, py - 17, 3, 8);
+      // Legs
+      ctx.fillStyle = '#1f2a44';
+      ctx.fillRect(px - 6, py - 6, 5, 8);
+      ctx.fillRect(px + 1, py - 6, 5, 8);
+      // Shoe details
+      ctx.fillStyle = '#13151a';
+      ctx.fillRect(px - 6, py + 2, 5, 2);
+      ctx.fillRect(px + 1, py + 2, 5, 2);
     }
 
-    ctx.fillStyle = '#fff';
-    ctx.font = '9px monospace';
-    ctx.fillText(entity.name, (entity.x - 1) * sx, (entity.y - 1.55) * sy);
+    // Mood marker remains concise and readable.
+    if (!knocked) {
+      ctx.fillStyle = PALETTE.chalk;
+      ctx.font = '10px monospace';
+      const moodGlyph = entity.mood === 'angry' ? '!' : entity.mood === 'furious' ? '*' : '.';
+      ctx.fillText(moodGlyph, px - 2, py - 26);
+    }
+
+    ctx.fillStyle = PALETTE.chalk;
+    ctx.font = 'bold 9px monospace';
+    ctx.fillText(entity.name.toUpperCase(), px - 22, py - 29);
   }
 
-  // Catapult pellets.
-  ctx.fillStyle = '#f0f0f0';
   for (const pellet of game.pellets) {
-    ctx.fillRect((pellet.x - 0.08) * sx, (pellet.y - 0.08) * sy, 0.16 * sx, 0.16 * sy);
+    ctx.fillStyle = '#f8f9fa';
+    ctx.fillRect((pellet.x - CAMERA.x - 0.08) * sx, (pellet.y - CAMERA.y - 0.08) * sy, 3, 3);
   }
 }
 
@@ -583,15 +757,17 @@ function loop(now) {
   if (!game.paused) {
     handleInput(dt);
 
-    player.x += player.vx * dt * 0.02;
-    player.y += player.vy * dt * 0.02;
+    player.x += player.vx * dt * 0.008;
+    player.y += player.vy * dt * 0.008;
     constrain(player);
 
     updateAI(dt);
     updatePellets(dt);
     updateSchedule(dt);
-    recoverEnergy(dt);
+    recoverEnergy(dt / 1000);
   }
+
+  updateCamera();
 
   drawWorld();
   drawEntities();
