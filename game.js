@@ -785,7 +785,31 @@ const extraStudentRoster = [
 
 studentRoster.push(...extraStudentRoster);
 
-studentRoster.forEach(([name, role, color, profile], idx) => {
+function baselineRoomSeatCount(room) {
+  // Mirrors the baseline classroom seat math so roster sizing stays aligned
+  // with visible chair layout without inflating desk density.
+  const usableW = Math.max(8, room.w - 8);
+  const usableH = Math.max(5, room.h - 7);
+  const cols = Math.max(3, Math.floor(usableW / 3));
+  const rows = Math.max(2, Math.floor(usableH / 2.6));
+  return cols * rows;
+}
+
+function maxStudentPopulationForLessons() {
+  const classroomCapacity = rooms
+    .filter((room) => room.type === 'classroom' && room.name !== 'Staff Room' && room.name !== 'Headmaster Office')
+    .reduce((sum, room) => sum + Math.max(0, baselineRoomSeatCount(room) - 1), 0);
+  return Math.max(12, classroomCapacity);
+}
+
+const maxStudentPopulation = maxStudentPopulationForLessons();
+const activeStudentRoster = studentRoster.slice(0, maxStudentPopulation);
+if (activeStudentRoster.length < studentRoster.length) {
+  // Keep simulation smooth: cap active students so classes never exceed chair capacity.
+  announce(`📉 Roster balanced to ${activeStudentRoster.length} students so every class has enough chairs.`);
+}
+
+activeStudentRoster.forEach(([name, role, color, profile], idx) => {
   const column = idx % 10;
   const row = Math.floor(idx / 10);
   game.entities.push(mkEntity(name, role, 98 + (column * 5.2), 86.5 + (row * 2.2), color, profile));
@@ -1305,11 +1329,11 @@ function getRoomSeatLayout(roomName) {
   if (!room || room.type !== 'classroom') return null;
   if (roomSeatCache.has(roomName)) return roomSeatCache.get(roomName);
 
-  // Dense seat grid guarantees every lesson room has enough chairs, plus spares.
-  const usableW = Math.max(8, room.w - 6.5);
-  const usableH = Math.max(5, room.h - 5.5);
-  const cols = Math.max(4, Math.floor(usableW / 2.35));
-  const rows = Math.max(3, Math.floor(usableH / 2.05));
+  // Keep table count based on room geometry (existing layout), not student population.
+  const usableW = Math.max(8, room.w - 8);
+  const usableH = Math.max(5, room.h - 7);
+  const cols = Math.max(3, Math.floor(usableW / 3));
+  const rows = Math.max(2, Math.floor(usableH / 2.6));
 
   const seats = [];
   const seatMinX = room.x + 1.1;
