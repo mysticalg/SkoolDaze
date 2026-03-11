@@ -855,7 +855,23 @@ function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-function announce(message) {
+function canPlayerHearSpeaker(source, range) {
+  if (!source) return true;
+  const sameRoom = entityRoom(source) === entityRoom(player);
+  // Eric can still hear someone nearby in corridors, but distant classroom chatter stays local.
+  return sameRoom || distance(source, player) <= range;
+}
+
+function announce(message, options = {}) {
+  const {
+    source = null,
+    range = 6.5,
+    force = false,
+  } = options;
+
+  // Speech-style events can be local so the feed reflects what Eric can realistically hear.
+  if (!force && source && !canPlayerHearSpeaker(source, range)) return;
+
   game.announcements.unshift(`[${formatTime(game.timeMinutes)}] ${message}`);
   game.announcements = game.announcements.slice(0, 12);
   eventsEl.innerHTML = game.announcements.map((line) => `<div>${line}</div>`).join('');
@@ -909,6 +925,50 @@ function constrain(entity) {
   entity.y = Math.max(1, Math.min(WORLD.h - 1, entity.y));
   if (entity.vx < 0) entity.facing = -1;
   if (entity.vx > 0) entity.facing = 1;
+}
+
+function isInDoorOpening(room, x, y) {
+  const doorway = roomDoorway(room);
+  if (!doorway) return false;
+  const corridorY = room.floor === 'upper' ? 17 : room.floor === 'middle' ? 52 : room.floor === 'ground' ? 78 : 112;
+  const openingEdgeY = Math.abs(room.y - corridorY) <= Math.abs((room.y + room.h) - corridorY)
+    ? room.y
+    : room.y + room.h;
+  return Math.abs(x - doorway.x) <= 1.8 && Math.abs(y - openingEdgeY) <= 1.1;
+}
+
+function isWalkablePoint(x, y) {
+  if (x < 1 || x > WORLD.w - 1 || y < 1 || y > WORLD.h - 1) return false;
+  const containingRooms = rooms.filter((room) => x >= room.x && x <= room.x + room.w && y >= room.y && y <= room.y + room.h);
+  if (!containingRooms.length) return false;
+
+  return containingRooms.some((room) => {
+    if (room.type === 'corridor' || room.type === 'outdoor') return true;
+
+    const wallThickness = 0.82;
+    const insideInterior = (
+      x >= room.x + wallThickness
+      && x <= room.x + room.w - wallThickness
+      && y >= room.y + wallThickness
+      && y <= room.y + room.h - wallThickness
+    );
+    return insideInterior || isInDoorOpening(room, x, y);
+  });
+}
+
+function moveEntityWithCollision(entity, deltaX, deltaY) {
+  const nextX = entity.x + deltaX;
+  const nextY = entity.y + deltaY;
+
+  if (isWalkablePoint(nextX, nextY)) {
+    entity.x = nextX;
+    entity.y = nextY;
+    return;
+  }
+
+  // Axis-separated fallback gives natural wall sliding and keeps controls responsive.
+  if (isWalkablePoint(nextX, entity.y)) entity.x = nextX;
+  if (isWalkablePoint(entity.x, nextY)) entity.y = nextY;
 }
 
 function setPeriod(index) {
@@ -1359,7 +1419,7 @@ function interact() {
     && isAssignedTeacherSeatedForPeriod(current)
     && !game.quizActive
     // Slower questioning cadence so lessons feel less spammy.
-    && now - teacherNearby.lastQuizAt > 45000
+    && now - teacherNearby.lastQuizAt > 90000
     && game.rng() < 0.45
   ) {
     const quiz = { q: 'What is 6 x 7?', answer: '42' };
@@ -1367,10 +1427,10 @@ function interact() {
     teacherNearby.lastQuizAt = now;
     const response = prompt(`${teacherNearby.name} asks: ${quiz.q}`);
     if ((response || '').trim() === quiz.answer) {
-      announce(`✅ Correct answer. ${teacherNearby.name} nods approvingly.`);
+      announce(`✅ Correct answer. ${teacherNearby.name} nods approvingly.`, { source: teacherNearby, range: 7 });
     } else {
       addLines(30, 'wrong answer in lesson');
-      announce(`❌ Wrong answer. ${teacherNearby.name}: "Concentrate!"`);
+      announce(`❌ Wrong answer. ${teacherNearby.name}: "Concentrate!"`, { source: teacherNearby, range: 7 });
     }
     game.quizActive = null;
   }
@@ -1582,7 +1642,7 @@ function updateAI(dt) {
     // Swot tattles if player is misbehaving nearby.
     if (entity.profile.tattles && distance(entity, player) < 2 && game.rng() < 0.0025 && game.lines > 0) {
       addLines(10, `${entity.name} tattled`);
-      announce(`📣 ${entity.name}: "Sir! Eric is being bad!"`);
+      announce(`📣 ${entity.name}: "Sir! Eric is being bad!"`, { source: entity, range: 7.5 });
     }
 
     // Bully behaviour is period-aware so mornings stay mostly calm.
@@ -1636,7 +1696,7 @@ function updateAI(dt) {
         seenLitter.offender.litterWarnUntil = performance.now() + 4000;
         // Teacher makes pupil pick it up immediately, then walk it to a bin.
         game.litter = game.litter.filter((item) => item !== seenLitter);
-        announce(`🧑‍🏫 ${entity.name}: "Pick that litter up and use the bin!"`);
+        announce(`🧑‍🏫 ${entity.name}: "Pick that litter up and use the bin!"`, { source: entity, range: 8 });
       }
     }
 
@@ -1727,8 +1787,7 @@ function updateAI(dt) {
     entity.vx = entity.isSeated ? 0 : (dx / len) * speed;
     entity.vy = entity.isSeated ? 0 : (dy / len) * speed;
 
-    entity.x += entity.vx * (dt / 1000);
-    entity.y += entity.vy * (dt / 1000);
+    moveEntityWithCollision(entity, entity.vx * (dt / 1000), entity.vy * (dt / 1000));
 
     constrain(entity);
 
@@ -1781,7 +1840,7 @@ function updateAI(dt) {
       const board = blackboards.find((b) => b.room === current.room);
       if (board) {
         board.text = lessonTasks[Math.floor(game.rng() * lessonTasks.length)];
-        announce(`🧑‍🏫 ${entity.name}: "Quiet! Copy the board."`);
+        announce(`🧑‍🏫 ${entity.name}: "Quiet! Copy the board."`, { source: entity, range: 8 });
       }
     }
 
@@ -2618,8 +2677,7 @@ function loop(now) {
       updateTodo();
     }
 
-    player.x += player.vx * dt * 0.011;
-    player.y += player.vy * dt * 0.011;
+    moveEntityWithCollision(player, player.vx * dt * 0.011, player.vy * dt * 0.011);
     constrain(player);
 
     // Update animation time for all entities so movement reads like retro sprites.
