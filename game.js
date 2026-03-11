@@ -878,23 +878,25 @@ function buildAppearanceProfile(name, role, traitProfile, profile = {}) {
   const armType = clampScore((traitProfile.strength - 50) / 40 + (traitProfile.aggression - 50) / 110, -1, 1);
   const legType = clampScore((traitProfile.speed - 50) / 40 + (traitProfile.skill - 50) / 130, -1, 1);
 
+  const overrides = profile.appearanceOverrides || {};
   return {
     skinTone,
-    hairColor: profile.appearanceOverrides?.hairColor || hairPalette[seed % hairPalette.length],
-    eyeColor: profile.appearanceOverrides?.eyeColor || `hsl(${eyeHue} 72% 54%)`,
-    headWidth: 9 + (seed % 4),
-    headHeight: 6 + (seed % 2),
-    earSize: 1 + (seed % 2),
-    noseType: ['dot', 'stubby', 'long', 'button'][seed % 4],
-    eyeSpread: 1 + (seed % 2),
-    jawType: ['soft', 'round', 'square'][seed % 3],
-    acne: traitProfile.mood < 43 || traitProfile.luck < 38,
-    heightOffset: Math.round(clampScore(((traitProfile.speed - 50) / 25) + ((seed % 5) - 2) * 0.25, -2, 2)),
-    bodyWidth: 12 + Math.round(bodyType * 2),
-    armWidth: 2 + (armType > 0.45 ? 1 : 0),
-    armLength: 7 + (armType < -0.35 ? -1 : armType > 0.45 ? 1 : 0),
-    legWidth: 4 + (legType > 0.35 ? 1 : 0),
-    legLength: 8 + (legType > 0.45 ? 1 : legType < -0.45 ? -1 : 0),
+    hairColor: overrides.hairColor || hairPalette[seed % hairPalette.length],
+    eyeColor: overrides.eyeColor || `hsl(${eyeHue} 72% 54%)`,
+    // Keep heads in the normal range even for extreme body types.
+    headWidth: overrides.headWidth || (9 + (seed % 4)),
+    headHeight: overrides.headHeight || (6 + (seed % 2)),
+    earSize: overrides.earSize || (1 + (seed % 2)),
+    noseType: overrides.noseType || ['dot', 'stubby', 'long', 'button'][seed % 4],
+    eyeSpread: overrides.eyeSpread || (1 + (seed % 2)),
+    jawType: overrides.jawType || ['soft', 'round', 'square'][seed % 3],
+    acne: overrides.acne ?? (traitProfile.mood < 43 || traitProfile.luck < 38),
+    heightOffset: overrides.heightOffset ?? Math.round(clampScore(((traitProfile.speed - 50) / 25) + ((seed % 5) - 2) * 0.25, -2, 2)),
+    bodyWidth: overrides.bodyWidth || (12 + Math.round(bodyType * 2)),
+    armWidth: overrides.armWidth || (2 + (armType > 0.45 ? 1 : 0)),
+    armLength: overrides.armLength || (7 + (armType < -0.35 ? -1 : armType > 0.45 ? 1 : 0)),
+    legWidth: overrides.legWidth || (4 + (legType > 0.35 ? 1 : 0)),
+    legLength: overrides.legLength || (8 + (legType > 0.45 ? 1 : legType < -0.45 ? -1 : 0)),
   };
 }
 
@@ -1169,6 +1171,30 @@ function applyStudentAppearancePlan(roster) {
     roster[1][3] = roster[1][3] || {};
     roster[1][3].appearanceOverrides = roster[1][3].appearanceOverrides || {};
     roster[1][3].appearanceOverrides.hairColor = '#070707';
+  }
+
+  // Strong silhouette contrast: one very wide pupil and one very skinny pupil.
+  if (roster[2]) {
+    roster[2][3] = roster[2][3] || {};
+    roster[2][3].appearanceOverrides = roster[2][3].appearanceOverrides || {};
+    // Nearly 2x torso width of a normal pupil while keeping normal head size.
+    roster[2][3].appearanceOverrides.bodyWidth = 24;
+    roster[2][3].appearanceOverrides.armWidth = 4;
+    roster[2][3].appearanceOverrides.legWidth = 7;
+    roster[2][3].appearanceOverrides.headWidth = 10;
+    roster[2][3].appearanceOverrides.headHeight = 6;
+  }
+  if (roster[3]) {
+    roster[3][3] = roster[3][3] || {};
+    roster[3][3].appearanceOverrides = roster[3][3].appearanceOverrides || {};
+    // Very thin body/limbs while keeping a normal-sized head for stylised contrast.
+    roster[3][3].appearanceOverrides.bodyWidth = 6;
+    roster[3][3].appearanceOverrides.armWidth = 1;
+    roster[3][3].appearanceOverrides.armLength = 8;
+    roster[3][3].appearanceOverrides.legWidth = 2;
+    roster[3][3].appearanceOverrides.legLength = 8;
+    roster[3][3].appearanceOverrides.headWidth = 10;
+    roster[3][3].appearanceOverrides.headHeight = 6;
   }
 }
 
@@ -4766,9 +4792,9 @@ function drawEntities() {
       const headW = Math.max(8, appearance.headWidth || 10);
       const headH = Math.max(5, appearance.headHeight || 6);
       const bodyW = Math.max(11, appearance.bodyWidth || 14);
-      const armW = Math.max(2, appearance.armWidth || 3);
+      const armW = Math.max(1, appearance.armWidth || 3);
       const armL = Math.max(6, appearance.armLength || 8);
-      const legW = Math.max(3, appearance.legWidth || 5);
+      const legW = Math.max(2, appearance.legWidth || 5);
       const legL = Math.max(6, appearance.legLength || 8);
       const heightShift = appearance.heightOffset || 0;
       const skinTone = appearance.skinTone || '#ffd7b5';
