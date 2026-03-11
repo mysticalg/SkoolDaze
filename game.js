@@ -518,7 +518,8 @@ function roomDoorway(room) {
   const useTop = topDist <= bottomDist;
   return {
     x: room.x + room.w / 2,
-    y: useTop ? room.y + 0.45 : room.y + room.h - 0.45,
+    // Keep doorway waypoints deeper inside the room so NPCs do not jitter on wall edges.
+    y: useTop ? room.y + 1.1 : room.y + room.h - 1.1,
   };
 }
 
@@ -1489,6 +1490,14 @@ function updateAI(dt) {
         const gapX = entity.x - other.x;
         const gapY = entity.y - other.y;
         const gap = Math.hypot(gapX, gapY) || 0.001;
+
+        // Teachers get deterministic pathing: they move through crowds while students
+        // are displaced, instead of staff being deflected into walls/doorway loops.
+        if (entity.role === 'teacher' && other.role !== 'teacher') {
+          pushStudentAsideForTeacher(entity, other, dt / 1000);
+          continue;
+        }
+
         if (gap < 1.45) {
           // Teachers keep priority: students yield more, teachers yield less.
           let push = ((1.45 - gap) / 1.45) * 0.46;
@@ -1496,11 +1505,6 @@ function updateAI(dt) {
           if (entity.role === 'teacher' && other.role !== 'teacher') push *= 0.28;
           dx += (gapX / gap) * push;
           dy += (gapY / gap) * push;
-        }
-
-        // Teachers can physically clear students blocking their path.
-        if (entity.role === 'teacher' && other.role !== 'teacher') {
-          pushStudentAsideForTeacher(entity, other, dt / 1000);
         }
       }
     }
@@ -1517,21 +1521,25 @@ function updateAI(dt) {
       continue;
     }
 
-    const seatedTarget = inLesson && entityRoom(entity) === current.room;
-    entity.isSeated = seatedTarget && len < 0.55;
-    entity.seatedRoom = entity.isSeated ? current.room : null;
-
     const expectedRoom = entity.role === 'teacher'
       ? (assignedTeacherName && entity.name === assignedTeacherName ? current.room : teacherHomeRoom(entity.name))
       : current.room;
-    const lateForClass = supervised && teacherPresent && entityRoom(entity) !== expectedRoom;
+
+    // During lessons all teachers should be seated in their designated classroom,
+    // not just the currently assigned teacher in the active period room.
+    const seatedTarget = inLesson && entityRoom(entity) === expectedRoom;
+    entity.isSeated = seatedTarget && len < 0.55;
+    entity.seatedRoom = entity.isSeated ? expectedRoom : null;
+    const lateForClass = entity.role === 'teacher'
+      ? (inLesson && entityRoom(entity) !== expectedRoom)
+      : (supervised && teacherPresent && entityRoom(entity) !== expectedRoom);
     const canRun = entity.energy > 20;
     entity.running = lateForClass && canRun;
     const runBoost = entity.running ? 1.72 : 1;
     // Teachers are intentionally quicker than students to keep lessons moving.
     const hallwayBoost = entity.role === 'teacher' ? 3.95 : 3.3;
     // Staff get an extra catch-up boost so lessons do not appear to start without a teacher.
-    const staffCatchupBoost = entity.role === 'teacher' && lateForClass ? 1.75 : 1;
+    const staffCatchupBoost = entity.role === 'teacher' && lateForClass ? 2.35 : 1;
     const speed = entity.personality.speed * (entity.energy / 100) * hallwayBoost * runBoost * staffCatchupBoost;
 
     entity.vx = entity.isSeated ? 0 : (dx / len) * speed;
@@ -2438,6 +2446,21 @@ window.__skoolDazeDebug = {
     playerRoom: entityRoom(player),
     playerSeated: player.isSeated,
     lines: game.lines,
+    // Teacher status is exposed for automated movement/seating validation.
+    assignedTeacher: assignedTeacherForRoom(schedule[game.periodIndex].room),
+    teachers: game.entities
+      .filter((entity) => entity.role === 'teacher')
+      .map((entity) => ({
+        name: entity.name,
+        room: entityRoom(entity),
+        seated: entity.isSeated,
+        seatedRoom: entity.seatedRoom,
+        targetRoom: entity.target ? (roomAtPosition(entity.target)?.name || null) : null,
+        targetX: entity.target ? Number(entity.target.x.toFixed(2)) : null,
+        targetY: entity.target ? Number(entity.target.y.toFixed(2)) : null,
+        x: Number(entity.x.toFixed(2)),
+        y: Number(entity.y.toFixed(2)),
+      })),
   }),
   setTimeScale: (value) => {
     if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
