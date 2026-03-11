@@ -115,6 +115,10 @@ const sfxState = { ctx: null, enabled: true };
 const doorTransitionDepth = 1.15;
 
 // All enclosed rooms get explicit doors so both player and NPCs can traverse by interaction.
+function corridorForFloor(floor) {
+  return rooms.find((room) => room.type === 'corridor' && room.floor === floor) || null;
+}
+
 const roomDoors = rooms
   .filter((room) => room.type !== 'corridor' && room.type !== 'outdoor')
   .map((room) => {
@@ -122,10 +126,15 @@ const roomDoors = rooms
     const topDist = Math.abs(room.y - corridorY);
     const bottomDist = Math.abs((room.y + room.h) - corridorY);
     const corridorAtTop = topDist <= bottomDist;
+    const floorCorridor = corridorForFloor(room.floor);
+    const corridorMinX = floorCorridor ? floorCorridor.x + 0.75 : 1;
+    const corridorMaxX = floorCorridor ? (floorCorridor.x + floorCorridor.w - 0.75) : (WORLD.w - 1);
+    const doorwayX = Math.max(corridorMinX, Math.min(corridorMaxX, room.x + room.w / 2));
     return {
       room: room.name,
       floor: room.floor,
-      x: room.x + room.w / 2,
+      // Door x is clamped to the corridor span to prevent NPCs being dropped in blue void areas.
+      x: doorwayX,
       y: corridorAtTop ? room.y : room.y + room.h,
       interiorY: corridorAtTop ? room.y + doorTransitionDepth : room.y + room.h - doorTransitionDepth,
       exteriorY: corridorAtTop ? room.y - 0.55 : room.y + room.h + 0.55,
@@ -241,6 +250,26 @@ const classroomProps = [
   { room: 'Music Room', x: 112, y: 46, icon: 'D', color: '#f4978e', kind: 'drum stick', throwable: true, hiddenUntil: 0 },
   { room: 'Headmaster Office', x: 164, y: 46, icon: 'R', color: '#e5989b', kind: 'rule book', throwable: true, hiddenUntil: 0 },
 ];
+
+
+
+// Fixed computer terminals in the ICT room; students use these during computer lessons.
+const computerStations = [
+  { id: 'pc-1', room: 'Computer Room', x: 128, y: 8, use: 'spreadsheet', userName: null, temptationBy: null },
+  { id: 'pc-2', room: 'Computer Room', x: 134, y: 8, use: 'word', userName: null, temptationBy: null },
+  { id: 'pc-3', room: 'Computer Room', x: 140, y: 8, use: 'database', userName: null, temptationBy: null },
+  { id: 'pc-4', room: 'Computer Room', x: 146, y: 8, use: 'spreadsheet', userName: null, temptationBy: null },
+  { id: 'pc-5', room: 'Computer Room', x: 152, y: 8, use: 'word', userName: null, temptationBy: null },
+  { id: 'pc-6', room: 'Computer Room', x: 158, y: 8, use: 'database', userName: null, temptationBy: null },
+];
+
+const computerUseMeta = {
+  spreadsheet: { icon: '📊', color: '#bde0fe', label: 'Spreadsheet' },
+  word: { icon: '📝', color: '#caffbf', label: 'Word Processor' },
+  database: { icon: '🗃️', color: '#ffd6a5', label: 'Database' },
+  game: { icon: '🎮', color: '#ffadad', label: 'Game' },
+  pictures: { icon: '🖼️', color: '#ffc6ff', label: 'Pictures' },
+};
 
 // Bell schedule now compresses a full school day to ~15 real-world minutes.
 const schedule = [
@@ -454,6 +483,9 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     lessonRoom: null,
     // Tracks prolonged body overlap so we can respawn congested students.
     overlapSeconds: 0,
+    computerTask: null,
+    temptedComputerUse: null,
+    temptedComputerAt: 0,
     lastX: x,
     lastY: y,
   };
@@ -940,10 +972,17 @@ function getRoomSeatLayout(roomName) {
   const rows = Math.max(2, Math.ceil(studentCount / cols));
 
   const seats = [];
+  const seatMinX = room.x + 1.1;
+  const seatMaxX = room.x + room.w - 2.2;
+  const seatMinY = room.y + 2.2;
+  const seatMaxY = room.y + room.h - 1.2;
   for (let row = 0; row < rows; row += 1) {
     for (let col = 0; col < cols; col += 1) {
-      const x = room.x + 4 + ((col + 0.5) / cols) * usableW;
-      const y = room.y + 5 + ((row + 0.5) / rows) * usableH;
+      const rawX = room.x + 4 + ((col + 0.5) / cols) * usableW;
+      const rawY = room.y + 5 + ((row + 0.5) / rows) * usableH;
+      // Clamp seats so tiny rooms (e.g. Headmaster Office) never spill desks into corridors/outside.
+      const x = Math.max(seatMinX, Math.min(seatMaxX, rawX));
+      const y = Math.max(seatMinY, Math.min(seatMaxY, rawY));
       seats.push({ x, y, row, col });
     }
   }
@@ -1905,6 +1944,15 @@ function interact() {
     return;
   }
 
+  // Computer terminals are inspectable so players can see what students are really doing.
+  const nearbyPc = computerStations.find((station) => distance(player, station) < 1.7);
+  if (nearbyPc && entityRoom(player) === 'Computer Room') {
+    const meta = computerUseMeta[nearbyPc.use] || computerUseMeta.word;
+    const userText = nearbyPc.userName ? ` used by ${nearbyPc.userName}` : ' idle';
+    announce(`🖥️ ${meta.icon} ${meta.label}${userText}.`, { force: true });
+    return;
+  }
+
   // Read blackboard instructions.
   const board = blackboards.find((b) => distance(player, b) < 2.2);
   if (board && board.text) {
@@ -2033,6 +2081,38 @@ function dutyTeacherBreakTarget(now = performance.now()) {
     game.lastDutyPatrolAt = now;
   }
   return roomCenter(patrolRooms[game.dutyPatrolIndex]);
+}
+
+
+function nearestComputerStation(entity) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const station of computerStations) {
+    const d = distance(entity, station);
+    if (d < bestDist) {
+      bestDist = d;
+      best = station;
+    }
+  }
+  return best;
+}
+
+function syncComputerStations() {
+  for (const station of computerStations) {
+    station.userName = null;
+    station.temptationBy = null;
+    if (station.use === 'game' || station.use === 'pictures') station.use = 'word';
+  }
+
+  for (const entity of game.entities) {
+    if (entity.role === 'teacher' || entity.role === 'janitor') continue;
+    if (entityRoom(entity) !== 'Computer Room') continue;
+    const station = nearestComputerStation(entity);
+    if (!station || distance(entity, station) > 2.2) continue;
+    station.userName = entity.name;
+    if (entity.computerTask) station.use = entity.computerTask;
+    if (entity.temptedComputerAt > performance.now() - 1400) station.temptationBy = entity.name;
+  }
 }
 
 function chooseTarget(entity, currentPeriod) {
@@ -2319,6 +2399,34 @@ function updateAI(dt) {
       } else {
         const daydreams = ['🍕 Lunch soon?', '⚽ After school match... 😎', '🎮 New game later! 🕹️', '☁️ Looking out the window...'];
         think(entity, daydreams[Math.floor(game.rng() * daydreams.length)], 3400);
+      }
+    }
+
+
+    // Computer lesson behaviour: pupils can be tempted to skive, then get corrected by staff.
+    if (inLesson && current.room === 'Computer Room' && isStudent && entityRoom(entity) === 'Computer Room') {
+      if (!entity.computerTask || game.rng() < 0.01) {
+        const productive = ['spreadsheet', 'word', 'database'];
+        entity.computerTask = productive[Math.floor(game.rng() * productive.length)];
+      }
+
+      if (!entity.temptedComputerUse && game.rng() < 0.0018) {
+        entity.temptedComputerUse = game.rng() < 0.52 ? 'game' : 'pictures';
+        entity.temptedComputerAt = now;
+        think(entity, entity.temptedComputerUse === 'game' ? '🎮 Maybe just one quick game...' : '🖼️ I could sneak a picture search...', 2400);
+      }
+
+      if (entity.temptedComputerUse && now - entity.temptedComputerAt > 1800) {
+        entity.computerTask = entity.temptedComputerUse;
+        entity.temptedComputerUse = null;
+      }
+
+      const teacherInRoom = game.entities.find((candidate) => candidate.role === 'teacher' && entityRoom(candidate) === 'Computer Room');
+      const skiving = entity.computerTask === 'game' || entity.computerTask === 'pictures';
+      if (teacherInRoom && skiving && distance(teacherInRoom, entity) < 8.2 && game.rng() < 0.08) {
+        say(teacherInRoom, '🧑‍🏫 Back to work please — this is ICT, not arcade club.', { durationMs: 3000 });
+        say(entity, '😬 Sorry, switching back now!', { durationMs: 2600 });
+        entity.computerTask = game.rng() < 0.5 ? 'word' : 'spreadsheet';
       }
     }
 
@@ -2632,6 +2740,8 @@ function updateAI(dt) {
       entity.facing = boardHere.x >= entity.x ? 1 : -1;
     }
   }
+
+  syncComputerStations();
 }
 
 function updatePellets(dt) {
@@ -2809,7 +2919,9 @@ function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
     ? { a: '#7a62c7', b: '#674fb4' }
     : room.floor === 'middle'
       ? { a: '#6f95c7', b: '#5b80b1' }
-      : { a: '#67aa71', b: '#4f905a' };
+      : room.floor === 'ground'
+        ? { a: '#67aa71', b: '#4f905a' }
+        : { a: '#9f8f64', b: '#8a7a55' };
 
   if (room.type === 'corridor') {
     // Corridor tile stripes to suggest worn linoleum with floor-level color coding.
@@ -2832,8 +2944,8 @@ function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
     }
   } else {
     // Classroom/hall checker flooring with per-floor tint for orientation.
-    const baseA = room.floor === 'upper' ? '#c8b7f4' : room.floor === 'middle' ? '#bcd2f1' : '#cbe9ce';
-    const baseB = room.floor === 'upper' ? '#b59ee9' : room.floor === 'middle' ? '#a9c1e4' : '#b6dcb9';
+    const baseA = room.floor === 'upper' ? '#c8b7f4' : room.floor === 'middle' ? '#bcd2f1' : room.floor === 'ground' ? '#cbe9ce' : '#dfd2b0';
+    const baseB = room.floor === 'upper' ? '#b59ee9' : room.floor === 'middle' ? '#a9c1e4' : room.floor === 'ground' ? '#b6dcb9' : '#c7ba98';
     fillDitherRect(drawX, drawY, drawW, drawH, baseA, baseB, 4);
     ctx.strokeStyle = '#c9b38e';
     for (let y = drawY + 8; y < drawY + drawH; y += 16) {
@@ -3125,6 +3237,28 @@ function drawWorld() {
       lines.forEach((line, lineIndex) => {
         ctx.fillText(line, bx + 3, by + 8 + (lineIndex * BOARD_DRAW.lineHeight));
       });
+    }
+  }
+
+
+  // Computer room terminals display live student activity (work vs skiving).
+  for (const station of computerStations) {
+    const p = worldToScreen(station.x, station.y);
+    const meta = computerUseMeta[station.use] || computerUseMeta.word;
+    ctx.fillStyle = '#6c757d';
+    ctx.fillRect(p.sx - 7, p.sy - 4, 14, 8);
+    ctx.fillStyle = '#343a40';
+    ctx.fillRect(p.sx - 6, p.sy - 9, 12, 7);
+    ctx.fillStyle = meta.color;
+    ctx.fillRect(p.sx - 5, p.sy - 8, 10, 5);
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 6px monospace';
+    ctx.fillText(meta.icon, p.sx - 4, p.sy - 4);
+
+    if (station.temptationBy) {
+      ctx.fillStyle = '#ffb703';
+      ctx.font = 'bold 6px monospace';
+      ctx.fillText('?', p.sx + 5, p.sy - 10);
     }
   }
 
