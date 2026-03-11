@@ -13,7 +13,14 @@
       <span id="clock">🕘 Time: 08:00</span>
       <span id="period">🔔 Period: Registration</span>
       <span id="roomTarget">📍 Target: Assembly Hall</span>
-      <span id="floorStatus" title="Shows your current floor and its color cue.">🧭 Floor: Ground (Blue)</span>
+      <span class="floor-clock-group" title="Floor status and in-game analog clock.">
+        <span id="floorStatus" title="Shows your current floor and its color cue.">🧭 Floor: Ground (Blue)</span>
+        <span id="analogClock" class="analog-clock" role="img" aria-label="In-game analog clock">
+          <span class="clock-face"></span>
+          <span id="clockHandHour" class="clock-hand hour"></span>
+          <span id="clockHandMinute" class="clock-hand minute"></span>
+        </span>
+      </span>
       <span id="trouble">📝 Lines: 0</span>
       <span id="energy">⚡ Energy: 100</span>
       <span id="charisma" title="Higher charisma helps social interactions land better.">🗣️ Charisma: 50</span>
