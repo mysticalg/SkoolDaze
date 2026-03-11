@@ -708,6 +708,46 @@ const studentRoster = [
   ['Sarda Sadie', 'bully', '#ff618f', { title: 'Enjoys mean jokes', traitOverrides: { sadism: 90, aggression: 75, honor: 22 } }],
 ];
 
+
+const extraStudentRoster = [
+  ['Banter Ben', 'hero', '#ffd3a1', { title: 'Can turn any detention into stand-up', traitOverrides: { funny: 93, friendly: 74, wit: 82 } }],
+  ['Turbo Tina', 'hero', '#ffd08a', { title: 'Sprints between every lesson', traitOverrides: { speed: 90, skill: 76, discipline: 48 } }],
+  ['Murmur Max', 'weird', '#cfa8ff', { title: 'Whispers wild rumours', traitOverrides: { funny: 79, wit: 74, mood: 70 } }],
+  ['Plot Twist Pip', 'weird', '#c6a1ff', { title: 'Always predicts chaos', traitOverrides: { funny: 83, luck: 68, wisdom: 52 } }],
+  ['Comet Cole', 'hero', '#ffd995', { title: 'Fast, loud, and mostly harmless', traitOverrides: { speed: 86, friendly: 67, honor: 63 } }],
+  ['Grump Gus', 'bully', '#ff648f', { title: 'Permanent bad mood', traitOverrides: { aggression: 80, mood: 28, sadism: 66 } }],
+  ['Pixel Penny', 'swot', '#88ffd7', { title: 'Spreadsheet speedrunner', traitOverrides: { intelligence: 90, skill: 88, discipline: 85 } }],
+  ['Algebra Ace', 'swot', '#8fffe0', { title: 'Solves sums before asked', tattles: true, traitOverrides: { intelligence: 95, wisdom: 81, discipline: 90 } }],
+  ['Riff Raffi', 'weird', '#c79aff', { title: 'Desk-drumming virtuoso', traitOverrides: { funny: 87, mood: 79, discipline: 30 } }],
+  ['Bossy Bex', 'bully', '#ff6a8f', { title: 'Queue-cutting specialist', traitOverrides: { aggression: 77, strength: 70, honor: 26 } }],
+  ['Gentle Gio', 'hero', '#ffe9ac', { title: 'Conflict de-escalator', traitOverrides: { friendly: 91, honor: 88, aggression: 18 } }],
+  ['Snarky Noor', 'weird', '#d2abff', { title: 'Sarcasm in human form', traitOverrides: { wit: 89, funny: 78, friendly: 40 } }],
+  ['Crunch Carl', 'swot', '#7ffbd0', { title: 'Data over drama', traitOverrides: { intelligence: 89, skill: 84, funny: 45 } }],
+  ['Maverick Mo', 'hero', '#ffd89f', { title: 'Rule-bender with charm', traitOverrides: { wit: 81, luck: 75, honor: 50 } }],
+  ['Thud Theo', 'bully', '#ff6f94', { title: 'Heavy footsteps, heavier opinions', traitOverrides: { strength: 84, aggression: 74, weight: 'chubby' } }],
+  ['Echo Elle', 'weird', '#c39cff', { title: 'Repeats teachers dramatically', traitOverrides: { funny: 85, mood: 82, discipline: 35 } }],
+  ['Quiz Quill', 'swot', '#86ffd2', { title: 'Raises hand for fun', tattles: true, traitOverrides: { intelligence: 88, wit: 84, discipline: 87 } }],
+  ['Lucky Luca', 'hero', '#ffdd9a', { title: 'Wins every coin toss', traitOverrides: { luck: 94, friendly: 70, wisdom: 58 } }],
+  ['Static Stan', 'weird', '#cca5ff', { title: 'Conspiracy radio host', traitOverrides: { funny: 74, intelect: 82, wisdom: 44 } }],
+  ['Razor Rae', 'bully', '#ff5f86', { title: 'Tiny terror with comebacks', traitOverrides: { aggression: 82, speed: 79, sadism: 68 } }],
+  ['Tutor Taz', 'swot', '#7ef7ce', { title: 'Carries flashcards everywhere', traitOverrides: { intelligence: 92, wisdom: 84, friendly: 58 } }],
+  ['Jolly Juno', 'hero', '#ffe4b0', { title: 'Cheer captain of break-time', traitOverrides: { funny: 84, friendly: 88, mood: 86 } }],
+  ['Bramble Bri', 'weird', '#c8a0ff', { title: 'Invents impossible homework excuses', traitOverrides: { wit: 86, funny: 82, discipline: 26 } }],
+  ['Rex Rumble', 'bully', '#ff668b', { title: 'Arm-wrestling addict', traitOverrides: { strength: 90, aggression: 79, honor: 24 } }],
+  ['Notepad Nia', 'swot', '#84ffd6', { title: 'Writes everything down', traitOverrides: { intelligence: 85, discipline: 90, skill: 78 } }],
+  ['Fizz Finn', 'hero', '#ffd69a', { title: 'Energy drink mascot', traitOverrides: { speed: 82, funny: 73, bladderSize: 80 } }],
+  ['Whimsy Wren', 'weird', '#c49cff', { title: 'Classroom improviser', traitOverrides: { funny: 88, mood: 84, wisdom: 48 } }],
+  ['Nudge Nate', 'bully', '#ff6c92', { title: 'Always starts the shoving', traitOverrides: { aggression: 76, strength: 68, sadism: 61 } }],
+  ['Scholar Skye', 'swot', '#82ffd4', { title: 'Library map in human form', traitOverrides: { intelligence: 91, wisdom: 87, honor: 72 } }],
+  ['Buddy Blue', 'hero', '#ffe2a8', { title: 'Everyone knows Buddy', traitOverrides: { friendly: 92, honor: 76, funny: 65 } }],
+  ['Oddball Oz', 'weird', '#be93ff', { title: 'Builds theories from doodles', traitOverrides: { funny: 77, intelect: 79, mood: 73 } }],
+  ['Spite Spike', 'bully', '#ff5d84', { title: 'Competitive about everything', traitOverrides: { aggression: 84, sadism: 74, strength: 73 } }],
+  ['Merit Mae', 'swot', '#83ffd3', { title: 'Collects praise like badges', tattles: true, traitOverrides: { intelligence: 89, discipline: 91, friendly: 52 } }],
+  ['Harmony Hex', 'hero', '#ffe6b3', { title: 'Can calm any argument', traitOverrides: { friendly: 89, mood: 88, honor: 84 } }],
+];
+
+studentRoster.push(...extraStudentRoster);
+
 studentRoster.forEach(([name, role, color, profile], idx) => {
   const column = idx % 10;
   const row = Math.floor(idx / 10);
