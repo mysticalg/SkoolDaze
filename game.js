@@ -11,6 +11,7 @@ const bladderEl = document.getElementById('bladder');
 const hygieneEl = document.getElementById('hygiene');
 const autoStatusEl = document.getElementById('autoStatus');
 const weatherEl = document.getElementById('weather');
+const attendanceEl = document.getElementById('attendance');
 const missionEl = document.getElementById('mission');
 const eventsEl = document.getElementById('events');
 const todoEl = document.getElementById('todo');
@@ -526,6 +527,7 @@ const TOILET_MAX_DIRT = 100;
 const TOILET_BLOCK_INTERVAL_DAYS = 12;
 const TOILET_BLOCK_DURATION_MS = 18000;
 const WEEKLY_SICK_DAY_INTERVAL = 5;
+const TARGET_ATTENDANCE_PERCENT = 95;
 
 const game = {
   timeMinutes: 8 * 60 + 20,
@@ -2849,6 +2851,52 @@ function isTeacherPresentForPeriod(currentPeriod) {
   ));
 }
 
+function lessonComplianceForPeriod(currentPeriod = schedule[game.periodIndex]) {
+  const activeStudents = game.entities.filter((entity) => (
+    entity.role !== 'teacher'
+    && entity.role !== 'janitor'
+    && entity.role !== 'nurse'
+    && hasArrivedForCurrentPeriod(entity, currentPeriod)
+    && entity.knockedUntil < performance.now()
+  ));
+
+  if (!activeStudents.length) {
+    return { attendancePercent: 100, seatedPercent: 100, presentCount: 0, seatedCount: 0, total: 0 };
+  }
+
+  const presentCount = activeStudents.filter((entity) => entityRoom(entity) === (entity.lessonRoom || currentPeriod.room)).length;
+  const seatedCount = activeStudents.filter((entity) => (
+    entityRoom(entity) === (entity.lessonRoom || currentPeriod.room)
+    && entity.isSeated
+    && entity.seatedRoom === (entity.lessonRoom || currentPeriod.room)
+  )).length;
+
+  return {
+    attendancePercent: (presentCount / activeStudents.length) * 100,
+    seatedPercent: (seatedCount / activeStudents.length) * 100,
+    presentCount,
+    seatedCount,
+    total: activeStudents.length,
+  };
+}
+
+function updateAttendanceHud(currentPeriod = schedule[game.periodIndex]) {
+  if (!attendanceEl) return;
+  const inLesson = isSupervisedPeriod(currentPeriod);
+  if (!inLesson) {
+    attendanceEl.textContent = `🎯 Attendance: n/a | Seated: n/a`;
+    attendanceEl.title = 'Attendance tracking activates during supervised lesson periods.';
+    return;
+  }
+
+  const metrics = lessonComplianceForPeriod(currentPeriod);
+  const attendanceRounded = Math.round(metrics.attendancePercent);
+  const seatedRounded = Math.round(metrics.seatedPercent);
+  const statusIcon = attendanceRounded >= TARGET_ATTENDANCE_PERCENT ? '✅' : '⚠️';
+  attendanceEl.textContent = `${statusIcon} Attendance: ${attendanceRounded}% | Seated: ${seatedRounded}%`;
+  attendanceEl.title = `Present ${metrics.presentCount}/${metrics.total}, seated ${metrics.seatedCount}/${metrics.total}. Target attendance: ${TARGET_ATTENDANCE_PERCENT}%+.`;
+}
+
 function updateNpcVitals(entity, dt, isRunning) {
   // `dt` is provided in milliseconds, so convert once to keep stamina math in
   // real-world seconds. Without this conversion NPCs lose almost all energy in
@@ -3060,8 +3108,9 @@ function updateAI(dt) {
     // Keep students in supervised, staffed classrooms instead of empty rooms.
     if (inLesson && isStudent) {
       entity.lessonRoom = chooseLessonRoomForStudent(entity, current);
-      entity.target = nearestFreeSeatInRoom(entity.lessonRoom, entity)
-        || getSeatPosition(entity.lessonRoom, entity.seatIndex)
+      // Prefer deterministic seat assignments so pupils stop oscillating between nearby chairs.
+      entity.target = getSeatPosition(entity.lessonRoom, entity.seatIndex)
+        || nearestFreeSeatInRoom(entity.lessonRoom, entity)
         || roomCenter(entity.lessonRoom);
     } else if (inLesson && entity.role === 'teacher') {
       entity.lessonRoom = null;
@@ -3392,11 +3441,13 @@ function updateAI(dt) {
     // During lessons all teachers should be seated in their designated classroom,
     // not just the currently assigned teacher in the active period room.
     const seatedTarget = inLesson && entityRoom(entity) === expectedRoom;
-    entity.isSeated = seatedTarget && len < 0.55;
+    const wasSeated = entity.isSeated && entity.seatedRoom === expectedRoom;
+    // Add a small hysteresis window: sitting is easy to maintain, harder to flip off.
+    entity.isSeated = seatedTarget && (len < 0.4 || (wasSeated && len < 0.85));
     // Keep lessons visually correct: students sit once they are at their desk tile.
     if (seatedTarget && entity.role !== 'teacher') {
       const seatTarget = getSeatPosition(expectedRoom, entity.seatIndex) || entity.target;
-      if (seatTarget && distance(entity, seatTarget) < 0.6) {
+      if (seatTarget && distance(entity, seatTarget) < 0.72) {
         entity.x = seatTarget.x;
         entity.y = seatTarget.y;
         entity.isSeated = true;
@@ -3630,6 +3681,7 @@ function updateSchedule(dt) {
     : (!teacherPresent ? ' (waiting for teacher to arrive)' : ' (waiting for teacher to sit)');
   periodEl.textContent = `🔔 Period: ${current.period}${waitingLabel}`;
   roomTargetEl.textContent = `📍 Target: ${current.room}`;
+  updateAttendanceHud(current);
   updateFloorStatus();
 }
 
