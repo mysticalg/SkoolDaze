@@ -1235,6 +1235,10 @@ function isTeacherPresentForPeriod(currentPeriod) {
 }
 
 function updateNpcVitals(entity, dt, isRunning) {
+  // `dt` is provided in milliseconds, so convert once to keep stamina math in
+  // real-world seconds. Without this conversion NPCs lose almost all energy in
+  // moments and appear to crawl for the rest of the day.
+  const dtSeconds = dt / 1000;
   const deltaMins = (dt / 1000) * game.timeScale;
   // NPC bladder rises over time, slightly quicker while running.
   entity.bladder = Math.min(100, entity.bladder + deltaMins * (0.34 + (isRunning ? 0.2 : 0)));
@@ -1253,12 +1257,12 @@ function updateNpcVitals(entity, dt, isRunning) {
   const canRecoverFromMeal = period.mode === 'break' && isLunch && inFoodZone;
 
   if (canRecoverFromMeal) {
-    entity.energy = Math.min(100, entity.energy + dt * recoverPerSecond);
+    entity.energy = Math.min(100, entity.energy + dtSeconds * recoverPerSecond);
     return;
   }
 
   const drainRate = baseDrainPerSecond + (isRunning ? runningExtraDrainPerSecond : 0);
-  entity.energy = Math.max(16, entity.energy - dt * drainRate);
+  entity.energy = Math.max(16, entity.energy - dtSeconds * drainRate);
 }
 
 function updateAI(dt) {
