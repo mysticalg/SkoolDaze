@@ -131,20 +131,29 @@ const roomDoors = rooms
   });
 
 const blackboards = [
-  { room: 'Science Lab', x: 21, y: 6, text: '' },
-  { room: 'Upper Common', x: 50, y: 6, text: '' },
-  { room: 'Physics Lab', x: 80, y: 6, text: '' },
-  { room: 'Chem Prep', x: 108, y: 6, text: '' },
-  { room: 'Maths', x: 23, y: 40, text: '' },
-  { room: 'English', x: 56, y: 40, text: '' },
-  { room: 'Music Room', x: 116, y: 40, text: '' },
-  { room: 'Computer Room', x: 144, y: 6, text: '' },
-  { room: 'Geography', x: 18, y: 83, text: '' },
-  { room: 'Art Room', x: 46, y: 83, text: '' },
-  { room: 'History', x: 74, y: 83, text: '' },
-  { room: 'Assembly Hall', x: 65, y: 97, text: '' },
-  { room: 'Headmaster Office', x: 164, y: 40, text: 'DISCIPLINE' },
+  { room: 'Science Lab', x: 21, y: 6, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
+  { room: 'Upper Common', x: 50, y: 6, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
+  { room: 'Physics Lab', x: 80, y: 6, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
+  { room: 'Chem Prep', x: 108, y: 6, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
+  { room: 'Maths', x: 23, y: 40, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
+  { room: 'English', x: 56, y: 40, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
+  { room: 'Music Room', x: 116, y: 40, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
+  { room: 'Computer Room', x: 144, y: 6, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
+  { room: 'Geography', x: 18, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
+  { room: 'Art Room', x: 46, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
+  { room: 'History', x: 74, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
+  { room: 'Assembly Hall', x: 65, y: 97, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
+  { room: 'Headmaster Office', x: 164, y: 40, text: 'DISCIPLINE', revealChars: 10, revealSpeed: 36, lastSfxAt: 0 },
 ];
+
+// Blackboard card metrics are shared so text wrapping and board size stay in sync.
+const BOARD_DRAW = {
+  width: 58,
+  height: 24,
+  lineHeight: 7,
+  maxLines: 3,
+  maxCharsPerLine: 18,
+};
 
 const shields = [
   { x: 13, y: 6, letter: 'D', found: false },
@@ -989,6 +998,8 @@ function playSfx(kind) {
     door: { freq: 420, endFreq: 250, duration: 0.09, type: 'square', gain: 0.035 },
     stair: { freq: 310, endFreq: 520, duration: 0.12, type: 'triangle', gain: 0.038 },
     interact: { freq: 520, endFreq: 470, duration: 0.06, type: 'sine', gain: 0.03 },
+    // Short per-character chalk tick for board writing animation.
+    chalk: { freq: 1450, endFreq: 980, duration: 0.03, type: 'triangle', gain: 0.012 },
   };
   const preset = presets[kind] || presets.interact;
 
@@ -1009,6 +1020,65 @@ function playSfx(kind) {
   gain.connect(ctx.destination);
   osc.start(start);
   osc.stop(end + 0.01);
+}
+
+
+// Keep board updates centralized so every text change resets the writing reveal state.
+function setBoardText(board, text) {
+  const nextText = String(text || '').toUpperCase();
+  board.text = nextText;
+  board.revealChars = 0;
+  board.lastSfxAt = 0;
+}
+
+function boardLinesForText(text) {
+  const words = String(text || '').toUpperCase().split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = '';
+
+  for (const word of words) {
+    if (!line) {
+      line = word;
+      continue;
+    }
+    const candidate = `${line} ${word}`;
+    if (candidate.length <= BOARD_DRAW.maxCharsPerLine) {
+      line = candidate;
+      continue;
+    }
+    lines.push(line);
+    line = word;
+    if (lines.length >= BOARD_DRAW.maxLines) break;
+  }
+
+  if (lines.length < BOARD_DRAW.maxLines && line) lines.push(line);
+  return lines.slice(0, BOARD_DRAW.maxLines);
+}
+
+function visibleBoardText(board) {
+  const revealCount = Math.floor(board.revealChars || 0);
+  return String(board.text || '').slice(0, revealCount);
+}
+
+function updateBoardWriting(dt) {
+  const now = performance.now();
+
+  for (const board of blackboards) {
+    if (!board.text) continue;
+
+    // Letters appear progressively so boards look like they are being written in class.
+    const revealCap = board.text.length;
+    board.revealChars = Math.min(revealCap, (board.revealChars || 0) + ((board.revealSpeed || 30) * (dt / 1000)));
+
+    const revealCount = Math.floor(board.revealChars || 0);
+    if (revealCount <= 0 || revealCount >= revealCap) continue;
+
+    // Audio tick is throttled to avoid noisy spam while preserving the chalk-writing effect.
+    if (now - (board.lastSfxAt || 0) > 95) {
+      playSfx('chalk');
+      board.lastSfxAt = now;
+    }
+  }
 }
 
 function updateTodo() {
@@ -1125,11 +1195,11 @@ function setPeriod(index) {
   // Board content changes each bell to emulate lesson instructions.
   blackboards.forEach((board) => {
     if (board.room === current.room) {
-      board.text = lessonTasks[Math.floor(game.rng() * lessonTasks.length)];
+      setBoardText(board, lessonTasks[Math.floor(game.rng() * lessonTasks.length)]);
     } else if (game.rng() < 0.3) {
-      board.text = 'NO RUNNING IN CORRIDORS';
+      setBoardText(board, 'NO RUNNING IN CORRIDORS');
     } else {
-      board.text = '';
+      setBoardText(board, '');
     }
   });
 
@@ -2014,7 +2084,7 @@ function updateAI(dt) {
     if (canCallOutBoard && game.rng() < 0.0011) {
       const board = blackboards.find((b) => b.room === current.room);
       if (board) {
-        board.text = lessonTasks[Math.floor(game.rng() * lessonTasks.length)];
+        setBoardText(board, lessonTasks[Math.floor(game.rng() * lessonTasks.length)]);
         game.lastBoardCalloutAt = performance.now();
         announce(`🧑‍🏫 ${entity.name}: "Quiet! Copy the board."`, { source: entity, range: 8 });
       }
@@ -2435,13 +2505,18 @@ function drawWorld() {
 
   for (const board of blackboards) {
     const p = worldToScreen(board.x, board.y);
-    fillDitherRect(p.sx - 23, p.sy - 11, 46, 16, '#194b31', '#23633f', 3);
+    const bx = p.sx - (BOARD_DRAW.width / 2);
+    const by = p.sy - (BOARD_DRAW.height / 2);
+    fillDitherRect(bx, by, BOARD_DRAW.width, BOARD_DRAW.height, '#194b31', '#23633f', 3);
     ctx.strokeStyle = '#93d5a9';
-    ctx.strokeRect(p.sx - 23, p.sy - 11, 46, 16);
+    ctx.strokeRect(bx, by, BOARD_DRAW.width, BOARD_DRAW.height);
     if (board.text) {
       ctx.fillStyle = PALETTE.chalk;
-      ctx.font = '8px monospace';
-      ctx.fillText(board.text.slice(0, 28).toUpperCase(), p.sx - 21, p.sy - 1);
+      ctx.font = '7px monospace';
+      const lines = boardLinesForText(visibleBoardText(board));
+      lines.forEach((line, lineIndex) => {
+        ctx.fillText(line, bx + 3, by + 8 + (lineIndex * BOARD_DRAW.lineHeight));
+      });
     }
   }
 
@@ -2885,6 +2960,7 @@ function loop(now) {
     }
 
     updateAI(dt);
+    updateBoardWriting(dt);
     updatePellets(dt);
     updateSchedule(dt);
     checkSchoolExit();
