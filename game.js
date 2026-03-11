@@ -191,6 +191,16 @@ const schoolExit = { x: 159.2, yMin: 84, yMax: 107 };
 const floorOrder = { upper: 3, middle: 2, ground: 1, lower: 0 };
 const floorSequence = ['lower', 'ground', 'middle', 'upper'];
 
+// Preferred supervising teacher per lesson room keeps class starts orderly.
+const roomTeacherMap = {
+  'Science Lab': 'Dr Beaker',
+  Maths: 'Mr Flash',
+  English: 'Ms Take',
+  History: 'Mr Creak',
+  'Computer Room': 'Mr Wacker',
+  'Headmaster Office': 'Mr Wacker',
+};
+
 const lessonTasks = [
   'Write 10x: I must not fire catapults.',
   'Solve: 6 * 7 = ?',
@@ -501,6 +511,19 @@ function roomDoorway(room) {
   };
 }
 
+function doorwayStagingPoint(entity, doorway, room) {
+  if (!doorway || !room) return doorway;
+  // Spread traffic across each doorway so late students do not stack on one tile.
+  const laneSeed = (entity.seatIndex % 7) - 3;
+  const laneOffsetX = laneSeed * 0.52;
+  const minX = room.x + 1.1;
+  const maxX = room.x + room.w - 1.1;
+  return {
+    x: Math.max(minX, Math.min(maxX, doorway.x + laneOffsetX)),
+    y: doorway.y,
+  };
+}
+
 function routeWaypoint(entity, destination) {
   const currentRoom = roomAtPosition(entity);
   const destinationRoom = roomAtPosition(destination);
@@ -521,7 +544,8 @@ function routeWaypoint(entity, destination) {
 
   if (destinationRoom && destinationRoom.type !== 'corridor' && destinationRoom.type !== 'outdoor') {
     const entryDoor = roomDoorway(destinationRoom);
-    if (entryDoor && distance(entity, entryDoor) > 1.1) return entryDoor;
+    const stagedDoor = doorwayStagingPoint(entity, entryDoor, destinationRoom);
+    if (stagedDoor && distance(entity, stagedDoor) > 1.1) return stagedDoor;
   }
 
   return destination;
@@ -640,9 +664,9 @@ function updateAutoPilot(dt) {
   const waypoint = routeWaypoint(player, destination);
   const lateForClass = (current.mode === 'lesson' || current.period === 'Tutorial')
     && entityRoom(player) !== current.room;
-  // Auto movement uses corridor pacing comparable to other students.
-  const hallwayBoost = 2.18;
-  const lateRunBoost = lateForClass ? 1.52 : 1;
+  // Auto mode should feel readable and controlled, not faster than manual play.
+  const hallwayBoost = 1.05;
+  const lateRunBoost = lateForClass ? 1.15 : 1;
   const speed = ((player.personality.speed * game.energy) / 100) * hallwayBoost * lateRunBoost;
 
   const dx = waypoint.x - player.x;
@@ -773,9 +797,15 @@ function setPeriod(index) {
   game.periodElapsed = 0;
   game.periodHoldMinutes = 0;
   const current = schedule[game.periodIndex];
-  // Bell changes stand Eric up to prevent stale seated state between rooms.
+  // Bell changes stand everyone up and clears stale routes between periods.
   player.isSeated = false;
   player.seatedRoom = null;
+  for (const entity of game.entities) {
+    if (entity === player) continue;
+    entity.target = null;
+    entity.isSeated = false;
+    entity.seatedRoom = null;
+  }
   if (current.period === 'Tutorial') game.registrationTaken = false;
 
   // Board content changes each bell to emulate lesson instructions.
@@ -1181,6 +1211,10 @@ function teacherBoardSpot(periodRoom) {
   return { ...fallback, room: periodRoom };
 }
 
+function assignedTeacherForRoom(roomName) {
+  return roomTeacherMap[roomName] || null;
+}
+
 function chooseTarget(entity, currentPeriod) {
   // High bladder urgency overrides normal timetable targets.
   if (entity.bladder >= 80) {
@@ -1273,6 +1307,7 @@ function updateAI(dt) {
   const current = schedule[game.periodIndex];
   const supervised = current.mode === 'lesson' || current.period === 'Tutorial';
   const teacherPresent = isTeacherPresentForPeriod(current);
+  const assignedTeacherName = assignedTeacherForRoom(current.room);
 
   for (const entity of game.entities) {
     if (entity === player) continue;
@@ -1293,6 +1328,10 @@ function updateAI(dt) {
       entity.target = getSeatPosition(current.room, entity.seatIndex)
         || nearestFreeSeatInRoom(current.room, entity)
         || roomCenter(current.room);
+    } else if (inLesson && entity.role === 'teacher') {
+      // Keep one dedicated teacher driving each lesson while other staff clear corridors.
+      const isAssignedTeacher = !assignedTeacherName || entity.name === assignedTeacherName;
+      entity.target = isAssignedTeacher ? teacherBoardSpot(current.room) : roomCenter('Staff Room');
     } else if (!entity.target || game.rng() < 0.01) {
       entity.target = chooseTarget(entity, current);
     }
@@ -1401,8 +1440,9 @@ function updateAI(dt) {
         const gapX = entity.x - other.x;
         const gapY = entity.y - other.y;
         const gap = Math.hypot(gapX, gapY) || 0.001;
-        if (gap < 1.2) {
-          const push = ((1.2 - gap) / 1.2) * 0.28;
+        if (gap < 1.45) {
+          // Stronger crowd separation keeps doorway traffic from bunching into one blob.
+          const push = ((1.45 - gap) / 1.45) * 0.46;
           dx += (gapX / gap) * push;
           dy += (gapY / gap) * push;
         }
@@ -1425,12 +1465,18 @@ function updateAI(dt) {
     entity.isSeated = seatedTarget && len < 0.55;
     entity.seatedRoom = entity.isSeated ? current.room : null;
 
-    const lateForClass = supervised && teacherPresent && entityRoom(entity) !== current.room;
+    const expectedRoom = entity.role === 'teacher' && assignedTeacherName && entity.name !== assignedTeacherName
+      ? 'Staff Room'
+      : current.room;
+    const lateForClass = supervised && teacherPresent && entityRoom(entity) !== expectedRoom;
     const canRun = entity.energy > 20;
     entity.running = lateForClass && canRun;
-    const runBoost = entity.running ? 1.62 : 1;
-    const hallwayBoost = entity.role !== 'teacher' ? 2.28 : 2.18;
-    const speed = entity.personality.speed * (entity.energy / 100) * hallwayBoost * runBoost;
+    const runBoost = entity.running ? 1.66 : 1;
+    // Small pace increase keeps class flow closer to Eric while preserving role differences.
+    const hallwayBoost = entity.role !== 'teacher' ? 2.92 : 2.72;
+    // Staff get an extra catch-up boost so lessons do not appear to start without a teacher.
+    const staffCatchupBoost = entity.role === 'teacher' && lateForClass ? 1.75 : 1;
+    const speed = entity.personality.speed * (entity.energy / 100) * hallwayBoost * runBoost * staffCatchupBoost;
 
     entity.vx = entity.isSeated ? 0 : (dx / len) * speed;
     entity.vy = entity.isSeated ? 0 : (dy / len) * speed;
