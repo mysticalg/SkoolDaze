@@ -860,6 +860,7 @@ function buildAppearanceProfile(name, role, traitProfile, profile = {}) {
   const seed = styleSeedFromName(name);
   const skinPalette = {
     white: '#f6d2bb',
+    paleWhite: '#fde8dc',
     black: '#7a4a32',
     yellow: '#e0bf7a',
     lightBrown: '#b98057',
@@ -867,9 +868,9 @@ function buildAppearanceProfile(name, role, traitProfile, profile = {}) {
     red: '#d76363',
   };
   const hairPalette = ['#1b1713', '#4a2f1e', '#7a4f2f', '#b56d3f', '#f0d7a5', '#4f2546', '#2e6f95', '#8a5cff'];
-  const eyePalette = ['#1d3557', '#2a9d8f', '#6d597a', '#8d99ae', '#5f0f40'];
   const skinToneKey = profile.appearanceOverrides?.skinTone || 'white';
   const skinTone = skinPalette[skinToneKey] || skinPalette.white;
+  const eyeHue = (seed * 47 + Math.round(traitProfile.wit * 2.1)) % 360;
 
   // Students get stronger silhouette variation so personalities read visually.
   const roleBuild = role === 'bully' ? 1 : role === 'swot' ? -0.4 : role === 'weird' ? -0.15 : 0;
@@ -879,8 +880,8 @@ function buildAppearanceProfile(name, role, traitProfile, profile = {}) {
 
   return {
     skinTone,
-    hairColor: hairPalette[seed % hairPalette.length],
-    eyeColor: eyePalette[(seed + Math.round(traitProfile.wit)) % eyePalette.length],
+    hairColor: profile.appearanceOverrides?.hairColor || hairPalette[seed % hairPalette.length],
+    eyeColor: profile.appearanceOverrides?.eyeColor || `hsl(${eyeHue} 72% 54%)`,
     headWidth: 9 + (seed % 4),
     headHeight: 6 + (seed % 2),
     earSize: 1 + (seed % 2),
@@ -982,6 +983,9 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     posture: null,
     dialogueProfile: null,
     dialogue: null,
+    // Facial animation timers keep eyes/mouth lively without expensive sprite swaps.
+    blinkUntil: 0,
+    nextBlinkAt: performance.now() + 2000 + Math.random() * 7000,
   };
 }
 
@@ -1145,15 +1149,26 @@ const maxStudentPopulation = maxStudentPopulationForLessons();
 const activeStudentRoster = studentRoster.slice(0, maxStudentPopulation);
 
 function applyStudentAppearancePlan(roster) {
-  // Explicit diversity mix requested: mostly white, some yellow/light-brown,
-  // exactly two black pupils, plus one green and one red stylised student.
-  const skinPlan = ['green', 'red', 'black', 'black', 'yellow', 'yellow', 'yellow', 'lightBrown', 'lightBrown', 'lightBrown'];
+  // Keep requested diversity mix, now including two pale-white students.
+  const skinPlan = ['green', 'red', 'black', 'black', 'yellow', 'yellow', 'yellow', 'lightBrown', 'lightBrown', 'lightBrown', 'paleWhite', 'paleWhite'];
   for (let i = 0; i < roster.length; i += 1) {
     const entry = roster[i];
     const profile = entry[3] || {};
     profile.appearanceOverrides = profile.appearanceOverrides || {};
     profile.appearanceOverrides.skinTone = skinPlan[i] || 'white';
     entry[3] = profile;
+  }
+
+  // Explicit hair overrides requested for visual contrast.
+  if (roster[0]) {
+    roster[0][3] = roster[0][3] || {};
+    roster[0][3].appearanceOverrides = roster[0][3].appearanceOverrides || {};
+    roster[0][3].appearanceOverrides.hairColor = '#f5f5f5';
+  }
+  if (roster[1]) {
+    roster[1][3] = roster[1][3] || {};
+    roster[1][3].appearanceOverrides = roster[1][3].appearanceOverrides || {};
+    roster[1][3].appearanceOverrides.hairColor = '#070707';
   }
 }
 
@@ -1878,18 +1893,23 @@ function updateAutoPilot(dt) {
   const current = schedule[game.periodIndex];
   const destination = chooseAutoDestination();
   const waypoint = routeWaypoint(player, destination);
-  const lateForClass = (isSupervisedPeriod(current))
-    && entityRoom(player) !== current.room;
   // Auto mode should move at student pace (not superhuman speed).
-  // NPC students use a ~3.3 hallway multiplier but move with dt/1000 integration,
-  // while Eric uses dt*0.011. Converting 3.3/11 keeps auto movement aligned.
-  const studentHallwayBoost = 3.3 / 11;
-  const lateRunBoost = (lateForClass && game.energy > 20) ? 1.45 : 1;
-  const speed = ((player.personality.speed * game.energy) / 100) * studentHallwayBoost * lateRunBoost;
+  // NPC students use a hallway multiplier near 3.0 and move with dt/1000,
+  // while Eric uses dt*0.011, so we convert with /11 for parity.
+  const studentHallwayBoost = 3.05 / 11;
+  const speed = ((player.personality.speed * game.energy) / 100) * studentHallwayBoost;
 
   const dx = waypoint.x - player.x;
   const dy = waypoint.y - player.y;
-  const len = Math.hypot(dx, dy) || 1;
+  const lenRaw = Math.hypot(dx, dy);
+  const len = lenRaw || 1;
+
+  // Arrival deadzone avoids tiny auto-corrections that look like shaking in queues.
+  if (lenRaw < 0.12) {
+    player.vx = 0;
+    player.vy = 0;
+    return;
+  }
 
   // In lessons, lock Eric to his seat once he reaches it so he does not hover.
   const inLesson = current.mode === 'lesson';
@@ -4768,15 +4788,44 @@ function drawEntities() {
       const noseX = appearance.noseType === 'long' ? px : px - 1;
       const noseH = appearance.noseType === 'button' ? 1 : appearance.noseType === 'long' ? 2 : 1;
       ctx.fillRect(noseX, py - 20 + bob - heightShift, 1, noseH);
-      // Eyes remain tiny for pixel style but differ in spread/color.
+      // Eyes: white + iris color + black pupil pixels; blink every ~10s randomly.
       const eyeSpread = appearance.eyeSpread || 1;
-      ctx.fillStyle = appearance.eyeColor || '#1d3557';
-      ctx.fillRect(px - eyeSpread - 1, py - 22 + bob - heightShift, 1, 1);
-      ctx.fillRect(px + eyeSpread, py - 22 + bob - heightShift, 1, 1);
+      if (now >= (entity.nextBlinkAt || 0)) {
+        entity.blinkUntil = now + 130;
+        entity.nextBlinkAt = now + (8000 + game.rng() * 4000);
+      }
+      const isBlinking = now < (entity.blinkUntil || 0);
+      const eyeY = py - 22 + bob - heightShift;
+      if (isBlinking) {
+        ctx.fillStyle = '#2f2f2f';
+        ctx.fillRect(px - eyeSpread - 2, eyeY, 3, 1);
+        ctx.fillRect(px + eyeSpread - 1, eyeY, 3, 1);
+      } else {
+        // Left eye triplet.
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(px - eyeSpread - 2, eyeY, 1, 1);
+        ctx.fillStyle = appearance.eyeColor || '#1d3557';
+        ctx.fillRect(px - eyeSpread - 1, eyeY, 1, 1);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(px - eyeSpread, eyeY, 1, 1);
+        // Right eye triplet.
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(px + eyeSpread - 1, eyeY, 1, 1);
+        ctx.fillStyle = appearance.eyeColor || '#1d3557';
+        ctx.fillRect(px + eyeSpread, eyeY, 1, 1);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(px + eyeSpread + 1, eyeY, 1, 1);
+      }
       if (appearance.acne) {
         ctx.fillStyle = '#d98f8f';
         ctx.fillRect(px - 3, py - 20 + bob - heightShift, 1, 1);
       }
+
+      // Mouth opens while speaking to make dialogue readable from sprites.
+      const isSpeaking = Boolean(entity.speech && entity.speech.until > now);
+      ctx.fillStyle = '#4a1e1e';
+      if (isSpeaking) ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 2);
+      else ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 1);
 
       // School uniform: white shirt + blue tie + black trousers/shoes for students.
       ctx.fillStyle = useUniform ? '#f8f9fa' : body;
