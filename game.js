@@ -1880,11 +1880,12 @@ function updateAutoPilot(dt) {
   const waypoint = routeWaypoint(player, destination);
   const lateForClass = (isSupervisedPeriod(current))
     && entityRoom(player) !== current.room;
-  // Auto mode should feel readable and controlled, not faster than manual play.
-  const hallwayBoost = 1.05;
-  const lateRunBoost = lateForClass ? 1.15 : 1;
-  const autoSlowdown = 0.5; // Explicitly halve Eric's auto movement speed.
-  const speed = ((player.personality.speed * game.energy) / 100) * hallwayBoost * lateRunBoost * autoSlowdown;
+  // Auto mode should move at student pace (not superhuman speed).
+  // NPC students use a ~3.3 hallway multiplier but move with dt/1000 integration,
+  // while Eric uses dt*0.011. Converting 3.3/11 keeps auto movement aligned.
+  const studentHallwayBoost = 3.3 / 11;
+  const lateRunBoost = (lateForClass && game.energy > 20) ? 1.45 : 1;
+  const speed = ((player.personality.speed * game.energy) / 100) * studentHallwayBoost * lateRunBoost;
 
   const dx = waypoint.x - player.x;
   const dy = waypoint.y - player.y;
