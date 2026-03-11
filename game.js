@@ -149,8 +149,12 @@ const classroomProps = [
 ];
 
 // Bell schedule approximating school-day flow.
+// Arrival is intentionally short in real-time so pupils quickly move from the
+// gate lineup into tutorial without getting stuck outside.
+const ARRIVAL_REAL_SECONDS = 10;
+const ARRIVAL_GAME_MINUTES = (ARRIVAL_REAL_SECONDS / 60);
 const schedule = [
-  { period: 'Arrival', room: 'School Gates', mins: 10, mode: 'transition' },
+  { period: 'Arrival', room: 'School Gates', mins: ARRIVAL_GAME_MINUTES, mode: 'transition' },
   { period: 'Tutorial', room: 'Science Lab', mins: 30, mode: 'lesson' },
   { period: 'Lesson 1', room: 'Maths', mins: 60, mode: 'lesson' },
   { period: 'Lesson 2', room: 'English', mins: 60, mode: 'lesson' },
@@ -253,6 +257,9 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     punchUntil: 0,
     fallStartedAt: 0,
     fallDuration: 520,
+    // Arrival staging: students appear over the first 10 seconds, teachers are ready immediately.
+    arrivedForDay: true,
+    arrivalJoinMins: 0,
   };
 }
 
@@ -264,9 +271,21 @@ const player = mkEntity('Eric', 'player', 48, 64, '#ffe04d', {
 
 game.entities.push(
   player,
-  mkEntity('Mr Wacker', 'teacher', 22, 42, '#8eb2ff', { title: 'Headmaster', strict: 0.9 }),
-  mkEntity('Ms Take', 'teacher', 75, 42, '#82a4ff', { title: 'Science Teacher', strict: 0.8 }),
-  mkEntity('Mr Creak', 'teacher', 56, 84, '#7e9aff', { title: 'History Teacher', strict: 0.7 }),
+  mkEntity('Mr Wacker', 'teacher', 22, 42, '#8eb2ff', {
+    title: 'Headmaster', strict: 0.95, attire: 'headmaster', beard: true,
+  }),
+  mkEntity('Mr Flash', 'teacher', 70, 40, '#f4d35e', {
+    title: 'Maths Teacher', strict: 0.75, attire: 'flash', chin: 'big',
+  }),
+  mkEntity('Ms Take', 'teacher', 75, 42, '#82a4ff', {
+    title: 'English Teacher', strict: 0.65, attire: 'plainBlueDress',
+  }),
+  mkEntity('Dr Beaker', 'teacher', 88, 41, '#e9ecef', {
+    title: 'Science Teacher', strict: 0.8, attire: 'scienceCoat', bald: true, build: 'fat',
+  }),
+  mkEntity('Mr Creak', 'teacher', 56, 84, '#7e9aff', {
+    title: 'History Teacher', strict: 0.85, attire: 'oldBrown', cane: true,
+  }),
   mkEntity('Angelface', 'hero', 102, 88, '#ffd58e', { title: 'Handsome kid' }),
   mkEntity('Einstein', 'swot', 108, 87, '#8effd3', { title: 'Teacher pet', tattles: true }),
   mkEntity('Bully Boy', 'bully', 114, 89, '#ff5f88', { title: 'Playground terror' }),
@@ -300,6 +319,21 @@ function gateQueuePosition(entity) {
     x: gates.x + 2 + lane * 2.05,
     y: gates.y + 3 + row * 1.9,
   };
+}
+
+function teacherGateLinePosition(teacherIndex) {
+  const gates = roomByName('School Gates');
+  // Teachers stand ready on the front line during arrival.
+  return {
+    x: gates.x + 3 + teacherIndex * 2.8,
+    y: gates.y + 2,
+  };
+}
+
+function hasArrivedForCurrentPeriod(entity, currentPeriod = schedule[game.periodIndex]) {
+  if (entity === player) return true;
+  if (currentPeriod.period !== 'Arrival') return true;
+  return entity.arrivedForDay;
 }
 
 function bullyFightChance(currentPeriod) {
@@ -406,6 +440,9 @@ function chooseAutoDestination() {
   // Toilets become top priority when bladder is urgent.
   if (game.bladder >= 75) return roomCenter('Toilets');
   const current = schedule[game.periodIndex];
+  // Keep Eric in the same gate lineup pattern as everyone else on arrival,
+  // instead of dragging him to the middle of the School Gates room.
+  if (current.period === 'Arrival') return gateQueuePosition(player);
   if (current.mode === 'home') return roomCenter('School Gates');
   return roomCenter(current.room);
 }
@@ -439,11 +476,28 @@ function resetToSchoolMorning() {
   game.playerHeldItem = null;
 
   const gate = roomByName('School Gates');
+  let teacherIndex = 0;
   for (const entity of game.entities) {
-    const lane = entity.seatIndex % 6;
-    entity.x = gate.x + 2 + lane * 2.3;
-    entity.y = gate.y + 3 + Math.floor(entity.seatIndex / 6) * 2.4;
-    entity.target = null;
+    if (entity === player) {
+      entity.x = gate.x + gate.w / 2;
+      entity.y = gate.y + gate.h - 4;
+      entity.arrivedForDay = true;
+      entity.arrivalJoinMins = 0;
+    } else if (entity.role === 'teacher') {
+      const pos = teacherGateLinePosition(teacherIndex++);
+      entity.x = pos.x;
+      entity.y = pos.y;
+      entity.arrivedForDay = true;
+      entity.arrivalJoinMins = 0;
+      entity.target = { ...pos };
+    } else {
+      // Students appear at random moments during the 10-second arrival phase.
+      entity.x = schoolExit.x + 2.2 + game.rng() * 2.2;
+      entity.y = gate.y + 4 + game.rng() * (gate.h - 6);
+      entity.arrivedForDay = false;
+      entity.arrivalJoinMins = game.rng() * Math.max(0.01, ARRIVAL_GAME_MINUTES * 0.92);
+      entity.target = null;
+    }
     entity.vx = 0;
     entity.vy = 0;
     entity.carryingTrash = false;
@@ -687,12 +741,17 @@ function handleInput(dt) {
 
 function meleeAttack(attacker) {
   attacker.punchUntil = performance.now() + 220;
+  const strikeRange = attacker.profile.cane ? 1.95 : 1.45;
   for (const target of game.entities) {
     if (target === attacker || target.knockedUntil > performance.now()) continue;
-    if (distance(attacker, target) < 1.45) {
-      target.hp -= 45;
+    if (distance(attacker, target) < strikeRange) {
+      target.hp -= attacker.profile.cane ? 55 : 45;
       target.mood = 'angry';
-      announce(`👊 ${attacker.name} punched ${target.name}`);
+      if (attacker.profile.cane) {
+        announce(`🪵 ${attacker.name} thwacked ${target.name} with a walking stick`);
+      } else {
+        announce(`👊 ${attacker.name} punched ${target.name}`);
+      }
       if (target.hp <= 0) knockout(target, attacker);
       if (attacker === player && target.role === 'teacher') addLines(120, 'striking a teacher');
       spendEnergy(7);
@@ -942,6 +1001,13 @@ function updateAI(dt) {
 
   for (const entity of game.entities) {
     if (entity === player) continue;
+    if (!hasArrivedForCurrentPeriod(entity, current)) {
+      if (game.periodElapsed >= entity.arrivalJoinMins) {
+        entity.arrivedForDay = true;
+      } else {
+        continue;
+      }
+    }
     if (entity.knockedUntil > performance.now()) continue;
 
     if (!entity.target || game.rng() < 0.01) {
@@ -1049,6 +1115,17 @@ function updateAI(dt) {
     }
 
     const len = Math.hypot(dx, dy) || 1;
+
+    // During gate lineup, lock pupils/teachers still once they reach their slot.
+    if (current.period === 'Arrival' && len < 0.52) {
+      entity.vx = 0;
+      entity.vy = 0;
+      entity.running = false;
+      constrain(entity);
+      updateNpcVitals(entity, dt, false);
+      continue;
+    }
+
     const lateForClass = supervised && teacherPresent && entityRoom(entity) !== current.room;
     const canRun = entity.energy > 20;
     entity.running = lateForClass && canRun;
@@ -1097,6 +1174,7 @@ function updatePellets(dt) {
     pellet.vy += 0.0008 * dt;
 
     for (const entity of game.entities) {
+      if (!hasArrivedForCurrentPeriod(entity)) continue;
       if (entity === pellet.owner || entity.knockedUntil > performance.now()) continue;
       if (distance(pellet, entity) < 0.75) {
         if (pellet.kind === 'rubbish') {
@@ -1463,7 +1541,9 @@ function drawEntities() {
   const sx = canvas.width / CAMERA.w;
   const sy = canvas.height / CAMERA.h;
 
+  const current = schedule[game.periodIndex];
   for (const entity of game.entities) {
+    if (!hasArrivedForCurrentPeriod(entity, current)) continue;
     const now = performance.now();
     const knocked = entity.knockedUntil > now;
     const isPunching = entity.punchUntil > now;
@@ -1550,6 +1630,61 @@ function drawEntities() {
       ctx.fillStyle = '#13151a';
       ctx.fillRect(px - 6, py + 2 + legKick, 5, 2);
       ctx.fillRect(px + 1, py + 2 - legKick, 5, 2);
+
+      // Teachers are rendered larger and more formal than students.
+      if (entity.role === 'teacher') {
+        const attire = entity.profile.attire || 'staff';
+
+        // Broad shoulders + taller coat silhouette to read clearly at distance.
+        ctx.fillStyle = attire === 'scienceCoat' ? '#f8f9fa' : attire === 'flash' ? '#f4d35e' : attire === 'plainBlueDress' ? '#4f86f7' : attire === 'oldBrown' ? '#8d6e63' : '#1e2438';
+        ctx.fillRect(px - 9, py - 21 + bob, 18, 15);
+
+        // Formal tie/collar motif helps identify staff quickly.
+        ctx.fillStyle = '#fefefe';
+        ctx.fillRect(px - 2, py - 19 + bob, 4, 4);
+        ctx.fillStyle = '#c1121f';
+        ctx.fillRect(px - 1, py - 15 + bob, 2, 4);
+
+        if (entity.name === 'Mr Wacker' || entity.profile.beard) {
+          // Headmaster: black suit with beard.
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(px - 10, py - 22 + bob, 20, 3);
+          ctx.fillStyle = '#5a3b2e';
+          ctx.fillRect(px - 4, py - 16 + bob, 8, 4);
+        }
+
+        if (entity.name === 'Mr Flash' || entity.profile.chin === 'big') {
+          // Mr Flash: bright yellow style + pronounced chin.
+          ctx.fillStyle = '#ffd166';
+          ctx.fillRect(px - 6, py - 25 + bob, 12, 3);
+          ctx.fillStyle = '#d9a066';
+          ctx.fillRect(px - 4, py - 18 + bob, 8, 3);
+        }
+
+        if (entity.name === 'Ms Take') {
+          // Ms Take: plain, dull blue dress silhouette.
+          ctx.fillStyle = '#3a5fa0';
+          ctx.fillRect(px - 8, py - 10 + bob, 16, 6);
+        }
+
+        if (entity.name === 'Dr Beaker' || attire === 'scienceCoat') {
+          // Science teacher: bald, heavier build, white overcoat.
+          ctx.fillStyle = '#ffe0bd';
+          ctx.fillRect(px - 5, py - 24 + bob, 10, 2);
+          ctx.fillStyle = '#f8f9fa';
+          ctx.fillRect(px - 10, py - 20 + bob, 20, 14);
+        }
+
+        if (entity.name === 'Mr Creak' || entity.profile.cane) {
+          // History teacher: older brown look with walking stick/cane.
+          ctx.fillStyle = '#7f5539';
+          ctx.fillRect(px - 9, py - 22 + bob, 18, 15);
+          ctx.fillStyle = '#5b3a29';
+          const caneReach = isPunching ? 6 : 0;
+          const stickX = entity.facing >= 0 ? px + 11 + caneReach : px - 13 - caneReach;
+          ctx.fillRect(stickX, py - 16 + bob, 2, 14);
+        }
+      }
     }
 
     // Mood marker remains concise and readable.
@@ -1701,6 +1836,7 @@ function loop(now) {
 
     // Update animation time for all entities so movement reads like retro sprites.
     for (const entity of game.entities) {
+      if (!hasArrivedForCurrentPeriod(entity)) continue;
       const moveMagnitude = Math.abs(entity.vx) + Math.abs(entity.vy);
       entity.animPhase += dt * (0.006 + moveMagnitude * 0.01);
     }
