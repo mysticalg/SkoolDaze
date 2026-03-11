@@ -437,6 +437,39 @@ const COLLECTABLE_LIFETIME_MS = 60000;
 const COLLECTABLE_SPAWN_INTERVAL_MS = 4200;
 const MAX_ACTIVE_COLLECTABLES = 7;
 
+const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const MONSTER_PREFIXES = ['Aero', 'Blaze', 'Crystal', 'Dread', 'Echo', 'Frost', 'Giga', 'Hex', 'Iron', 'Jade', 'Nova', 'Shadow', 'Solar', 'Storm', 'Venom', 'Wild'];
+const MONSTER_SUFFIXES = ['Drake', 'Mantis', 'Golem', 'Specter', 'Hydra', 'Raptor', 'Warden', 'Seraph', 'Wisp', 'Leviathan', 'Titan', 'Sprite', 'Colossus', 'Phantom', 'Wyvern', 'Stalker'];
+const MONSTER_ABILITIES = ['Flame burst', 'Mind shield', 'Quick strike', 'Poison cloud', 'Stone skin', 'Arc pulse', 'Mirror dodge', 'Moon howl'];
+const CARD_RARITY = {
+  common: { icon: '🃏', tint: '#d9d9d9', weight: 72, bonus: 0 },
+  silver: { icon: '🥈', tint: '#c0d6df', weight: 22, bonus: 10 },
+  legendary: { icon: '🥇', tint: '#ffd166', weight: 6, bonus: 22 },
+};
+
+function generateTradingCardCatalog() {
+  const cards = [];
+  for (let i = 0; i < 256; i += 1) {
+    const prefix = MONSTER_PREFIXES[i % MONSTER_PREFIXES.length];
+    const suffix = MONSTER_SUFFIXES[Math.floor(i / MONSTER_PREFIXES.length) % MONSTER_SUFFIXES.length];
+    const rarity = i < 184 ? 'common' : i < 238 ? 'silver' : 'legendary';
+    const rarityBonus = CARD_RARITY[rarity].bonus;
+    const base = 28 + (i % 36);
+    cards.push({
+      id: `TC-${String(i + 1).padStart(3, '0')}`,
+      name: `${prefix} ${suffix}`,
+      ability: MONSTER_ABILITIES[i % MONSTER_ABILITIES.length],
+      strength: base + rarityBonus,
+      defense: 24 + ((i * 7) % 44) + Math.floor(rarityBonus * 0.8),
+      weakness: ['Fire', 'Water', 'Wind', 'Earth', 'Light', 'Dark'][i % 6],
+      rarity,
+    });
+  }
+  return cards;
+}
+
+const TRADING_CARD_CATALOG = generateTradingCardCatalog();
+
 const NPC_POSTURES = ['upright', 'slouched', 'bouncy', 'swagger', 'careful', 'stiff', 'dramatic'];
 
 
@@ -845,6 +878,9 @@ const game = {
   choseToStayAfterSchool: false,
   playerComputerPlayUntil: 0,
   playerComputerStationId: null,
+  // Trading-card mission progression.
+  cardCollection: new Set(),
+  cardCollectionCount: 0,
   weeklySickScheduledDay: WEEKLY_SICK_DAY_INTERVAL,
   janitorTask: null,
   // Lesson chatter rhythm: teachers hush classes briefly, then noise returns gradually.
@@ -1000,6 +1036,8 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     // Facial animation timers keep eyes/mouth lively without expensive sprite swaps.
     blinkUntil: 0,
     nextBlinkAt: performance.now() + 2000 + Math.random() * 7000,
+    dailyCards: [],
+    refusesEricUntilDay: 0,
   };
 }
 
@@ -1246,6 +1284,56 @@ function formatTime(mins) {
   const h = Math.floor(mins / 60) % 24;
   const m = Math.floor(mins % 60);
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function weekdayLabelForDay(day = game.dayCount) {
+  return WEEKDAY_NAMES[(Math.max(1, day) - 1) % WEEKDAY_NAMES.length];
+}
+
+function weightedCardRarityRoll(rng = Math.random) {
+  const total = Object.values(CARD_RARITY).reduce((sum, entry) => sum + entry.weight, 0);
+  let roll = rng() * total;
+  for (const [rarity, meta] of Object.entries(CARD_RARITY)) {
+    roll -= meta.weight;
+    if (roll <= 0) return rarity;
+  }
+  return 'common';
+}
+
+function dailyCardCountForStudent(entity) {
+  const base = 1 + Math.floor(game.rng() * 5);
+  const swotBonus = entity.role === 'swot' ? 1 : 0;
+  return Math.max(1, Math.min(5, base + swotBonus - (game.rng() < 0.4 ? 1 : 0)));
+}
+
+function pickDailyCardsForEntity(entity) {
+  const count = dailyCardCountForStudent(entity);
+  const cards = [];
+  const npcSeed = styleSeedFromName(entity.name) + game.dayCount * 13;
+  const weekday = (game.dayCount - 1) % 7;
+  for (let i = 0; i < count; i += 1) {
+    let rarity = weightedCardRarityRoll(game.rng);
+    // Rare scheduling rule: some legendary cards appear only on specific days for specific NPCs.
+    if ((npcSeed + i) % 11 === weekday && game.periodIndex <= 2) rarity = 'legendary';
+    const pool = TRADING_CARD_CATALOG.filter((card) => card.rarity === rarity);
+    const idx = Math.abs(npcSeed + i * 17) % pool.length;
+    cards.push(pool[idx]);
+  }
+  return cards;
+}
+
+function assignDailyTradingCards() {
+  for (const entity of game.entities) {
+    if (entity.role === 'teacher' || entity.role === 'janitor' || entity.role === 'nurse' || entity.role === 'player') continue;
+    entity.dailyCards = pickDailyCardsForEntity(entity);
+  }
+}
+
+function updateCardCollectionFromCards(cards = []) {
+  for (const card of cards) {
+    if (card?.id) game.cardCollection.add(card.id);
+  }
+  game.cardCollectionCount = game.cardCollection.size;
 }
 
 function roomByName(name) {
@@ -1867,6 +1955,8 @@ function resetToSchoolMorning() {
   game.hygiene = Math.max(55, game.hygiene - 3);
   pickWeeklyWeather();
   game.dialogueDayKey += 1;
+  game.playerComputerPlayUntil = 0;
+  game.playerComputerStationId = null;
   game.ericSeatReservedToday = game.rng() < ERIC_RESERVED_SEAT_CHANCE;
 
   if (game.dayCount > 1 && game.dayCount % TOILET_BLOCK_INTERVAL_DAYS === 0) {
@@ -1880,6 +1970,10 @@ function resetToSchoolMorning() {
   const gate = roomByName('School Gates');
   let teacherIndex = 0;
   for (const entity of game.entities) {
+    if (entity.refusesEricUntilDay && game.dayCount >= entity.refusesEricUntilDay) {
+      // Gradual forgiveness: grudges can persist for days before interactions reopen.
+      entity.refusesEricUntilDay = 0;
+    }
     if (entity === player) {
       entity.x = gate.x + gate.w / 2;
       entity.y = gate.y + gate.h - 4;
@@ -1925,6 +2019,9 @@ function resetToSchoolMorning() {
   }
 
   assignDailyDutyTeacher();
+  assignDailyTradingCards();
+  player.dailyCards = pickDailyCardsForEntity(player);
+  updateCardCollectionFromCards(player.dailyCards);
 
   setPeriod(0);
   updateBladderHud();
@@ -3346,12 +3443,16 @@ function updateCollectables(now = performance.now()) {
 function updateMission() {
   const letters = shields.filter((s) => s.found).map((s) => s.letter);
   game.safeCombo = letters.join('');
-  if (letters.length === shields.length) {
+  const shieldProgress = `${letters.length}/${shields.length}`;
+  const cardProgress = `${game.cardCollectionCount}/256`;
+  missionEl.textContent = `🛡️ Shields ${shieldProgress} | 🃏 Card Collection ${cardProgress}`;
+
+  if (letters.length === shields.length && !game.missionComplete) {
     game.missionComplete = true;
-    missionEl.textContent = `🛡️ Mission: Complete! Safe combo ${game.safeCombo}`;
     announce(`🏆 You collected all shield letters: ${game.safeCombo}`);
-  } else {
-    missionEl.textContent = `🛡️ Mission: Letters ${letters.join('')} (${letters.length}/${shields.length})`;
+  }
+  if (game.cardCollectionCount >= 256) {
+    announce('🏆 Full trading card collection completed: all 256 cards!');
   }
 }
 
@@ -4406,7 +4507,7 @@ function updateSchedule(dt) {
     }
   }
 
-  clockEl.textContent = `🕘 Time: ${formatTime(game.timeMinutes)}`;
+  clockEl.textContent = `🕘 ${weekdayLabelForDay()} ${formatTime(game.timeMinutes)}`;
   const waitingLabel = !periodWaiting
     ? ''
     : (!teacherPresent ? ' (waiting for teacher to arrive)' : ' (waiting for teacher to sit)');
@@ -5426,6 +5527,8 @@ function updateEntityTooltip(event) {
 const studentInteractions = [
   { id: 'trade', icon: '🤝', label: 'Offer a fair trade', action: 'trade', baseDelta: 3, lines: ['Fancy a swap?', 'Trade you something useful?', 'Want to exchange items?'] },
   { id: 'haggle', icon: '💬', label: 'Try to haggle a better deal', action: 'haggle', baseDelta: 1, lines: ['Come on, I can sweeten this deal.', 'Let me talk you into this swap.', 'Surely that is worth a better bargain?'] },
+  { id: 'card-battle', icon: '🃏', label: 'Challenge to trump card battle', action: 'card-battle', baseDelta: 2, lines: ['Fancy a card duel?', 'Let us battle cards.', 'Trump card showdown?'] },
+  { id: 'mug-cards', icon: '🕶️', label: 'Mug them for their cards', action: 'mug-cards', baseDelta: -20, lines: ['Hand over your cards.', 'Give me your deck. Now.', 'I am taking your cards.'] },
   { id: 'compliment', icon: '✨', label: 'Compliment their style', baseDelta: 7, lines: ['Your trainers are elite today.', 'You handled class brilliantly.', 'You make this place less grim.'] },
   { id: 'joke', icon: '😄', label: 'Crack a joke', baseDelta: 5, lines: ['Need a laugh before next lesson?', 'I have got a joke about detentions.', 'This corridor needs better comedy.'] },
   { id: 'study', icon: '📚', label: 'Ask for study tips', baseDelta: 4, lines: ['Can you help me revise this topic?', 'What is your trick for remembering dates?', 'Any smart shortcut for homework?'] },
@@ -5445,6 +5548,60 @@ function interactionOptionsFor(target) {
   if (!target || target.role === 'player') return [];
   if (target.role === 'teacher' || target.role === 'janitor' || target.role === 'nurse') return staffInteractions;
   return studentInteractions;
+}
+
+function playTrumpCardBattle(target) {
+  const myCards = (player.dailyCards || []);
+  const theirCards = (target.dailyCards || []);
+  if (!myCards.length) {
+    announce('🃏 Eric has no daily cards in hand. Trade or wait for tomorrow.');
+    return false;
+  }
+  if (!theirCards.length) {
+    announce(`🃏 ${target.name} did not bring cards today.`);
+    return false;
+  }
+
+  const myCard = myCards[Math.floor(game.rng() * myCards.length)];
+  const theirCard = theirCards[Math.floor(game.rng() * theirCards.length)];
+  const stat = ['strength', 'defense'][Math.floor(game.rng() * 2)];
+  const myScore = myCard[stat] + ((player.traits?.luck || 50) / 20);
+  const theirScore = theirCard[stat] + ((target.traits?.luck || 50) / 20);
+
+  announce(`🃏 Duel: Eric plays ${myCard.name} (${stat} ${myCard[stat]}) vs ${target.name}'s ${theirCard.name} (${stat} ${theirCard[stat]}).`, { force: true });
+  if (myScore >= theirScore) {
+    target.dailyCards = theirCards.filter((card) => card.id !== theirCard.id);
+    player.dailyCards.push(theirCard);
+    updateCardCollectionFromCards([theirCard]);
+    adjustEricRelationship(target, 2, 'card-win');
+    announce(`🏆 Eric won and took ${theirCard.name}!`, { force: true });
+  } else {
+    player.dailyCards = myCards.filter((card) => card.id !== myCard.id);
+    target.dailyCards.push(myCard);
+    adjustEricRelationship(target, -4, 'card-loss');
+    announce(`💥 Eric lost and handed over ${myCard.name}.`, { force: true });
+  }
+  updateMission();
+  return true;
+}
+
+function mugCardsFromTarget(target) {
+  const theirCards = target.dailyCards || [];
+  if (!theirCards.length) {
+    announce(`🕶️ ${target.name} has no cards to steal.`);
+    return false;
+  }
+  const stolen = theirCards.splice(0, Math.min(2, theirCards.length));
+  player.dailyCards = player.dailyCards || [];
+  player.dailyCards.push(...stolen);
+  updateCardCollectionFromCards(stolen);
+  target.refusesEricUntilDay = game.dayCount + 3 + Math.floor(game.rng() * 4);
+  target.relationships = target.relationships || {};
+  target.relationships.Eric = -100;
+  target.ericReputation = Math.max(-100, (target.ericReputation || 0) - 35);
+  announce(`🚨 Eric mugged ${target.name} and stole ${stolen.length} card(s). They refuse to speak for days.`, { force: true });
+  updateMission();
+  return true;
 }
 
 function calculateStudentInteractionDelta(target, option) {
@@ -5470,7 +5627,12 @@ function openInteractionPanelFor(target) {
   game.selectedInteractionTarget = target;
   interactionPanelEl.hidden = false;
   interactionTitleEl.textContent = `Talk to ${target.name}`;
-  interactionMetaEl.textContent = `Relationship: ${relationshipLabel(target.relationships?.Eric || 0)} • Reputation: ${Math.round(target.ericReputation || 0)}`;
+  if ((target.refusesEricUntilDay || 0) > game.dayCount) {
+    interactionMetaEl.textContent = `${target.name} is still upset and refuses to talk until a later day.`;
+    interactionOptionsEl.innerHTML = '<p>🙅 They are ignoring Eric after past betrayal.</p>';
+    return;
+  }
+  interactionMetaEl.textContent = `Relationship: ${relationshipLabel(target.relationships?.Eric || 0)} • Reputation: ${Math.round(target.ericReputation || 0)} • Cards: ${(target.dailyCards || []).length}`;
   interactionOptionsEl.innerHTML = '';
 
   const options = interactionOptionsFor(target);
@@ -5493,6 +5655,10 @@ function openInteractionPanelFor(target) {
         attemptInteractionTrade(target, { haggle: false });
       } else if (option.action === 'haggle') {
         attemptInteractionTrade(target, { haggle: true });
+      } else if (option.action === 'card-battle') {
+        playTrumpCardBattle(target);
+      } else if (option.action === 'mug-cards') {
+        mugCardsFromTarget(target);
       } else {
         const delta = calculateStudentInteractionDelta(target, option);
         adjustEricRelationship(target, delta, `social:${option.id}`);
@@ -5502,7 +5668,7 @@ function openInteractionPanelFor(target) {
         else announce(`😐 ${target.name}: "Hmm... maybe."`, { source: target, range: 8, force: true });
       }
 
-      interactionMetaEl.textContent = `Relationship: ${relationshipLabel(target.relationships?.Eric || 0)} • Reputation: ${Math.round(target.ericReputation || 0)}`;
+      interactionMetaEl.textContent = `Relationship: ${relationshipLabel(target.relationships?.Eric || 0)} • Reputation: ${Math.round(target.ericReputation || 0)} • Cards: ${(target.dailyCards || []).length}`;
     };
     interactionOptionsEl.appendChild(btn);
   }
