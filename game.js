@@ -16,6 +16,8 @@ const todoEl = document.getElementById('todo');
 const helpDialog = document.getElementById('helpDialog');
 const helpBtn = document.getElementById('helpBtn');
 const pauseBtn = document.getElementById('pauseBtn');
+const toggleNamesBtn = document.getElementById('toggleNamesBtn');
+const entityTooltipEl = document.getElementById('entityTooltip');
 document.getElementById('closeHelp').onclick = () => helpDialog.close();
 helpBtn.onclick = () => helpDialog.showModal();
 
@@ -189,6 +191,27 @@ const schoolExit = { x: 159.2, yMin: 84, yMax: 107 };
 const floorOrder = { upper: 3, middle: 2, ground: 1, lower: 0 };
 const floorSequence = ['lower', 'ground', 'middle', 'upper'];
 
+// Preferred supervising teacher per lesson room keeps class starts orderly.
+const roomTeacherMap = {
+  'Science Lab': 'Dr Beaker',
+  Maths: 'Mr Flash',
+  English: 'Ms Take',
+  Geography: 'Mr Creak',
+  History: 'Mr Creak',
+  'Art Room': 'Ms Take',
+  'Computer Room': 'Mr Wacker',
+  'Headmaster Office': 'Mr Wacker',
+};
+
+// Every teacher also has a personal classroom so staff do not clump at one doorway.
+const teacherHomeRoomMap = {
+  'Mr Wacker': 'Headmaster Office',
+  'Mr Flash': 'Maths',
+  'Ms Take': 'English',
+  'Dr Beaker': 'Science Lab',
+  'Mr Creak': 'History',
+};
+
 const lessonTasks = [
   'Write 10x: I must not fire catapults.',
   'Solve: 6 * 7 = ?',
@@ -237,6 +260,8 @@ const game = {
   litter: [],
   playerCarryingTrash: false,
   playerHeldItem: null,
+  showNpcNames: true,
+  hoveredEntity: null,
 };
 
 let seatCounter = 0;
@@ -497,6 +522,19 @@ function roomDoorway(room) {
   };
 }
 
+function doorwayStagingPoint(entity, doorway, room) {
+  if (!doorway || !room) return doorway;
+  // Spread traffic across each doorway so late students do not stack on one tile.
+  const laneSeed = (entity.seatIndex % 7) - 3;
+  const laneOffsetX = laneSeed * 0.52;
+  const minX = room.x + 1.1;
+  const maxX = room.x + room.w - 1.1;
+  return {
+    x: Math.max(minX, Math.min(maxX, doorway.x + laneOffsetX)),
+    y: doorway.y,
+  };
+}
+
 function routeWaypoint(entity, destination) {
   const currentRoom = roomAtPosition(entity);
   const destinationRoom = roomAtPosition(destination);
@@ -517,7 +555,8 @@ function routeWaypoint(entity, destination) {
 
   if (destinationRoom && destinationRoom.type !== 'corridor' && destinationRoom.type !== 'outdoor') {
     const entryDoor = roomDoorway(destinationRoom);
-    if (entryDoor && distance(entity, entryDoor) > 1.1) return entryDoor;
+    const stagedDoor = doorwayStagingPoint(entity, entryDoor, destinationRoom);
+    if (stagedDoor && distance(entity, stagedDoor) > 1.1) return stagedDoor;
   }
 
   return destination;
@@ -636,10 +675,11 @@ function updateAutoPilot(dt) {
   const waypoint = routeWaypoint(player, destination);
   const lateForClass = (current.mode === 'lesson' || current.period === 'Tutorial')
     && entityRoom(player) !== current.room;
-  // Auto movement uses corridor pacing comparable to other students.
-  const hallwayBoost = 2.18;
-  const lateRunBoost = lateForClass ? 1.52 : 1;
-  const speed = ((player.personality.speed * game.energy) / 100) * hallwayBoost * lateRunBoost;
+  // Auto mode should feel readable and controlled, not faster than manual play.
+  const hallwayBoost = 1.05;
+  const lateRunBoost = lateForClass ? 1.15 : 1;
+  const autoSlowdown = 0.5; // Explicitly halve Eric's auto movement speed.
+  const speed = ((player.personality.speed * game.energy) / 100) * hallwayBoost * lateRunBoost * autoSlowdown;
 
   const dx = waypoint.x - player.x;
   const dy = waypoint.y - player.y;
@@ -769,9 +809,15 @@ function setPeriod(index) {
   game.periodElapsed = 0;
   game.periodHoldMinutes = 0;
   const current = schedule[game.periodIndex];
-  // Bell changes stand Eric up to prevent stale seated state between rooms.
+  // Bell changes stand everyone up and clears stale routes between periods.
   player.isSeated = false;
   player.seatedRoom = null;
+  for (const entity of game.entities) {
+    if (entity === player) continue;
+    entity.target = null;
+    entity.isSeated = false;
+    entity.seatedRoom = null;
+  }
   if (current.period === 'Tutorial') game.registrationTaken = false;
 
   // Board content changes each bell to emulate lesson instructions.
@@ -1177,6 +1223,14 @@ function teacherBoardSpot(periodRoom) {
   return { ...fallback, room: periodRoom };
 }
 
+function assignedTeacherForRoom(roomName) {
+  return roomTeacherMap[roomName] || null;
+}
+
+function teacherHomeRoom(teacherName) {
+  return teacherHomeRoomMap[teacherName] || 'Staff Room';
+}
+
 function chooseTarget(entity, currentPeriod) {
   // High bladder urgency overrides normal timetable targets.
   if (entity.bladder >= 80) {
@@ -1235,6 +1289,10 @@ function isTeacherPresentForPeriod(currentPeriod) {
 }
 
 function updateNpcVitals(entity, dt, isRunning) {
+  // `dt` is provided in milliseconds, so convert once to keep stamina math in
+  // real-world seconds. Without this conversion NPCs lose almost all energy in
+  // moments and appear to crawl for the rest of the day.
+  const dtSeconds = dt / 1000;
   const deltaMins = (dt / 1000) * game.timeScale;
   // NPC bladder rises over time, slightly quicker while running.
   entity.bladder = Math.min(100, entity.bladder + deltaMins * (0.34 + (isRunning ? 0.2 : 0)));
@@ -1253,18 +1311,33 @@ function updateNpcVitals(entity, dt, isRunning) {
   const canRecoverFromMeal = period.mode === 'break' && isLunch && inFoodZone;
 
   if (canRecoverFromMeal) {
-    entity.energy = Math.min(100, entity.energy + dt * recoverPerSecond);
+    entity.energy = Math.min(100, entity.energy + dtSeconds * recoverPerSecond);
     return;
   }
 
   const drainRate = baseDrainPerSecond + (isRunning ? runningExtraDrainPerSecond : 0);
-  entity.energy = Math.max(16, entity.energy - dt * drainRate);
+  entity.energy = Math.max(16, entity.energy - dtSeconds * drainRate);
+}
+
+function pushStudentAsideForTeacher(teacher, student, dtSeconds) {
+  // Teachers have right-of-way in corridors: nearby students are nudged aside
+  // so staff can reach lessons on time instead of getting body-blocked.
+  const offsetX = student.x - teacher.x;
+  const offsetY = student.y - teacher.y;
+  const gap = Math.hypot(offsetX, offsetY) || 0.001;
+  if (gap > 1.08) return;
+
+  const shove = ((1.08 - gap) / 1.08) * (3.6 * dtSeconds);
+  student.x += (offsetX / gap) * shove;
+  student.y += (offsetY / gap) * shove;
+  constrain(student);
 }
 
 function updateAI(dt) {
   const current = schedule[game.periodIndex];
   const supervised = current.mode === 'lesson' || current.period === 'Tutorial';
   const teacherPresent = isTeacherPresentForPeriod(current);
+  const assignedTeacherName = assignedTeacherForRoom(current.room);
 
   for (const entity of game.entities) {
     if (entity === player) continue;
@@ -1285,6 +1358,11 @@ function updateAI(dt) {
       entity.target = getSeatPosition(current.room, entity.seatIndex)
         || nearestFreeSeatInRoom(current.room, entity)
         || roomCenter(current.room);
+    } else if (inLesson && entity.role === 'teacher') {
+      // Dedicated teacher handles the active lesson; others return to their own classrooms.
+      const isAssignedTeacher = !assignedTeacherName || entity.name === assignedTeacherName;
+      const destinationRoom = isAssignedTeacher ? current.room : teacherHomeRoom(entity.name);
+      entity.target = teacherBoardSpot(destinationRoom);
     } else if (!entity.target || game.rng() < 0.01) {
       entity.target = chooseTarget(entity, current);
     }
@@ -1393,10 +1471,18 @@ function updateAI(dt) {
         const gapX = entity.x - other.x;
         const gapY = entity.y - other.y;
         const gap = Math.hypot(gapX, gapY) || 0.001;
-        if (gap < 1.2) {
-          const push = ((1.2 - gap) / 1.2) * 0.28;
+        if (gap < 1.45) {
+          // Teachers keep priority: students yield more, teachers yield less.
+          let push = ((1.45 - gap) / 1.45) * 0.46;
+          if (entity.role !== 'teacher' && other.role === 'teacher') push *= 2.35;
+          if (entity.role === 'teacher' && other.role !== 'teacher') push *= 0.28;
           dx += (gapX / gap) * push;
           dy += (gapY / gap) * push;
+        }
+
+        // Teachers can physically clear students blocking their path.
+        if (entity.role === 'teacher' && other.role !== 'teacher') {
+          pushStudentAsideForTeacher(entity, other, dt / 1000);
         }
       }
     }
@@ -1417,12 +1503,18 @@ function updateAI(dt) {
     entity.isSeated = seatedTarget && len < 0.55;
     entity.seatedRoom = entity.isSeated ? current.room : null;
 
-    const lateForClass = supervised && teacherPresent && entityRoom(entity) !== current.room;
+    const expectedRoom = entity.role === 'teacher'
+      ? (assignedTeacherName && entity.name === assignedTeacherName ? current.room : teacherHomeRoom(entity.name))
+      : current.room;
+    const lateForClass = supervised && teacherPresent && entityRoom(entity) !== expectedRoom;
     const canRun = entity.energy > 20;
     entity.running = lateForClass && canRun;
-    const runBoost = entity.running ? 1.62 : 1;
-    const hallwayBoost = entity.role !== 'teacher' ? 2.28 : 2.18;
-    const speed = entity.personality.speed * (entity.energy / 100) * hallwayBoost * runBoost;
+    const runBoost = entity.running ? 1.72 : 1;
+    // Teachers are intentionally quicker than students to keep lessons moving.
+    const hallwayBoost = entity.role === 'teacher' ? 3.95 : 3.3;
+    // Staff get an extra catch-up boost so lessons do not appear to start without a teacher.
+    const staffCatchupBoost = entity.role === 'teacher' && lateForClass ? 1.75 : 1;
+    const speed = entity.personality.speed * (entity.energy / 100) * hallwayBoost * runBoost * staffCatchupBoost;
 
     entity.vx = entity.isSeated ? 0 : (dx / len) * speed;
     entity.vy = entity.isSeated ? 0 : (dy / len) * speed;
@@ -2043,9 +2135,12 @@ function drawEntities() {
     ctx.fillStyle = '#4cc9f0';
     ctx.fillRect(barX, py - 33, (barW * entity.bladder) / 100, 2);
 
-    ctx.fillStyle = PALETTE.chalk;
-    ctx.font = 'bold 9px monospace';
-    ctx.fillText(entity.name.toUpperCase(), px - 22, py - 29);
+    const shouldDrawName = entity.role === 'player' || game.showNpcNames;
+    if (shouldDrawName) {
+      ctx.fillStyle = PALETTE.chalk;
+      ctx.font = 'bold 9px monospace';
+      ctx.fillText(entity.name.toUpperCase(), px - 22, py - 29);
+    }
   }
 
   for (const pellet of game.pellets) {
@@ -2143,6 +2238,71 @@ function drawStatusOverlay() {
   ctx.fillText('PAUSED', canvas.width / 2 - 65, canvas.height / 2);
 }
 
+
+function updateNameToggleButton() {
+  // Button label mirrors the current render mode so players can switch quickly.
+  const showing = game.showNpcNames;
+  toggleNamesBtn.textContent = `🏷️ Names: ${showing ? 'ON' : 'OFF'}`;
+  toggleNamesBtn.title = showing
+    ? 'Hide NPC name labels to make energy bars easier to read'
+    : 'Show NPC name labels above students and teachers';
+}
+
+function getEntityScreenPosition(entity) {
+  const sx = canvas.width / CAMERA.w;
+  const sy = canvas.height / CAMERA.h;
+  return {
+    x: Math.floor((entity.x - CAMERA.x) * sx),
+    y: Math.floor((entity.y - CAMERA.y) * sy),
+  };
+}
+
+function findHoveredEntityAtScreen(mouseX, mouseY) {
+  const current = schedule[game.periodIndex];
+  // Reverse order makes overlapping hover match what is visually on top.
+  for (let i = game.entities.length - 1; i >= 0; i -= 1) {
+    const entity = game.entities[i];
+    if (!hasArrivedForCurrentPeriod(entity, current)) continue;
+    const pos = getEntityScreenPosition(entity);
+    const halfW = 10;
+    const height = 28;
+    const withinX = mouseX >= pos.x - halfW && mouseX <= pos.x + halfW;
+    const withinY = mouseY >= pos.y - height && mouseY <= pos.y + 6;
+    if (withinX && withinY) return entity;
+  }
+  return null;
+}
+
+function hideEntityTooltip() {
+  game.hoveredEntity = null;
+  entityTooltipEl.hidden = true;
+}
+
+function updateEntityTooltip(event) {
+  const rect = canvas.getBoundingClientRect();
+  const mouseX = event.clientX - rect.left;
+  const mouseY = event.clientY - rect.top;
+  const hovered = findHoveredEntityAtScreen(mouseX, mouseY);
+
+  if (!hovered) {
+    hideEntityTooltip();
+    return;
+  }
+
+  game.hoveredEntity = hovered;
+  const role = hovered.role === 'player' ? 'You' : hovered.role;
+  const room = entityRoom(hovered);
+  entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>❤️ HP: ${Math.round(hovered.hp)} | ⚡ EN: ${Math.round(hovered.energy)}<br>🚻 Bladder: ${Math.round(hovered.bladder)}% | 📍 ${room}`;
+
+  // Keep tooltip inside the canvas-wrap bounds for legibility.
+  const wrap = canvas.parentElement.getBoundingClientRect();
+  const left = Math.min(mouseX + 16, wrap.width - 190);
+  const top = Math.max(8, mouseY - 56);
+  entityTooltipEl.style.left = `${left}px`;
+  entityTooltipEl.style.top = `${top}px`;
+  entityTooltipEl.hidden = false;
+}
+
 // -----------------------------------------------------------------------------
 // Main loop
 // -----------------------------------------------------------------------------
@@ -2170,7 +2330,8 @@ function loop(now) {
     for (const entity of game.entities) {
       if (!hasArrivedForCurrentPeriod(entity)) continue;
       const moveMagnitude = Math.abs(entity.vx) + Math.abs(entity.vy);
-      entity.animPhase += dt * (0.006 + moveMagnitude * 0.01);
+      // Keep walk cycle readable: slightly slower leg animation while movement speed is higher.
+      entity.animPhase += dt * (0.004 + moveMagnitude * 0.0065);
     }
 
     updateAI(dt);
@@ -2217,11 +2378,20 @@ window.addEventListener('keyup', (event) => {
 
 pauseBtn.onclick = togglePause;
 
+toggleNamesBtn.onclick = () => {
+  game.showNpcNames = !game.showNpcNames;
+  updateNameToggleButton();
+};
+
+canvas.addEventListener('mousemove', updateEntityTooltip);
+canvas.addEventListener('mouseleave', hideEntityTooltip);
+
 announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
 updateMission();
 updateAutoStatus();
 updateBladderHud();
 updateTodo();
+updateNameToggleButton();
 requestAnimationFrame(loop);
 
 // Lightweight debug hooks help automated validation without changing gameplay UI.
