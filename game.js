@@ -10,6 +10,7 @@ const energyEl = document.getElementById('energy');
 const bladderEl = document.getElementById('bladder');
 const hygieneEl = document.getElementById('hygiene');
 const autoStatusEl = document.getElementById('autoStatus');
+const weatherEl = document.getElementById('weather');
 const missionEl = document.getElementById('mission');
 const eventsEl = document.getElementById('events');
 const todoEl = document.getElementById('todo');
@@ -188,6 +189,30 @@ const waterFountains = [
   { x: 151, y: 86, label: 'Gate Fountain' },
 ];
 
+// Urinals are separate, explicit interaction points in toilets.
+const urinals = [
+  { x: 12, y: 98, label: 'West Urinal' },
+  { x: 16, y: 98, label: 'Middle Urinal' },
+  { x: 20, y: 98, label: 'East Urinal' },
+];
+
+const weatherModes = {
+  sunny: { icon: '☀️', label: 'Sunny' },
+  rain: { icon: '🌧️', label: 'Rain' },
+  snow: { icon: '❄️', label: 'Snow' },
+  windy: { icon: '💨', label: 'Windy' },
+};
+
+// Trees ring the outdoor grounds; they visibly sway in wind.
+const trees = [
+  { x: 88, y: 78 }, { x: 96, y: 78 }, { x: 104, y: 78 }, { x: 112, y: 78 },
+  { x: 120, y: 78 }, { x: 128, y: 78 }, { x: 136, y: 78 }, { x: 144, y: 78 },
+  { x: 86, y: 86 }, { x: 86, y: 94 }, { x: 86, y: 102 },
+  { x: 162, y: 86 }, { x: 162, y: 94 }, { x: 162, y: 102 },
+  { x: 92, y: 108 }, { x: 100, y: 108 }, { x: 108, y: 108 }, { x: 116, y: 108 },
+  { x: 124, y: 108 }, { x: 132, y: 108 }, { x: 140, y: 108 }, { x: 148, y: 108 },
+];
+
 // Themed props provide flavour in rooms and can be used as throwables.
 const classroomProps = [
   { room: 'Art Room', x: 38, y: 87, icon: 'A', color: '#ffd6a5', kind: 'artwork', throwable: true, hiddenUntil: 0 },
@@ -340,6 +365,13 @@ const game = {
   lastBoardCalloutAt: 0,
   latePenaltyGiven: false,
   dayCount: 1,
+  // Rotating break-duty teacher changes once per school day.
+  dutyTeacherName: null,
+  dutyPatrolIndex: -1,
+  lastDutyPatrolAt: 0,
+  weather: 'sunny',
+  weatherWeek: 1,
+  weatherFx: [],
   toiletDirt: 12,
   toiletsBlocked: false,
   toiletFloodUntil: 0,
@@ -578,6 +610,23 @@ function updateFloorStatus() {
 
 function updateAutoStatus() {
   autoStatusEl.textContent = `🤖 Auto: ${game.autoMode ? 'ON' : 'OFF'}`;
+}
+
+function updateWeatherHud() {
+  const meta = weatherModes[game.weather] || weatherModes.sunny;
+  weatherEl.textContent = `${meta.icon} Weather: ${meta.label}`;
+  weatherEl.title = `Weekly weather is ${meta.label}. It changes every 7 school days.`;
+}
+
+function pickWeeklyWeather() {
+  const week = Math.floor((game.dayCount - 1) / 7) + 1;
+  if (game.weatherWeek === week) return;
+  game.weatherWeek = week;
+  const keys = Object.keys(weatherModes);
+  game.weather = keys[Math.floor(game.rng() * keys.length)] || 'sunny';
+  announce(`${weatherModes[game.weather].icon} New week weather: ${weatherModes[game.weather].label}.`, { force: true });
+  playSfx('weather');
+  updateWeatherHud();
 }
 
 function updateBladderHud() {
@@ -926,6 +975,7 @@ function resetToSchoolMorning() {
   game.toiletFloodUntil = 0;
   game.lastHygieneShameAt = 0;
   game.hygiene = Math.max(55, game.hygiene - 3);
+  pickWeeklyWeather();
 
   if (game.dayCount > 1 && game.dayCount % TOILET_BLOCK_INTERVAL_DAYS === 0) {
     game.toiletsBlocked = true;
@@ -973,10 +1023,16 @@ function resetToSchoolMorning() {
     entity.assignedWaste = null;
   }
 
+  assignDailyDutyTeacher();
+
   setPeriod(0);
   updateBladderHud();
   updateHygieneHud();
+  updateWeatherHud();
   announce('🌅 New school day: students gather at the gates ready for registration.');
+  if (game.dutyTeacherName) {
+    announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
+  }
 }
 
 function updateAutoPilot(dt) {
@@ -1126,6 +1182,8 @@ function playSfx(kind) {
     interact: { freq: 520, endFreq: 470, duration: 0.06, type: 'sine', gain: 0.03 },
     // Short per-character chalk tick for board writing animation.
     chalk: { freq: 1450, endFreq: 980, duration: 0.03, type: 'triangle', gain: 0.012 },
+    urinal: { freq: 680, endFreq: 420, duration: 0.11, type: 'sine', gain: 0.03 },
+    weather: { freq: 260, endFreq: 330, duration: 0.08, type: 'triangle', gain: 0.02 },
   };
   const preset = presets[kind] || presets.interact;
 
@@ -1217,11 +1275,14 @@ function updateTodo() {
     `Bladder: ${Math.round(game.bladder)}%`,
     `Auto mode: ${game.autoMode ? 'ON' : 'OFF'}`,
     `Hygiene: ${Math.round(game.hygiene)}%`,
+    `Weather: ${(weatherModes[game.weather] || weatherModes.sunny).label}`,
+    `Break duty teacher: ${game.dutyTeacherName || 'Unassigned'}`,
     `Energy should stay above 25`,
     `Use vending machines for snacks/drinks, then bin packaging`,
     `Use outside fountains (H2O) to lower bladder pressure`,
     `Throwing rubbish (V) can KO pupils but teachers punish witnesses`,
     `Mr Mop cleans old litter after 20s and scrubs dirty toilets`,
+    `Rain: students shelter indoors | Snow: snowball chatter | Sun: football | Wind: running`,
     `If toilets are blocked/flooded, avoid bladder emergencies until they reopen`,
     `Avoid teachers while bunking`,
   ];
@@ -1748,6 +1809,24 @@ function interact() {
     return;
   }
 
+  // Urinals in toilets are explicit interact points and use the action key.
+  const nearbyUrinal = urinals.find((urinal) => distance(player, urinal) < 1.7);
+  if (nearbyUrinal && entityRoom(player) === 'Toilets') {
+    if (game.toiletsBlocked) {
+      announce('🚫 Urinals are unusable while toilets are flooded.', { force: true });
+      return;
+    }
+    const previousBladder = game.bladder;
+    game.bladder = Math.max(0, game.bladder - 75);
+    game.dailyToiletVisits += 1;
+    game.toiletDirt = Math.min(TOILET_MAX_DIRT, game.toiletDirt + TOILET_DIRT_PER_USE * 0.8);
+    game.warnedNeedToilet = game.bladder >= 75;
+    updateBladderHud();
+    playSfx('urinal');
+    announce(`🚹 Eric used ${nearbyUrinal.label}. Bladder ${Math.round(previousBladder)}% → ${Math.round(game.bladder)}%.`);
+    return;
+  }
+
   // Read blackboard instructions.
   const board = blackboards.find((b) => distance(player, b) < 2.2);
   if (board && board.text) {
@@ -1855,6 +1934,29 @@ function teacherHomeRoom(teacherName) {
   return teacherHomeRoomMap[teacherName] || 'Staff Room';
 }
 
+function teachersInRoster() {
+  return game.entities.filter((entity) => entity.role === 'teacher');
+}
+
+function assignDailyDutyTeacher() {
+  const teachers = teachersInRoster();
+  if (!teachers.length) return;
+  const index = (Math.max(1, game.dayCount) - 1) % teachers.length;
+  game.dutyTeacherName = teachers[index].name;
+  game.dutyPatrolIndex = -1;
+  game.lastDutyPatrolAt = 0;
+}
+
+function dutyTeacherBreakTarget(now = performance.now()) {
+  // Duty teacher alternates between field and classrooms to keep break-time supervised.
+  const patrolRooms = ['P.E. Field', 'Maths', 'English', 'Science Lab', 'Geography', 'Art Room'];
+  if (!game.lastDutyPatrolAt || now - game.lastDutyPatrolAt > 18000) {
+    game.dutyPatrolIndex = (game.dutyPatrolIndex + 1) % patrolRooms.length;
+    game.lastDutyPatrolAt = now;
+  }
+  return roomCenter(patrolRooms[game.dutyPatrolIndex]);
+}
+
 function chooseTarget(entity, currentPeriod) {
   // Janitor idles in his room unless there is a cleanup callout.
   if (entity.role === 'janitor') {
@@ -1890,6 +1992,11 @@ function chooseTarget(entity, currentPeriod) {
   }
 
   if (entity.role === 'teacher') {
+    if (currentPeriod.mode === 'break') {
+      return entity.name === game.dutyTeacherName
+        ? dutyTeacherBreakTarget()
+        : roomCenter('Staff Room');
+    }
     return roomCenter(currentPeriod.room);
   }
 
@@ -2079,9 +2186,11 @@ function updateAI(dt) {
 
     const inLesson = isSupervisedPeriod(current);
     const dtSeconds = dt / 1000;
+    const isStudent = entity.role !== 'teacher' && entity.role !== 'janitor';
+    const isOutside = ['P.E. Field', 'School Gates', 'Bike Sheds'].includes(entityRoom(entity));
 
     // Keep students in supervised, staffed classrooms instead of empty rooms.
-    if (inLesson && entity.role !== 'teacher' && entity.role !== 'janitor') {
+    if (inLesson && isStudent) {
       entity.lessonRoom = chooseLessonRoomForStudent(entity, current);
       entity.target = nearestFreeSeatInRoom(entity.lessonRoom, entity)
         || getSeatPosition(entity.lessonRoom, entity.seatIndex)
@@ -2092,16 +2201,35 @@ function updateAI(dt) {
       const isAssignedTeacher = !assignedTeacherName || entity.name === assignedTeacherName;
       const destinationRoom = isAssignedTeacher ? current.room : teacherHomeRoom(entity.name);
       entity.target = teacherBoardSpot(destinationRoom);
+    } else if (current.mode === 'break' && entity.role === 'teacher') {
+      // One rotating duty teacher patrols outside + classrooms; all others stay in staff room.
+      entity.lessonRoom = null;
+      entity.target = entity.name === game.dutyTeacherName
+        ? dutyTeacherBreakTarget()
+        : roomCenter('Staff Room');
     } else if (!entity.target || game.rng() < 0.01) {
       entity.lessonRoom = null;
       entity.target = chooseTarget(entity, current);
     }
 
     // General student misbehaviour: keep rare and mostly outside lessons.
-    if (entity.role !== 'teacher' && entity.role !== 'janitor' && !inLesson && supervised && game.rng() < 0.0016) {
+    if (isStudent && !inLesson && supervised && game.rng() < 0.0016) {
       entity.mood = 'angry';
       entity.target = roomCenter(game.rng() < 0.5 ? 'P.E. Field' : 'Ground Corridor');
       announce(`😈 ${entity.name} started misbehaving in ${current.period}.`);
+    }
+
+    // In class students periodically attempt teacher prompts and can daydream.
+    if (inLesson && isStudent && entityRoom(entity) === current.room && game.rng() < 0.0036) {
+      if (game.rng() < 0.74) {
+        const responses = ['I know this! 🙋', 'Maybe 42?', 'Can I try? 🙂', 'I think it is this... 🤔'];
+        say(entity, responses[Math.floor(game.rng() * responses.length)]);
+        announce(`📚 ${entity.name} attempted the class question.`, { source: entity, range: 7.5 });
+        entity.emotion = Math.min(100, entity.emotion + 1.2);
+      } else {
+        const daydreams = ['🍕 Lunch soon?', '⚽ After school match...', '🎮 New game later!', '☁️ Looking out the window...'];
+        think(entity, daydreams[Math.floor(game.rng() * daydreams.length)], 3400);
+      }
     }
 
     // Angelface can slip out through the gates unnoticed and re-enter later.
@@ -2147,19 +2275,30 @@ function updateAI(dt) {
     }
 
     // Break-time social bubbles make playground time feel alive.
-    if (current.mode === 'break' && entity.role !== 'teacher' && entity.role !== 'janitor' && game.rng() < 0.007) {
-      const chat = ['Nice pass!', 'Meet by the canteen.', 'Did you see that punch?', "I'm starving.", 'Race you to the field!'];
+    if (current.mode === 'break' && isStudent && game.rng() < 0.007) {
+      const chat = ['😄 Nice pass!', '🤝 Meet by the canteen.', '😲 Did you see that punch?', "🍟 I'm starving.", '🏃 Race you to the field!'];
       say(entity, chat[Math.floor(game.rng() * chat.length)]);
       entity.emotion = Math.min(100, entity.emotion + 1.8);
     }
 
-    // Students congregate on the field and play football in breaks/lunch.
-    if (current.mode === 'break' && entity.role !== 'teacher' && entity.role !== 'janitor' && game.rng() < 0.01) {
-      entity.target = roomCenter('P.E. Field');
-      if (entityRoom(entity) === 'P.E. Field' && game.rng() < 0.18) {
-        say(entity, '⚽ Pass it!');
-        think(entity, 'This is the best part of school.');
-        entity.emotion = Math.min(100, entity.emotion + 2.2);
+    // Weather drives break-time choices and social reactions.
+    if (current.mode === 'break' && isStudent && game.rng() < 0.011) {
+      if (game.weather === 'rain') {
+        entity.target = roomCenter('Assembly Hall');
+        if (isOutside) think(entity, '🌧️ No thanks, staying inside today.');
+      } else if (game.weather === 'snow') {
+        entity.target = roomCenter('P.E. Field');
+        if (entityRoom(entity) === 'P.E. Field' && game.rng() < 0.2) say(entity, '❄️ Snowball fight! 😆');
+      } else if (game.weather === 'sunny') {
+        entity.target = roomCenter('P.E. Field');
+        if (entityRoom(entity) === 'P.E. Field' && game.rng() < 0.2) say(entity, '⚽ Pass it! 😎');
+      } else if (game.weather === 'windy') {
+        entity.target = roomCenter('School Gates');
+        if (isOutside && game.rng() < 0.16) {
+          say(entity, '💨 Run! Run! 😄');
+          entity.vx += (game.rng() - 0.5) * 0.45;
+          entity.vy += (game.rng() - 0.5) * 0.22;
+        }
       }
     }
 
@@ -2612,6 +2751,68 @@ function drawBrickTexture(drawX, drawY, drawW, drawH) {
   }
 }
 
+function updateWeatherFx(dt) {
+  // Keep weather particles bounded so rendering stays lightweight.
+  const spawnCount = game.weather === 'rain' ? 3 : game.weather === 'snow' ? 2 : game.weather === 'windy' ? 1 : 0;
+  for (let i = 0; i < spawnCount; i += 1) {
+    game.weatherFx.push({ x: game.rng() * WORLD.w, y: CAMERA.y - 2 + game.rng() * 3, life: 6000 + game.rng() * 3000 });
+  }
+
+  const speed = game.weather === 'rain' ? 0.05 : game.weather === 'snow' ? 0.018 : 0.03;
+  const drift = game.weather === 'windy' ? 0.04 : game.weather === 'snow' ? 0.01 : 0.005;
+  for (const particle of game.weatherFx) {
+    particle.y += dt * speed;
+    particle.x += (game.rng() - 0.45) * drift * dt;
+    particle.life -= dt;
+  }
+  game.weatherFx = game.weatherFx.filter((particle) => particle.life > 0 && particle.y < WORLD.h + 3);
+}
+
+function drawTrees(sx, sy) {
+  const windSway = game.weather === 'windy' ? Math.sin(performance.now() / 120) * 2.8 : 0;
+  for (const tree of trees) {
+    const p = worldToScreen(tree.x, tree.y);
+    ctx.fillStyle = '#6b4f3a';
+    ctx.fillRect(p.sx - 2, p.sy - 3, 4, 10);
+    ctx.fillStyle = '#2d6a4f';
+    ctx.beginPath();
+    ctx.arc(p.sx + windSway, p.sy - 9, Math.max(5, sx * 0.42), 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawWeatherOverlay() {
+  const skyTint = game.weather === 'rain' ? 'rgba(90,110,150,0.22)'
+    : game.weather === 'snow' ? 'rgba(230,240,255,0.2)'
+      : game.weather === 'windy' ? 'rgba(210,228,255,0.1)'
+        : 'rgba(255,230,140,0.08)';
+  ctx.fillStyle = skyTint;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const sx = canvas.width / CAMERA.w;
+  const sy = canvas.height / CAMERA.h;
+  for (const particle of game.weatherFx) {
+    const px = (particle.x - CAMERA.x) * sx;
+    const py = (particle.y - CAMERA.y) * sy;
+    if (game.weather === 'rain') {
+      ctx.strokeStyle = 'rgba(194,224,255,0.72)';
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(px + 2, py + 8);
+      ctx.stroke();
+    } else if (game.weather === 'snow') {
+      ctx.fillStyle = 'rgba(245,250,255,0.9)';
+      ctx.fillRect(px, py, 2, 2);
+    } else if (game.weather === 'windy') {
+      ctx.strokeStyle = 'rgba(235,245,255,0.55)';
+      ctx.beginPath();
+      ctx.moveTo(px - 5, py);
+      ctx.lineTo(px + 7, py);
+      ctx.stroke();
+    }
+  }
+}
+
 function drawWorld() {
   const sx = canvas.width / CAMERA.w;
   const sy = canvas.height / CAMERA.h;
@@ -2698,6 +2899,8 @@ function drawWorld() {
     ctx.fillText(room.name.toUpperCase(), drawX + 6, drawY + 12);
   }
 
+  drawTrees(sx, sy);
+
   // Exit gate warning so players clearly see where escaping gets blocked.
   const gateTop = worldToScreen(schoolExit.x, schoolExit.yMin);
   const gateBottom = worldToScreen(schoolExit.x, schoolExit.yMax);
@@ -2769,6 +2972,14 @@ function drawWorld() {
     ctx.fillText('H2O', p.sx - 7, p.sy - 13);
   }
 
+  for (const urinal of urinals) {
+    const p = worldToScreen(urinal.x, urinal.y);
+    fillDitherRect(p.sx - 6, p.sy - 9, 12, 14, '#d6deea', '#b8c2d2', 2);
+    ctx.fillStyle = '#52647a';
+    ctx.font = 'bold 7px monospace';
+    ctx.fillText('U', p.sx - 2, p.sy);
+  }
+
   for (const waste of game.litter) {
     const p = worldToScreen(waste.x, waste.y);
     ctx.fillStyle = waste.kind === 'sick' ? '#8ac926' : '#f4a261';
@@ -2816,6 +3027,8 @@ function drawWorld() {
     ctx.font = 'bold 8px monospace';
     ctx.fillText('?', p.sx - 3, p.sy + 3);
   }
+
+  drawWeatherOverlay();
 }
 
 function drawEntities() {
@@ -3276,6 +3489,7 @@ function loop(now) {
     }
 
     updateAI(dt);
+    updateWeatherFx(dt);
     updateBoardWriting(dt);
     updatePellets(dt);
     scheduleWeeklySickEvent();
@@ -3331,11 +3545,16 @@ toggleNamesBtn.onclick = () => {
 canvas.addEventListener('mousemove', updateEntityTooltip);
 canvas.addEventListener('mouseleave', hideEntityTooltip);
 
+assignDailyDutyTeacher();
 announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
+if (game.dutyTeacherName) {
+  announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
+}
 updateMission();
 updateAutoStatus();
 updateBladderHud();
 updateHygieneHud();
+updateWeatherHud();
 updateTodo();
 updateNameToggleButton();
 requestAnimationFrame(loop);
