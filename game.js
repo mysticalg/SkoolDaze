@@ -88,6 +88,8 @@ const rooms = [
   { name: 'Toilets', x: 8, y: 94, w: 20, h: 14, floor: 'ground', type: 'hall' },
   { name: 'Janitor Room', x: 30, y: 94, w: 12, h: 14, floor: 'ground', type: 'hall' },
   { name: 'Assembly Hall', x: 44, y: 94, w: 40, h: 14, floor: 'ground', type: 'hall' },
+  // Kitchen sits beside the lunch/assembly hall so lunchtime staff can prep food nearby.
+  { name: 'Kitchen', x: 84, y: 94, w: 6, h: 14, floor: 'ground', type: 'hall' },
   { name: 'P.E. Field', x: 90, y: 80, w: 70, h: 28, floor: 'ground', type: 'outdoor' },
   { name: 'Bike Sheds', x: 92, y: 94, w: 22, h: 12, floor: 'ground', type: 'outdoor' },
   { name: 'School Gates', x: 148, y: 80, w: 18, h: 28, floor: 'ground', type: 'outdoor' },
@@ -249,6 +251,8 @@ const classroomProps = [
   { room: 'Art Room', x: 38, y: 87, icon: 'A', color: '#ffd6a5', kind: 'artwork', throwable: true, hiddenUntil: 0 },
   { room: 'Art Room', x: 42, y: 89, icon: 'P', color: '#ff9f1c', kind: 'paint set', throwable: true, hiddenUntil: 0 },
   { room: 'Art Room', x: 50, y: 90, icon: 'B', color: '#2ec4b6', kind: 'paint brush', throwable: true, hiddenUntil: 0 },
+  { room: 'Kitchen', x: 86, y: 98, icon: '🍲', color: '#ffd6a5', kind: 'stock pot', throwable: false, hiddenUntil: 0 },
+  { room: 'Kitchen', x: 88, y: 101, icon: '🥄', color: '#ffe5b4', kind: 'serving spoon', throwable: false, hiddenUntil: 0 },
   { room: 'Science Lab', x: 14, y: 10, icon: 'S', color: '#80ed99', kind: 'beaker', throwable: true, hiddenUntil: 0 },
   { room: 'Science Lab', x: 11, y: 6, icon: '⚗', color: '#b7efc5', kind: 'chemical flask', throwable: true, hiddenUntil: 0 },
   { room: 'Science Lab', x: 17, y: 6, icon: '🧪', color: '#95d5b2', kind: 'lab vial', throwable: true, hiddenUntil: 0 },
@@ -1094,8 +1098,8 @@ game.entities.push(
     title: 'Janitor', attire: 'janitorOveralls', moustache: true, hair: 'spiky',
     traitOverrides: { friendly: 71, wisdom: 74, honor: 76, discipline: 83 },
   }),
-  mkEntity('Dinner Lady Dot', 'dinnerLady', 116, 88, '#ffcad4', {
-    title: 'Dinner Supervisor', attire: 'dinnerLady', whistle: true,
+  mkEntity('Dinner Lady Dot', 'dinnerLady', 87, 100, '#ffcad4', {
+    title: 'Dinner Supervisor & Kitchen Lead', attire: 'dinnerLady', whistle: true,
     quotes: ['No rough play on my watch.', 'Spread out and calm down.'],
     traitOverrides: { discipline: 92, wisdom: 79, friendly: 66, honor: 84, aggression: 42 },
   }),
@@ -2508,6 +2512,7 @@ function updateTodo() {
     `Hygiene: ${Math.round(game.hygiene)}%`,
     `Weather: ${(weatherModes[game.weather] || weatherModes.sunny).label}`,
     `Break duty teacher: ${game.dutyTeacherName || 'Unassigned'}`,
+    `Dinner Lady Dot: kitchen prep outside lunch, field duty at lunch`,
     `Energy should stay above 25`,
     `Use vending machines for snacks/drinks, then bin packaging`,
     `Use outside fountains (H2O) to lower bladder pressure`,
@@ -3616,9 +3621,9 @@ function chooseTarget(entity, currentPeriod) {
   }
 
   if (entity.role === 'dinnerLady') {
-    // Dinner lady is a lunchtime-only field supervisor; otherwise she waits inside.
+    // Dinner lady usually works in the kitchen and only heads to the field to supervise lunch.
     if (isLunchtimePeriod(currentPeriod)) return roomCenter('P.E. Field');
-    return roomCenter('Staff Room');
+    return roomCenter('Kitchen');
   }
 
   // High bladder urgency overrides normal timetable targets.
