@@ -89,8 +89,8 @@ const rooms = [
   { name: 'Geography', x: 8, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
   { name: 'Art Room', x: 34, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
   { name: 'History', x: 60, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
-  // Kitchen sits beside the lunch/assembly hall so lunchtime staff can prep food nearby.
-  { name: 'Kitchen', x: 84, y: 94, w: 6, h: 14, floor: 'ground', type: 'hall' },
+  // Kitchen is now directly beside Assembly Hall so wayfinding is intuitive.
+  { name: 'Kitchen', x: 112, y: 66, w: 16, h: 10, floor: 'ground', type: 'hall' },
   { name: 'P.E. Field', x: 90, y: 80, w: 70, h: 28, floor: 'ground', type: 'outdoor' },
   { name: 'Bike Sheds', x: 92, y: 94, w: 22, h: 12, floor: 'ground', type: 'outdoor' },
   { name: 'School Gates', x: 148, y: 80, w: 18, h: 28, floor: 'ground', type: 'outdoor' },
@@ -252,8 +252,8 @@ const classroomProps = [
   { room: 'Art Room', x: 38, y: 87, icon: 'A', color: '#ffd6a5', kind: 'artwork', throwable: true, hiddenUntil: 0 },
   { room: 'Art Room', x: 42, y: 89, icon: 'P', color: '#ff9f1c', kind: 'paint set', throwable: true, hiddenUntil: 0 },
   { room: 'Art Room', x: 50, y: 90, icon: 'B', color: '#2ec4b6', kind: 'paint brush', throwable: true, hiddenUntil: 0 },
-  { room: 'Kitchen', x: 86, y: 98, icon: '🍲', color: '#ffd6a5', kind: 'stock pot', throwable: false, hiddenUntil: 0 },
-  { room: 'Kitchen', x: 88, y: 101, icon: '🥄', color: '#ffe5b4', kind: 'serving spoon', throwable: false, hiddenUntil: 0 },
+  { room: 'Kitchen', x: 116, y: 69, icon: '🍲', color: '#ffd6a5', kind: 'stock pot', throwable: false, hiddenUntil: 0 },
+  { room: 'Kitchen', x: 121, y: 72, icon: '🥄', color: '#ffe5b4', kind: 'serving spoon', throwable: false, hiddenUntil: 0 },
   { room: 'Science Lab', x: 14, y: 10, icon: 'S', color: '#80ed99', kind: 'beaker', throwable: true, hiddenUntil: 0 },
   { room: 'Science Lab', x: 11, y: 6, icon: '⚗', color: '#b7efc5', kind: 'chemical flask', throwable: true, hiddenUntil: 0 },
   { room: 'Science Lab', x: 17, y: 6, icon: '🧪', color: '#95d5b2', kind: 'lab vial', throwable: true, hiddenUntil: 0 },
@@ -4664,6 +4664,14 @@ function worldToScreen(x, y) {
   };
 }
 
+function screenToWorld(screenX, screenY) {
+  // Convert rendered canvas coordinates back to world units for hover hit-testing.
+  return {
+    x: CAMERA.x + (screenX / canvas.width) * CAMERA.w,
+    y: CAMERA.y + (screenY / canvas.height) * CAMERA.h,
+  };
+}
+
 // Draw a subtle checker dither so large surfaces feel textured, not flat.
 function fillDitherRect(x, y, w, h, colorA, colorB, step = 4) {
   ctx.fillStyle = colorA;
@@ -5611,34 +5619,114 @@ function hideEntityTooltip() {
   entityTooltipEl.hidden = true;
 }
 
+function positionTooltip(pointer, topOffset = 118, maxWidth = 260) {
+  // Shared placement keeps entity + world tooltips inside the visible game panel.
+  const wrap = canvas.parentElement.getBoundingClientRect();
+  const left = Math.min(pointer.wrapX + 16, wrap.width - maxWidth);
+  const top = Math.max(8, pointer.wrapY - topOffset);
+  entityTooltipEl.style.left = `${left}px`;
+  entityTooltipEl.style.top = `${top}px`;
+}
+
 function tooltipBar(value, color) {
   const clamped = Math.max(0, Math.min(100, Math.round(value || 0)));
   return `<span class="tooltip-meter"><span style="width:${clamped}%;background:${color};"></span></span>${clamped}%`;
+}
+
+function findHoveredWorldTargetAtScreen(mouseX, mouseY) {
+  const world = screenToWorld(mouseX, mouseY);
+
+  // Room detection gives players immediate orientation feedback anywhere on the map.
+  const room = rooms.find((candidate) => (
+    world.x >= candidate.x && world.x <= candidate.x + candidate.w
+    && world.y >= candidate.y && world.y <= candidate.y + candidate.h
+  ));
+
+  const pointTargets = [];
+  const addPoints = (points, labelBuilder, hitRadius = 1.1) => {
+    for (const point of points) {
+      pointTargets.push({
+        x: point.x,
+        y: point.y,
+        hitRadius,
+        title: labelBuilder(point),
+      });
+    }
+  };
+
+  // Keep item labels short and descriptive to avoid clutter while moving the mouse.
+  addPoints(vendingMachines, (point) => `🥤 ${point.label}`);
+  addPoints(trashCans, (point) => `🗑️ ${point.label}`);
+  addPoints(waterFountains, (point) => `⛲ ${point.label}`);
+  addPoints(urinals, (point) => `🚻 ${point.label}`, 0.95);
+  addPoints(showers, (point) => `🚿 ${point.label}`, 0.95);
+  addPoints(roomDoors, (point) => `🚪 Door to ${point.room}`);
+  addPoints(stairs, (point) => `🪜 ${point.label}`);
+  addPoints(blackboards, (point) => `🧑‍🏫 ${point.room} blackboard`);
+
+  for (const prop of classroomProps) {
+    if ((prop.hiddenUntil || 0) > game.timeMinutes) continue;
+    pointTargets.push({ x: prop.x, y: prop.y, hitRadius: 0.9, title: `${prop.icon} ${prop.kind}` });
+  }
+
+  for (const item of game.collectables || []) {
+    if (item.collected) continue;
+    pointTargets.push({ x: item.x, y: item.y, hitRadius: 0.9, title: `${item.icon || '📦'} ${item.name || item.kind || 'Collectable item'}` });
+  }
+
+  let closestPoint = null;
+  for (const target of pointTargets) {
+    const dx = world.x - target.x;
+    const dy = world.y - target.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance <= target.hitRadius && (!closestPoint || distance < closestPoint.distance)) {
+      closestPoint = { ...target, distance };
+    }
+  }
+
+  if (closestPoint) {
+    return {
+      heading: closestPoint.title,
+      details: room ? `📍 ${room.name}` : '📍 School grounds',
+    };
+  }
+
+  if (room) {
+    return {
+      heading: `🗺️ ${room.name}`,
+      details: `Floor: ${room.floor} • ${room.type}`,
+    };
+  }
+
+  return null;
 }
 
 function updateEntityTooltip(event) {
   const pointer = canvasPointerToInternal(event);
   const hovered = findHoveredEntityAtScreen(pointer.mouseX, pointer.mouseY);
 
-  if (!hovered) {
+  if (hovered) {
+    game.hoveredEntity = hovered;
+    const role = hovered.role === 'player' ? 'You' : hovered.role === 'dinnerLady' ? 'Dinner lady' : hovered.role;
+    const room = entityRoom(hovered);
+    const pocketItems = (hovered.inventory || []).slice(0, 3).join(', ');
+    const moreItems = (hovered.inventory || []).length > 3 ? ` +${hovered.inventory.length - 3}` : '';
+    const relationText = hovered.role === 'player' ? 'self' : relationshipLabel(hovered.relationships?.Eric || 0);
+    entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>📍 ${room} | 🤝 ${relationText}<br>⚡ Energy ${tooltipBar(hovered.energy, '#ffd166')}<br>🚻 Bladder ${tooltipBar(hovered.bladder, '#ff9f1c')}<br>🧼 Hygiene ${tooltipBar(hovered.hygiene || 0, '#72efdd')}<br>❤️ HP ${tooltipBar(hovered.hp, '#ef476f')}<br>🧠 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>💷 £${Math.round(hovered.money || 0)} | 🤝 Trade ${Math.round(hovered.traits?.trading || 0)} | 🗣️ Barter ${Math.round(hovered.traits?.barter || 0)}<br>📝 Notes: ${hovered.title || hovered.profile?.title || 'No public notes yet'}<br>🎒 ${pocketItems || 'nothing useful'}${moreItems}`;
+    positionTooltip(pointer, 118, 260);
+    entityTooltipEl.hidden = false;
+    return;
+  }
+
+  const worldTarget = findHoveredWorldTargetAtScreen(pointer.mouseX, pointer.mouseY);
+  if (!worldTarget) {
     hideEntityTooltip();
     return;
   }
 
-  game.hoveredEntity = hovered;
-  const role = hovered.role === 'player' ? 'You' : hovered.role === 'dinnerLady' ? 'Dinner lady' : hovered.role;
-  const room = entityRoom(hovered);
-  const pocketItems = (hovered.inventory || []).slice(0, 3).join(', ');
-  const moreItems = (hovered.inventory || []).length > 3 ? ` +${hovered.inventory.length - 3}` : '';
-  const relationText = hovered.role === 'player' ? 'self' : relationshipLabel(hovered.relationships?.Eric || 0);
-  entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>📍 ${room} | 🤝 ${relationText}<br>⚡ Energy ${tooltipBar(hovered.energy, '#ffd166')}<br>🚻 Bladder ${tooltipBar(hovered.bladder, '#ff9f1c')}<br>🧼 Hygiene ${tooltipBar(hovered.hygiene || 0, '#72efdd')}<br>❤️ HP ${tooltipBar(hovered.hp, '#ef476f')}<br>🧠 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>💷 £${Math.round(hovered.money || 0)} | 🤝 Trade ${Math.round(hovered.traits?.trading || 0)} | 🗣️ Barter ${Math.round(hovered.traits?.barter || 0)}<br>📝 Notes: ${hovered.title || hovered.profile?.title || 'No public notes yet'}<br>🎒 ${pocketItems || 'nothing useful'}${moreItems}`;
-
-  // Keep tooltip inside the canvas-wrap bounds for legibility.
-  const wrap = canvas.parentElement.getBoundingClientRect();
-  const left = Math.min(pointer.wrapX + 16, wrap.width - 260);
-  const top = Math.max(8, pointer.wrapY - 118);
-  entityTooltipEl.style.left = `${left}px`;
-  entityTooltipEl.style.top = `${top}px`;
+  game.hoveredEntity = null;
+  entityTooltipEl.innerHTML = `<strong>${worldTarget.heading}</strong><br>${worldTarget.details}`;
+  positionTooltip(pointer, 64, 230);
   entityTooltipEl.hidden = false;
 }
 
