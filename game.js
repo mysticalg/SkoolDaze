@@ -90,6 +90,7 @@ const rooms = [
   { name: 'Boiler Room', x: 8, y: 114, w: 24, h: 14, floor: 'lower', type: 'hall' },
   { name: 'Storage', x: 38, y: 114, w: 24, h: 14, floor: 'lower', type: 'hall' },
   { name: 'Maintenance', x: 68, y: 114, w: 24, h: 14, floor: 'lower', type: 'hall' },
+  { name: 'Medical Bay', x: 94, y: 114, w: 30, h: 14, floor: 'lower', type: 'hall' },
 ];
 
 const stairs = [
@@ -248,7 +249,23 @@ const classroomProps = [
   { room: 'History', x: 80, y: 90, icon: '📜', color: '#f7ede2', kind: 'archive scroll', throwable: true, hiddenUntil: 0 },
   { room: 'Computer Room', x: 134, y: 10, icon: 'C', color: '#bde0fe', kind: 'keyboard', throwable: true, hiddenUntil: 0 },
   { room: 'Music Room', x: 112, y: 46, icon: 'D', color: '#f4978e', kind: 'drum stick', throwable: true, hiddenUntil: 0 },
-  { room: 'Headmaster Office', x: 164, y: 46, icon: 'R', color: '#e5989b', kind: 'rule book', throwable: true, hiddenUntil: 0 },
+  { room: 'Headmaster Office', x: 164, y: 46, icon: 'R', color: '#e5989b', kind: 'rule book', throwable: true, hiddenUntil: 0, size: 1 },
+  { room: 'Maths', x: 22, y: 40, icon: '∑', color: '#cde7ff', kind: 'sum chart', throwable: false, hiddenUntil: 0, size: 2 },
+  { room: 'Maths', x: 27, y: 40, icon: 'π', color: '#d1f5ff', kind: 'number wheel', throwable: false, hiddenUntil: 0, size: 2 },
+  { room: 'English', x: 54, y: 40, icon: '📰', color: '#f7ede2', kind: 'newspaper rack', throwable: false, hiddenUntil: 0, size: 2 },
+  { room: 'English', x: 58, y: 40, icon: '✒', color: '#e4c1f9', kind: 'ink set', throwable: true, hiddenUntil: 0, size: 1 },
+  { room: 'Geography', x: 16, y: 82, icon: '🧭', color: '#bde0fe', kind: 'compass kit', throwable: true, hiddenUntil: 0, size: 1 },
+  { room: 'Geography', x: 26, y: 82, icon: '🌍', color: '#caf0f8', kind: 'terrain model', throwable: false, hiddenUntil: 0, size: 2 },
+  { room: 'Art Room', x: 52, y: 86, icon: '🖼', color: '#ffc6ff', kind: 'canvas stand', throwable: false, hiddenUntil: 0, size: 2 },
+  { room: 'Art Room', x: 55, y: 90, icon: '🎨', color: '#ffd6a5', kind: 'paint palette', throwable: true, hiddenUntil: 0, size: 1 },
+  { room: 'Computer Room', x: 148, y: 10, icon: '💾', color: '#d9ed92', kind: 'backup disks', throwable: true, hiddenUntil: 0, size: 1 },
+  { room: 'Computer Room', x: 156, y: 10, icon: '🖥', color: '#a9def9', kind: 'monitor cart', throwable: false, hiddenUntil: 0, size: 2 },
+  { room: 'Music Room', x: 118, y: 46, icon: '🎹', color: '#ffcad4', kind: 'synth board', throwable: false, hiddenUntil: 0, size: 2 },
+  { room: 'Music Room', x: 124, y: 46, icon: '🥁', color: '#fec89a', kind: 'drum pad', throwable: true, hiddenUntil: 0, size: 1 },
+  { room: 'Science Lab', x: 20, y: 12, icon: '🔬', color: '#b7e4c7', kind: 'microscope', throwable: false, hiddenUntil: 0, size: 2 },
+  { room: 'Medical Bay', x: 102, y: 118, icon: '🩺', color: '#ffb3c6', kind: 'stethoscope', throwable: false, hiddenUntil: 0, size: 2 },
+  { room: 'Medical Bay', x: 110, y: 118, icon: '💊', color: '#cddafd', kind: 'medical cabinet', throwable: false, hiddenUntil: 0, size: 2 },
+  { room: 'Medical Bay', x: 118, y: 120, icon: '🛏', color: '#d8f3dc', kind: 'recovery bed', throwable: false, hiddenUntil: 0, size: 3 },
 ];
 
 
@@ -359,6 +376,7 @@ const personalities = {
   weird: { speed: 1.18, aggression: 0.35, diligence: 0.45, focus: 0.4 },
   teacher: { speed: 1.22, aggression: 0.55, diligence: 1.0, focus: 1.0 },
   janitor: { speed: 1.28, aggression: 0.05, diligence: 1.0, focus: 1.0 },
+  nurse: { speed: 1.24, aggression: 0.06, diligence: 1.0, focus: 1.0 },
   player: { speed: 1.19, aggression: 0, diligence: 0, focus: 0 },
 };
 
@@ -379,6 +397,7 @@ const npcTraitBackendDb = window.TRAIT_BACKEND_DB || {
     weird: { funny: 16, luck: 10, mood: 12, discipline: -12, wit: 10 },
     teacher: { intelligence: 22, wisdom: 20, discipline: 26, honor: 14, aggression: 8, skill: 10 },
     janitor: { wisdom: 10, friendly: 8, discipline: 16, aggression: -8, bladderSize: 6 },
+    nurse: { wisdom: 18, friendly: 18, discipline: 22, aggression: -10, immuneSystem: 14 },
     player: { funny: 10, wit: 8, luck: 10, discipline: -8 },
   },
   levels: Array.from({ length: 10 }, (_, index) => {
@@ -416,6 +435,7 @@ function clampScore(value, min = 0, max = 100) {
 function traitLevelForEntity(role) {
   if (role === 'teacher') return 8;
   if (role === 'janitor') return 6;
+  if (role === 'nurse') return 7;
   if (role === 'player') return 5;
   return 3 + Math.floor(Math.random() * 4);
 }
@@ -541,6 +561,7 @@ const game = {
   // Lesson chatter rhythm: teachers hush classes briefly, then noise returns gradually.
   lessonQuietUntil: 0,
   lessonNoiseLevel: 0,
+  medicalEmergency: null,
   headmasterDetentionUntil: 0,
   headmasterDismissAnnounced: false,
 };
@@ -607,6 +628,8 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     stuckSeconds: 0,
     // Congestion watchdog resets pathing when a doorway jam persists.
     jamSeconds: 0,
+    // Separate staircase watchdog: stair tiles are narrow and can deadlock at period changes.
+    stairJamSeconds: 0,
     // Short-lived pass-through mode allows overlap while clearing tight bottlenecks.
     phaseThroughUntil: 0,
     // During supervised periods, students cache which classroom they are trying to attend.
@@ -616,6 +639,9 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     computerTask: null,
     temptedComputerUse: null,
     temptedComputerAt: 0,
+    knockoutCount: 0,
+    lastKnockedAt: 0,
+    needsNurseUntil: 0,
     lastX: x,
     lastY: y,
   };
@@ -670,6 +696,17 @@ game.entities.push(
     traitOverrides: { friendly: 71, wisdom: 74, honor: 76, discipline: 83 },
   }),
 );
+
+
+const nurse = mkEntity('Nurse Nia', 'nurse', 108, 120, '#ff8fab', {
+  title: 'School Nurse', attire: 'plainBlueDress',
+  traitOverrides: { friendly: 92, wisdom: 90, discipline: 84, intelligence: 80, aggression: 8 },
+});
+// Nurse starts off-screen from the morning queue and only appears for medical callouts.
+nurse.arrivedForDay = false;
+nurse.arrivalJoinMins = Infinity;
+nurse.target = roomCenter('Medical Bay');
+game.entities.push(nurse);
 
 const studentRoster = [
   ['Angelface', 'hero', '#ffd58e', { title: 'Handsome kid', traitOverrides: { friendly: 66, funny: 58, luck: 62 } }],
@@ -748,7 +785,31 @@ const extraStudentRoster = [
 
 studentRoster.push(...extraStudentRoster);
 
-studentRoster.forEach(([name, role, color, profile], idx) => {
+function baselineRoomSeatCount(room) {
+  // Mirrors the baseline classroom seat math so roster sizing stays aligned
+  // with visible chair layout without inflating desk density.
+  const usableW = Math.max(8, room.w - 8);
+  const usableH = Math.max(5, room.h - 7);
+  const cols = Math.max(3, Math.floor(usableW / 3));
+  const rows = Math.max(2, Math.floor(usableH / 2.6));
+  return cols * rows;
+}
+
+function maxStudentPopulationForLessons() {
+  const classroomCapacity = rooms
+    .filter((room) => room.type === 'classroom' && room.name !== 'Staff Room' && room.name !== 'Headmaster Office')
+    .reduce((sum, room) => sum + Math.max(0, baselineRoomSeatCount(room) - 1), 0);
+  return Math.max(12, classroomCapacity);
+}
+
+const maxStudentPopulation = maxStudentPopulationForLessons();
+const activeStudentRoster = studentRoster.slice(0, maxStudentPopulation);
+if (activeStudentRoster.length < studentRoster.length) {
+  // Keep simulation smooth: cap active students so classes never exceed chair capacity.
+  announce(`📉 Roster balanced to ${activeStudentRoster.length} students so every class has enough chairs.`);
+}
+
+activeStudentRoster.forEach(([name, role, color, profile], idx) => {
   const column = idx % 10;
   const row = Math.floor(idx / 10);
   game.entities.push(mkEntity(name, role, 98 + (column * 5.2), 86.5 + (row * 2.2), color, profile));
@@ -1100,6 +1161,47 @@ function isNearDoorway(pos, radius = 1.9) {
   return false;
 }
 
+function isNearStairStep(pos, radius = 1.7) {
+  if (!pos) return false;
+  return stairs.some((stair) => (
+    distance(pos, { x: stair.x, y: stair.fromY }) <= radius
+    || distance(pos, { x: stair.x, y: stair.toY }) <= radius
+  ));
+}
+
+function stairEscapeTargets(stair, floor) {
+  const offsets = [-2.1, -1.15, 1.15, 2.1];
+  const levelY = floor === stair.fromFloor ? stair.fromY : stair.toY;
+  return offsets.map((offset) => ({ x: stair.x + offset, y: levelY }));
+}
+
+function nearestStairEscapeTarget(entity, desiredFloor = null) {
+  const currentFloor = entityFloor(entity);
+  const intendedNextFloor = desiredFloor ? nextFloorToward(currentFloor, desiredFloor) : null;
+  let best = null;
+  let bestDist = Infinity;
+
+  for (const stair of stairs) {
+    const currentStep = stairPointForFloor(stair, currentFloor);
+    if (!currentStep || distance(entity, currentStep) > 2.1) continue;
+    const destinationFloor = stair.fromFloor === currentFloor ? stair.toFloor : stair.fromFloor;
+    if (intendedNextFloor && destinationFloor !== intendedNextFloor) continue;
+
+    const options = stairEscapeTargets(stair, currentFloor);
+    for (const option of options) {
+      const optionRoom = roomAtPosition(option);
+      if (optionRoom && optionRoom.floor !== currentFloor) continue;
+      const dist = distance(entity, option);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = option;
+      }
+    }
+  }
+
+  return best;
+}
+
 function resetEntityPathing(entity, destination) {
   const destinationRoom = roomAtPosition(destination);
   const entryDoor = destinationRoom ? roomDoorway(destinationRoom) : null;
@@ -1131,6 +1233,7 @@ function teleportEntityToTarget(entity, target, reason = 'stuck') {
   entity.vx = 0;
   entity.vy = 0;
   entity.jamSeconds = 0;
+  entity.stairJamSeconds = 0;
   entity.stuckSeconds = 0;
   entity.overlapSeconds = 0;
   entity.phaseThroughUntil = 0;
@@ -1188,7 +1291,8 @@ function routeWaypoint(entity, destination) {
   return destination;
 }
 
-function tryUseStairs(entity, desiredFloor = null) {
+function tryUseStairs(entity, desiredFloor = null, options = {}) {
+  const { repositionOnStairJam = false } = options;
   const currentFloor = entityFloor(entity);
   const intendedNextFloor = desiredFloor ? nextFloorToward(currentFloor, desiredFloor) : null;
   if (desiredFloor && desiredFloor === currentFloor) return false;
@@ -1200,6 +1304,18 @@ function tryUseStairs(entity, desiredFloor = null) {
     if (intendedNextFloor && destinationFloor !== intendedNextFloor) continue;
     const destinationStep = stairPointForFloor(stair, destinationFloor);
     if (!destinationStep) continue;
+
+    // If congestion keeps someone on stair entry points for too long, hop sideways
+    // on the same floor to a deterministic lane so others can still use the stairs.
+    if (repositionOnStairJam && entity.stairJamSeconds > 1.35 && game.rng() < 0.45) {
+      const escapeTarget = nearestStairEscapeTarget(entity, desiredFloor);
+      if (escapeTarget) {
+        teleportEntityToTarget(entity, escapeTarget, 'stair-jam');
+        entity.target = routeWaypoint(entity, entity.target || escapeTarget);
+        return true;
+      }
+    }
+
     entity.x = destinationStep.x;
     entity.y = destinationStep.y + (destinationFloor === 'upper' || destinationFloor === 'middle' ? 0.35 : -0.35);
     if (entity === player) playSfx('stair');
@@ -1276,6 +1392,7 @@ function resetToSchoolMorning() {
   game.playerHeldItem = null;
   game.toiletDirt = Math.min(35, game.toiletDirt + 6);
   game.janitorTask = null;
+  game.medicalEmergency = null;
   game.toiletsBlocked = false;
   game.toiletFloodUntil = 0;
   game.lastHygieneShameAt = 0;
@@ -1312,6 +1429,13 @@ function resetToSchoolMorning() {
       entity.arrivedForDay = true;
       entity.arrivalJoinMins = 0;
       entity.target = { ...room };
+    } else if (entity.role === 'nurse') {
+      const bay = roomCenter('Medical Bay');
+      entity.x = bay.x;
+      entity.y = bay.y;
+      entity.arrivedForDay = false;
+      entity.arrivalJoinMins = Infinity;
+      entity.target = { ...bay };
     } else {
       // Students appear at random moments during the 30-second arrival phase.
       entity.x = schoolExit.x + 2.2 + game.rng() * 2.2;
@@ -1326,6 +1450,8 @@ function resetToSchoolMorning() {
     entity.hygiene = 100;
     entity.litterWarnUntil = 0;
     entity.assignedWaste = null;
+    entity.knockoutCount = Math.max(0, (entity.knockoutCount || 0) - 1);
+    entity.needsNurseUntil = 0;
   }
 
   assignDailyDutyTeacher();
@@ -2049,11 +2175,79 @@ function throwRoomItem(attacker, prop) {
   }
 }
 
+function nurseEntity() {
+  return game.entities.find((entity) => entity.role === 'nurse') || null;
+}
+
+function reportMedicalEmergency(patient) {
+  if (!patient) return;
+  const nurse = nurseEntity();
+  if (!nurse) return;
+
+  game.medicalEmergency = {
+    patientName: patient.name,
+    requestedAt: performance.now(),
+    room: entityRoom(patient),
+  };
+
+  if (!nurse.arrivedForDay) {
+    nurse.arrivedForDay = true;
+    nurse.arrivalJoinMins = 0;
+    const bay = roomCenter('Medical Bay');
+    nurse.x = bay.x;
+    nurse.y = bay.y;
+    nurse.target = bay;
+    announce('🩺 Nurse Nia has arrived at the Medical Bay and is responding to an emergency.', { force: true });
+  }
+}
+
+function updateMedicalSystem() {
+  const now = performance.now();
+  const nurse = nurseEntity();
+  if (!nurse) return;
+
+  const severePatients = game.entities
+    .filter((entity) => entity.role !== 'teacher' && entity.role !== 'janitor' && entity.role !== 'nurse')
+    .filter((entity) => entity.knockoutCount >= 3 && now <= entity.needsNurseUntil)
+    .sort((a, b) => b.knockoutCount - a.knockoutCount);
+
+  const patient = severePatients[0] || null;
+  if (patient) {
+    if (!game.medicalEmergency || game.medicalEmergency.patientName !== patient.name) {
+      reportMedicalEmergency(patient);
+    }
+  } else if (game.medicalEmergency) {
+    game.medicalEmergency = null;
+    if (nurse.arrivedForDay) {
+      nurse.target = roomCenter('Medical Bay');
+      announce('✅ Nurse Nia: "Emergency treated. Returning to Medical Bay."');
+    }
+  }
+
+  if (!patient || !nurse.arrivedForDay) return;
+  if (distance(nurse, patient) > 1.5) return;
+
+  patient.hp = 100;
+  patient.knockoutCount = Math.max(0, patient.knockoutCount - 2);
+  patient.needsNurseUntil = 0;
+  patient.emotion = Math.min(100, patient.emotion + 12);
+  announce(`🩹 Nurse Nia treated ${patient.name} in ${entityRoom(patient)}.`, { force: true });
+  game.medicalEmergency = null;
+  nurse.target = roomCenter('Medical Bay');
+}
+
 function knockout(entity, by) {
   const now = performance.now();
   entity.hp = 100;
   entity.knockedUntil = now + 6200;
   entity.fallStartedAt = now;
+  entity.knockoutCount = (entity.knockoutCount || 0) + 1;
+  entity.lastKnockedAt = now;
+  if (entity.knockoutCount >= 3) {
+    // Severe repeated injuries summon the nurse to the new Medical Bay.
+    entity.needsNurseUntil = now + 45000;
+    reportMedicalEmergency(entity);
+  }
   entity.punchUntil = 0;
   entity.mood = 'dazed';
   entity.emotion = Math.max(0, entity.emotion - 16);
@@ -2093,6 +2287,8 @@ function studentsCommittedToRoom(roomName, ignoreEntity = null) {
   return game.entities.filter((entity) => (
     entity !== ignoreEntity
     && entity.role !== 'teacher'
+    && entity.role !== 'janitor'
+    && entity.role !== 'nurse'
     && entity.knockedUntil < performance.now()
     && (
       entity.seatedRoom === roomName
@@ -2103,17 +2299,35 @@ function studentsCommittedToRoom(roomName, ignoreEntity = null) {
   )).length;
 }
 
+const LESSON_SPARE_SEATS_PER_ROOM = 1;
+
 function roomHasOpenSeat(roomName, student) {
   const layout = getRoomSeatLayout(roomName);
   if (!layout || !layout.seats.length) return false;
   return studentsCommittedToRoom(roomName, student) < layout.seats.length;
 }
 
+function roomHasSpareSeat(roomName, student) {
+  const layout = getRoomSeatLayout(roomName);
+  if (!layout || !layout.seats.length) return false;
+  const reserved = Math.max(1, LESSON_SPARE_SEATS_PER_ROOM);
+  const effectiveCapacity = Math.max(0, layout.seats.length - reserved);
+  return studentsCommittedToRoom(roomName, student) < effectiveCapacity;
+}
+
+function isLessonEligibleClassroom(roomName) {
+  const room = roomByName(roomName);
+  if (!room || room.type !== 'classroom') return false;
+  if (roomName === 'Staff Room' || roomName === 'Headmaster Office') return false;
+  const layout = getRoomSeatLayout(roomName);
+  return Boolean(layout && layout.seats.length >= 8);
+}
+
 function lessonClassroomCandidates(currentPeriod) {
   // Keep lesson routing constrained to real classrooms so pupils never drift
   // into halls (like the Gym) when they should be in supervised lessons.
   const fallbackClassrooms = rooms
-    .filter((room) => room.type === 'classroom' && room.name !== 'Staff Room')
+    .filter((room) => isLessonEligibleClassroom(room.name))
     .map((room) => room.name);
 
   const activeTeacherRooms = game.entities
@@ -2129,7 +2343,7 @@ function lessonClassroomCandidates(currentPeriod) {
 
   const candidateSet = new Set([currentPeriod.room, ...activeTeacherRooms]);
   const candidates = [...candidateSet]
-    .filter((roomName) => roomByName(roomName)?.type === 'classroom')
+    .filter((roomName) => isLessonEligibleClassroom(roomName))
     .sort((a, b) => a.localeCompare(b));
 
   return candidates.length ? candidates : fallbackClassrooms;
@@ -2137,31 +2351,31 @@ function lessonClassroomCandidates(currentPeriod) {
 
 function chooseLessonRoomForStudent(student, currentPeriod) {
   const candidates = lessonClassroomCandidates(currentPeriod);
-  const availableRooms = candidates.filter((roomName) => roomHasOpenSeat(roomName, student));
+  // Reserve one spare chair per classroom when possible so students can re-seat if displaced.
+  let availableRooms = candidates.filter((roomName) => roomHasSpareSeat(roomName, student));
+  if (!availableRooms.length) {
+    availableRooms = candidates.filter((roomName) => roomHasOpenSeat(roomName, student));
+  }
   if (!availableRooms.length) return currentPeriod.room;
 
-  // Keep the scheduled class lively: target ~80% occupancy in the active room first.
-  const activeLayout = getRoomSeatLayout(currentPeriod.room);
-  const activeCommitted = studentsCommittedToRoom(currentPeriod.room, student);
-  const activeCap = activeLayout ? Math.floor(activeLayout.seats.length * 0.8) : 0;
-  if (activeCap > 0 && activeCommitted < activeCap && roomHasOpenSeat(currentPeriod.room, student)) {
-    return currentPeriod.room;
-  }
-
-  // Overflow then spreads deterministically across other classrooms.
-  const attendingStudents = game.entities
-    .filter((entity) => entity.role !== 'teacher' && entity.knockedUntil < performance.now())
-    .sort((a, b) => a.seatIndex - b.seatIndex);
-  const rosterIndex = Math.max(0, attendingStudents.findIndex((entity) => entity === student));
-
-  for (let offset = 0; offset < availableRooms.length; offset += 1) {
-    const roomName = availableRooms[(rosterIndex + offset) % availableRooms.length];
-    if (roomHasOpenSeat(roomName, student)) {
-      return roomName;
+  // Keep classes balanced by selecting the room with the lowest occupancy ratio.
+  let bestRoom = availableRooms[0];
+  let bestRatio = Infinity;
+  let bestCommitted = Infinity;
+  for (const roomName of availableRooms) {
+    const layout = getRoomSeatLayout(roomName);
+    if (!layout || !layout.seats.length) continue;
+    const committed = studentsCommittedToRoom(roomName, student);
+    const effectiveCapacity = Math.max(1, layout.seats.length - LESSON_SPARE_SEATS_PER_ROOM);
+    const ratio = committed / effectiveCapacity;
+    if (ratio < bestRatio || (Math.abs(ratio - bestRatio) < 0.0001 && committed < bestCommitted)) {
+      bestRatio = ratio;
+      bestCommitted = committed;
+      bestRoom = roomName;
     }
   }
 
-  return availableRooms[0];
+  return bestRoom;
 }
 
 function toggleSeat() {
@@ -2431,7 +2645,7 @@ function syncComputerStations() {
   }
 
   for (const entity of game.entities) {
-    if (entity.role === 'teacher' || entity.role === 'janitor') continue;
+    if (entity.role === 'teacher' || entity.role === 'janitor' || entity.role === 'nurse') continue;
     if (entityRoom(entity) !== 'Computer Room') continue;
     const station = nearestComputerStation(entity);
     if (!station || distance(entity, station) > 2.2) continue;
@@ -2446,6 +2660,14 @@ function chooseTarget(entity, currentPeriod) {
   if (entity.role === 'janitor') {
     if (game.janitorTask) return { x: game.janitorTask.x, y: game.janitorTask.y };
     return roomCenter(JANITOR_IDLE_ROOM);
+  }
+
+  if (entity.role === 'nurse') {
+    const emergencyName = game.medicalEmergency?.patientName;
+    const patient = emergencyName
+      ? game.entities.find((candidate) => candidate.name === emergencyName)
+      : null;
+    return patient ? { x: patient.x, y: patient.y } : roomCenter('Medical Bay');
   }
 
   // High bladder urgency overrides normal timetable targets.
@@ -2682,7 +2904,7 @@ function updateAI(dt) {
 
     const inLesson = isSupervisedPeriod(current);
     const dtSeconds = dt / 1000;
-    const isStudent = entity.role !== 'teacher' && entity.role !== 'janitor';
+    const isStudent = entity.role !== 'teacher' && entity.role !== 'janitor' && entity.role !== 'nurse';
     const isOutside = ['P.E. Field', 'School Gates', 'Bike Sheds'].includes(entityRoom(entity));
 
     if (isStudent && entity.displacedFromSeatUntil && performance.now() < entity.displacedFromSeatUntil) {
@@ -2729,6 +2951,9 @@ function updateAI(dt) {
       const isAssignedTeacher = !assignedTeacherName || entity.name === assignedTeacherName;
       const destinationRoom = isAssignedTeacher ? current.room : teacherHomeRoom(entity.name);
       entity.target = teacherBoardSpot(destinationRoom);
+    } else if (entity.role === 'nurse') {
+      entity.lessonRoom = null;
+      entity.target = chooseTarget(entity, current);
     } else if (current.mode === 'break' && entity.role === 'teacher') {
       // One rotating duty teacher patrols outside + classrooms; all others stay in staff room.
       entity.lessonRoom = null;
@@ -2965,7 +3190,13 @@ function updateAI(dt) {
     }
 
     const desiredFloor = roomAtPosition(entity.target)?.floor || entityFloor(entity);
-    if (tryUseStairs(entity, desiredFloor)) {
+    const nearStair = isNearStairStep(entity, 1.55) || isNearStairStep(entity.target, 1.95);
+    // Stair congestion gets its own timer so we can recover from periodic pile-ups.
+    entity.stairJamSeconds = nearStair
+      ? (entity.stairJamSeconds + dtSeconds)
+      : Math.max(0, entity.stairJamSeconds - (dtSeconds * 0.75));
+
+    if (tryUseStairs(entity, desiredFloor, { repositionOnStairJam: true })) {
       entity.vx = 0;
       entity.vy = 0;
       updateNpcVitals(entity, dt, false);
@@ -3087,6 +3318,21 @@ function updateAI(dt) {
       teleportEntityToTarget(entity, rescueTarget, 'stuck');
       entity.isSeated = inLesson;
       entity.seatedRoom = inLesson ? expectedRoom : null;
+    }
+
+    // Extra stair safety net: if someone lingers around stair trigger points for ages,
+    // skip the corridor jam and place them directly at their class destination.
+    if (entity.stairJamSeconds > 4.5) {
+      const classRescueTarget = entity.role === 'teacher'
+        ? (getTeacherSeatPosition(expectedRoom) || roomCenter(expectedRoom) || entity.target)
+        : (inLesson
+          ? (getSeatPosition(expectedRoom, entity.seatIndex) || roomCenter(expectedRoom) || entity.target)
+          : entity.target);
+      teleportEntityToTarget(entity, classRescueTarget, 'stair-stuck');
+      entity.target = classRescueTarget;
+      entity.stairJamSeconds = 0;
+      entity.isSeated = inLesson && Boolean(classRescueTarget);
+      entity.seatedRoom = entity.isSeated ? expectedRoom : null;
     }
 
     // Generic doorway jam recovery for all NPCs. If movement stalls in a choke-point,
@@ -3479,18 +3725,21 @@ function drawWorld() {
       if (layout) {
         for (const seat of layout.seats) {
           const seatPos = worldToScreen(seat.x, seat.y);
-          // Desk top.
-          ctx.fillStyle = '#8b5e3c';
-          ctx.fillRect(seatPos.sx - 5, seatPos.sy - 5, 10, 4);
+          // Desk footprint is larger and alternates subtle trim colors for variety.
+          const altDeskShade = (seat.row + seat.col) % 3;
+          ctx.fillStyle = altDeskShade === 0 ? '#8b5e3c' : altDeskShade === 1 ? '#93633f' : '#7f5539';
+          ctx.fillRect(seatPos.sx - 6, seatPos.sy - 6, 12, 5);
+          ctx.fillStyle = '#d8b68a';
+          ctx.fillRect(seatPos.sx - 5, seatPos.sy - 5, 10, 1);
           // Desk legs.
           ctx.fillStyle = '#5f3d2a';
-          ctx.fillRect(seatPos.sx - 5, seatPos.sy - 1, 2, 3);
-          ctx.fillRect(seatPos.sx + 3, seatPos.sy - 1, 2, 3);
+          ctx.fillRect(seatPos.sx - 6, seatPos.sy - 1, 2, 4);
+          ctx.fillRect(seatPos.sx + 4, seatPos.sy - 1, 2, 4);
           // Chair and backrest behind desk.
           ctx.fillStyle = '#435b7a';
-          ctx.fillRect(seatPos.sx - 3, seatPos.sy + 2, 6, 2);
-          ctx.fillRect(seatPos.sx - 3, seatPos.sy, 2, 2);
-          ctx.fillRect(seatPos.sx + 1, seatPos.sy, 2, 2);
+          ctx.fillRect(seatPos.sx - 4, seatPos.sy + 3, 8, 2);
+          ctx.fillRect(seatPos.sx - 4, seatPos.sy + 1, 2, 2);
+          ctx.fillRect(seatPos.sx + 2, seatPos.sy + 1, 2, 2);
         }
 
         // Teacher furniture is always present so every room can run lessons.
@@ -3663,11 +3912,16 @@ function drawWorld() {
   for (const prop of classroomProps) {
     if (performance.now() < prop.hiddenUntil) continue;
     const p = worldToScreen(prop.x, prop.y);
+    const scale = Math.max(1, prop.size || 1);
+    const w = 8 + (scale * 4);
+    const h = 6 + (scale * 3);
     ctx.fillStyle = prop.color;
-    ctx.fillRect(p.sx - 5, p.sy - 4, 10, 8);
+    fillDitherRect(p.sx - (w / 2), p.sy - (h / 2), w, h, prop.color, '#ffffff22', 2 + scale);
+    ctx.strokeStyle = '#3d3d3d';
+    ctx.strokeRect(p.sx - (w / 2), p.sy - (h / 2), w, h);
     ctx.fillStyle = '#1a1a1a';
-    ctx.font = 'bold 7px monospace';
-    ctx.fillText(prop.icon, p.sx - 3, p.sy + 2);
+    ctx.font = `${6 + scale}px monospace`;
+    ctx.fillText(prop.icon, p.sx - (2 + scale), p.sy + 2);
   }
 
   // Shield pickups now use a richer gem-like sprite with highlight.
@@ -3706,6 +3960,7 @@ function drawEntities() {
       entity.role === 'player' ? '#ffca3a'
       : entity.role === 'teacher' ? '#4cc9f0'
       : entity.role === 'janitor' ? '#f8f9fa'
+      : entity.role === 'nurse' ? '#ff8fab'
       : entity.role === 'bully' ? '#f94144'
       : entity.role === 'swot' ? '#43aa8b'
       : entity.role === 'weird' ? '#9d4edd'
@@ -4171,6 +4426,7 @@ function loop(now) {
     updateBoardWriting(dt);
     updatePellets(dt);
     scheduleWeeklySickEvent();
+    updateMedicalSystem();
     updateJanitorSystems(dt);
     updateSchedule(dt);
     checkSchoolExit();
