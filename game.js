@@ -115,6 +115,10 @@ const sfxState = { ctx: null, enabled: true };
 const doorTransitionDepth = 1.15;
 
 // All enclosed rooms get explicit doors so both player and NPCs can traverse by interaction.
+function corridorForFloor(floor) {
+  return rooms.find((room) => room.type === 'corridor' && room.floor === floor) || null;
+}
+
 const roomDoors = rooms
   .filter((room) => room.type !== 'corridor' && room.type !== 'outdoor')
   .map((room) => {
@@ -122,10 +126,15 @@ const roomDoors = rooms
     const topDist = Math.abs(room.y - corridorY);
     const bottomDist = Math.abs((room.y + room.h) - corridorY);
     const corridorAtTop = topDist <= bottomDist;
+    const floorCorridor = corridorForFloor(room.floor);
+    const corridorMinX = floorCorridor ? floorCorridor.x + 0.75 : 1;
+    const corridorMaxX = floorCorridor ? (floorCorridor.x + floorCorridor.w - 0.75) : (WORLD.w - 1);
+    const doorwayX = Math.max(corridorMinX, Math.min(corridorMaxX, room.x + room.w / 2));
     return {
       room: room.name,
       floor: room.floor,
-      x: room.x + room.w / 2,
+      // Door x is clamped to the corridor span to prevent NPCs being dropped in blue void areas.
+      x: doorwayX,
       y: corridorAtTop ? room.y : room.y + room.h,
       interiorY: corridorAtTop ? room.y + doorTransitionDepth : room.y + room.h - doorTransitionDepth,
       exteriorY: corridorAtTop ? room.y - 0.55 : room.y + room.h + 0.55,
@@ -219,13 +228,48 @@ const classroomProps = [
   { room: 'Art Room', x: 42, y: 89, icon: 'P', color: '#ff9f1c', kind: 'paint set', throwable: true, hiddenUntil: 0 },
   { room: 'Art Room', x: 50, y: 90, icon: 'B', color: '#2ec4b6', kind: 'paint brush', throwable: true, hiddenUntil: 0 },
   { room: 'Science Lab', x: 14, y: 10, icon: 'S', color: '#80ed99', kind: 'beaker', throwable: true, hiddenUntil: 0 },
+  { room: 'Science Lab', x: 11, y: 6, icon: '⚗', color: '#b7efc5', kind: 'chemical flask', throwable: true, hiddenUntil: 0 },
+  { room: 'Science Lab', x: 17, y: 6, icon: '🧪', color: '#95d5b2', kind: 'lab vial', throwable: true, hiddenUntil: 0 },
+  { room: 'Science Lab', x: 24, y: 6, icon: '🧫', color: '#74c69d', kind: 'specimen tray', throwable: true, hiddenUntil: 0 },
+  { room: 'Science Lab', x: 28, y: 6, icon: '☣', color: '#52b788', kind: 'chemical display cabinet', throwable: false, hiddenUntil: 0 },
+  { room: 'Science Lab', x: 26, y: 12, icon: '🫀', color: '#caf0f8', kind: 'anatomy poster', throwable: false, hiddenUntil: 0 },
+  { room: 'Science Lab', x: 10, y: 12, icon: '🧠', color: '#ade8f4', kind: 'anatomy poster', throwable: false, hiddenUntil: 0 },
   { room: 'Maths', x: 15, y: 46, icon: 'M', color: '#9bf6ff', kind: 'set square', throwable: true, hiddenUntil: 0 },
+  { room: 'Maths', x: 10, y: 40, icon: '📚', color: '#d9ed92', kind: 'book shelf', throwable: false, hiddenUntil: 0 },
+  { room: 'Maths', x: 35, y: 40, icon: '🗄', color: '#ccd5ae', kind: 'filing cabinet', throwable: false, hiddenUntil: 0 },
+  { room: 'Maths', x: 34, y: 47, icon: '📐', color: '#9bf6ff', kind: 'geometry ruler', throwable: true, hiddenUntil: 0 },
   { room: 'English', x: 50, y: 46, icon: 'E', color: '#b8c0ff', kind: 'book', throwable: true, hiddenUntil: 0 },
+  { room: 'English', x: 46, y: 40, icon: '📚', color: '#e9edc9', kind: 'book shelf', throwable: false, hiddenUntil: 0 },
+  { room: 'English', x: 66, y: 40, icon: '🗄', color: '#d4d4d4', kind: 'filing cabinet', throwable: false, hiddenUntil: 0 },
+  { room: 'English', x: 60, y: 46, icon: '📖', color: '#cdb4db', kind: 'hardback novel', throwable: true, hiddenUntil: 0 },
   { room: 'History', x: 66, y: 91, icon: 'H', color: '#caffbf', kind: 'globe', throwable: true, hiddenUntil: 0 },
+  { room: 'History', x: 62, y: 82, icon: '🗺', color: '#f4d35e', kind: 'atlas', throwable: true, hiddenUntil: 0 },
+  { room: 'History', x: 82, y: 82, icon: '📚', color: '#f6bd60', kind: 'history book shelf', throwable: false, hiddenUntil: 0 },
+  { room: 'History', x: 80, y: 90, icon: '📜', color: '#f7ede2', kind: 'archive scroll', throwable: true, hiddenUntil: 0 },
   { room: 'Computer Room', x: 134, y: 10, icon: 'C', color: '#bde0fe', kind: 'keyboard', throwable: true, hiddenUntil: 0 },
   { room: 'Music Room', x: 112, y: 46, icon: 'D', color: '#f4978e', kind: 'drum stick', throwable: true, hiddenUntil: 0 },
   { room: 'Headmaster Office', x: 164, y: 46, icon: 'R', color: '#e5989b', kind: 'rule book', throwable: true, hiddenUntil: 0 },
 ];
+
+
+
+// Fixed computer terminals in the ICT room; students use these during computer lessons.
+const computerStations = [
+  { id: 'pc-1', room: 'Computer Room', x: 128, y: 8, use: 'spreadsheet', userName: null, temptationBy: null },
+  { id: 'pc-2', room: 'Computer Room', x: 134, y: 8, use: 'word', userName: null, temptationBy: null },
+  { id: 'pc-3', room: 'Computer Room', x: 140, y: 8, use: 'database', userName: null, temptationBy: null },
+  { id: 'pc-4', room: 'Computer Room', x: 146, y: 8, use: 'spreadsheet', userName: null, temptationBy: null },
+  { id: 'pc-5', room: 'Computer Room', x: 152, y: 8, use: 'word', userName: null, temptationBy: null },
+  { id: 'pc-6', room: 'Computer Room', x: 158, y: 8, use: 'database', userName: null, temptationBy: null },
+];
+
+const computerUseMeta = {
+  spreadsheet: { icon: '📊', color: '#bde0fe', label: 'Spreadsheet' },
+  word: { icon: '📝', color: '#caffbf', label: 'Word Processor' },
+  database: { icon: '🗃️', color: '#ffd6a5', label: 'Database' },
+  game: { icon: '🎮', color: '#ffadad', label: 'Game' },
+  pictures: { icon: '🖼️', color: '#ffc6ff', label: 'Pictures' },
+};
 
 // Bell schedule now compresses a full school day to ~15 real-world minutes.
 const schedule = [
@@ -318,6 +362,122 @@ const personalities = {
   player: { speed: 1.19, aggression: 0, diligence: 0, focus: 0 },
 };
 
+
+// Lightweight in-memory backend database for trait balancing and per-level tuning.
+const npcTraitBackendDb = window.TRAIT_BACKEND_DB || {
+  version: 'v1.0',
+  traitKeys: [
+    'aggression', 'funny', 'friendly', 'mood', 'wit', 'intelligence', 'speed', 'skill', 'luck',
+    'bladderSize', 'boneStrength', 'immuneSystem', 'intelect', 'wisdom', 'honor', 'strength',
+    'sadism', 'masochism', 'discipline',
+  ],
+  weightClasses: ['overweight', 'slim', 'skinny', 'normal', 'chubby', 'obese'],
+  roleBias: {
+    bully: { aggression: 24, strength: 14, sadism: 18, friendly: -12, honor: -14, discipline: -16 },
+    swot: { intelligence: 20, wisdom: 15, funny: -4, aggression: -18, discipline: 20, honor: 12 },
+    hero: { friendly: 15, honor: 14, wit: 8, aggression: -4, strength: 8 },
+    weird: { funny: 16, luck: 10, mood: 12, discipline: -12, wit: 10 },
+    teacher: { intelligence: 22, wisdom: 20, discipline: 26, honor: 14, aggression: 8, skill: 10 },
+    janitor: { wisdom: 10, friendly: 8, discipline: 16, aggression: -8, bladderSize: 6 },
+    player: { funny: 10, wit: 8, luck: 10, discipline: -8 },
+  },
+  levels: Array.from({ length: 10 }, (_, index) => {
+    const level = index + 1;
+    const base = 28 + (level * 6);
+    return {
+      level,
+      aggression: base,
+      funny: base + 2,
+      friendly: base + 3,
+      mood: base + 1,
+      wit: base + 2,
+      intelligence: base + 4,
+      speed: base + 3,
+      skill: base + 2,
+      luck: base,
+      bladderSize: base + 1,
+      boneStrength: base + 2,
+      immuneSystem: base + 3,
+      intelect: base + 4,
+      wisdom: base + 4,
+      honor: base + 2,
+      strength: base + 2,
+      sadism: base - 4,
+      masochism: base - 5,
+      discipline: base + 2,
+    };
+  }),
+};
+
+function clampScore(value, min = 0, max = 100) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function traitLevelForEntity(role) {
+  if (role === 'teacher') return 8;
+  if (role === 'janitor') return 6;
+  if (role === 'player') return 5;
+  return 3 + Math.floor(Math.random() * 4);
+}
+
+function buildTraitProfile(role, overrides = {}) {
+  const level = clampScore(traitLevelForEntity(role), 1, 10);
+  const template = npcTraitBackendDb.levels[level - 1];
+  const bias = npcTraitBackendDb.roleBias[role] || {};
+  const profile = { level };
+  for (const key of npcTraitBackendDb.traitKeys) {
+    const jitter = (Math.random() * 22) - 11;
+    profile[key] = clampScore((template[key] || 50) + (bias[key] || 0) + jitter);
+  }
+
+  const bodyRoll = (profile.strength + profile.bladderSize + profile.boneStrength - profile.speed) / 4;
+  profile.weight = overrides.weight || (bodyRoll > 70
+    ? (profile.speed < 40 ? 'obese' : 'overweight')
+    : bodyRoll > 58
+      ? 'chubby'
+      : bodyRoll < 40
+        ? (profile.strength < 36 ? 'skinny' : 'slim')
+        : 'normal');
+
+  for (const [key, value] of Object.entries(overrides)) {
+    if (key in profile && typeof value === 'number') profile[key] = clampScore(value);
+    if (key === 'weight' && typeof value === 'string') profile.weight = value;
+  }
+
+  return profile;
+}
+
+function relationshipDeltaForEricInteraction(entity, interactionType) {
+  const t = entity?.traits;
+  if (!t) return 0;
+  if (interactionType === 'punch') {
+    if (t.masochism >= 66) return 6;
+    return -(8 + (t.sadism * 0.05));
+  }
+  if (interactionType === 'insult') {
+    if (t.masochism >= 62) return 4;
+    return -(6 + (t.sadism * 0.04));
+  }
+  if (interactionType === 'help') return 5 + (t.friendly * 0.03);
+  return 0;
+}
+
+function adjustEricRelationship(entity, delta, reason = 'interaction') {
+  if (!entity || entity.role === 'player') return;
+  const current = entity.relationships?.Eric ?? 0;
+  const next = clampScore(current + delta, -100, 100);
+  entity.relationships = entity.relationships || {};
+  entity.relationships.Eric = Math.round(next);
+  entity.ericRelationshipType = relationshipLabel(entity.relationships.Eric);
+  entity.lastEricRelationReason = reason;
+}
+
+function relationshipLabel(score) {
+  if (score >= 45) return 'friend';
+  if (score <= -45) return 'enemy';
+  return 'neutral';
+}
+
 const JANITOR_IDLE_ROOM = 'Janitor Room';
 const LITTER_CLEANUP_DELAY_MS = 20000;
 const TOILET_DIRT_PER_USE = 4;
@@ -378,12 +538,27 @@ const game = {
   lastHygieneShameAt: 0,
   weeklySickScheduledDay: WEEKLY_SICK_DAY_INTERVAL,
   janitorTask: null,
+  // Lesson chatter rhythm: teachers hush classes briefly, then noise returns gradually.
+  lessonQuietUntil: 0,
+  lessonNoiseLevel: 0,
+  headmasterDetentionUntil: 0,
+  headmasterDismissAnnounced: false,
 };
 
 let seatCounter = 0;
 const roomSeatCache = new Map();
 
 function mkEntity(name, role, x, y, color, traits = {}) {
+  const traitProfile = buildTraitProfile(role, traits.traitOverrides || {});
+  const basePersonality = personalities[role] || personalities.hero;
+  const personality = {
+    ...basePersonality,
+    speed: clampScore(basePersonality.speed * (0.78 + (traitProfile.speed / 140)), 0.85, 2.4),
+    aggression: clampScore(basePersonality.aggression + ((traitProfile.aggression - 50) / 100), 0, 1.2),
+    diligence: clampScore(basePersonality.diligence + ((traitProfile.discipline - 50) / 110), 0, 1.25),
+    focus: clampScore(basePersonality.focus + ((traitProfile.intelligence - 50) / 120), 0, 1.25),
+  };
+
   return {
     name,
     role,
@@ -394,11 +569,13 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     vy: 0,
     hp: 100,
     knockedUntil: 0,
-    personality: personalities[role] || personalities.hero,
+    personality,
     facing: 1,
     target: null,
     attention: 100,
     profile: traits,
+    traits: traitProfile,
+    relationships: role === 'player' ? {} : { Eric: Math.round(((traitProfile.friendly + traitProfile.honor) / 8) - (traitProfile.aggression / 7) + ((Math.random() * 16) - 8)) },
     mood: 'calm',
     emotion: 55,
     pride: 10,
@@ -436,6 +613,9 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     lessonRoom: null,
     // Tracks prolonged body overlap so we can respawn congested students.
     overlapSeconds: 0,
+    computerTask: null,
+    temptedComputerUse: null,
+    temptedComputerAt: 0,
     lastX: x,
     lastY: y,
   };
@@ -451,48 +631,138 @@ game.entities.push(
   player,
   mkEntity('Mr Wacker', 'teacher', 22, 42, '#8eb2ff', {
     title: 'Headmaster', strict: 0.95, attire: 'headmaster', beard: true,
+    traitOverrides: { wit: 82, wisdom: 90, discipline: 92, intelligence: 88, honor: 86, aggression: 66, weight: 'normal' },
   }),
   mkEntity('Mr Flash', 'teacher', 70, 40, '#f4d35e', {
     title: 'Maths Teacher', strict: 0.75, attire: 'flash', chin: 'big',
+    traitOverrides: { intelligence: 84, skill: 81, wit: 70, discipline: 78 },
   }),
   mkEntity('Ms Take', 'teacher', 75, 42, '#82a4ff', {
     title: 'English Teacher', strict: 0.65, attire: 'plainBlueDress',
+    traitOverrides: { wisdom: 82, friendly: 70, wit: 79, discipline: 72 },
   }),
   mkEntity('Dr Beaker', 'teacher', 88, 41, '#e9ecef', {
     title: 'Science Teacher', strict: 0.8, attire: 'scienceCoat', bald: true, build: 'fat',
+    traitOverrides: { intelligence: 92, skill: 86, discipline: 84, funny: 45, weight: 'chubby' },
   }),
   mkEntity('Mr Creak', 'teacher', 56, 84, '#7e9aff', {
     title: 'History Teacher', strict: 0.85, attire: 'oldBrown', cane: true,
+    traitOverrides: { wisdom: 88, wit: 72, honor: 90, discipline: 86 },
   }),
   mkEntity('Ms Mirth', 'teacher', 52, 8, '#ff9ad5', {
     title: 'Drama Teacher', strict: 0.55, attire: 'plainBlueDress', quotes: ['Project your chaos!'],
+    traitOverrides: { funny: 90, friendly: 78, wit: 84, mood: 75 },
   }),
   mkEntity('Prof Volt', 'teacher', 78, 8, '#8de7ff', {
     title: 'Physics Teacher', strict: 0.78, attire: 'scienceCoat', quotes: ['Respect the equations!'],
+    traitOverrides: { intelligence: 90, skill: 85, discipline: 82, honor: 74 },
   }),
   mkEntity('Ms Fizz', 'teacher', 108, 8, '#ffc48e', {
     title: 'Chemistry Prep Lead', strict: 0.74, attire: 'scienceCoat', quotes: ['No explosions before break.'],
+    traitOverrides: { intelligence: 86, skill: 84, mood: 72, discipline: 76 },
   }),
   mkEntity('Mr Boom', 'teacher', 112, 42, '#f7a6ff', {
     title: 'Music Teacher', strict: 0.6, attire: 'oldBrown', quotes: ['In tune, in line, in silence!'],
+    traitOverrides: { funny: 75, friendly: 72, mood: 82, wit: 68 },
   }),
   mkEntity('Mr Mop', 'janitor', 36, 100, '#8ecae6', {
     title: 'Janitor', attire: 'janitorOveralls', moustache: true, hair: 'spiky',
+    traitOverrides: { friendly: 71, wisdom: 74, honor: 76, discipline: 83 },
   }),
-  mkEntity('Angelface', 'hero', 102, 88, '#ffd58e', { title: 'Handsome kid' }),
-  mkEntity('Einstein', 'swot', 108, 87, '#8effd3', { title: 'Teacher pet', tattles: true }),
-  mkEntity('Bully Boy', 'bully', 114, 89, '#ff5f88', { title: 'Playground terror' }),
-  mkEntity('Boy Wander', 'weird', 121, 88, '#c58eff', { title: 'Chaotic drifter' }),
-  mkEntity('Slugger', 'bully', 128, 89, '#ff7ca0', { title: 'Fighter' }),
-  mkEntity('Precious', 'hero', 136, 88, '#ffe6ae', { title: 'Narcissist' }),
-  mkEntity('Nerdy Ned', 'swot', 144, 89, '#78ffcf', { title: 'Homework machine', tattles: true }),
-  mkEntity('Drama Llama', 'weird', 116, 87, '#e5a0ff', { title: 'Monologues in corridors' }),
-  mkEntity('Sir Tripsalot', 'hero', 124, 87, '#f7d794', { title: 'Sports captain, zero balance' }),
-  mkEntity('Detention Dave', 'bully', 132, 87, '#ff7096', { title: 'Collects detentions like stickers' }),
-  mkEntity('Quizzy Lizzy', 'swot', 140, 87, '#72ffc8', { title: 'Raises hand before questions exist', tattles: true }),
-  mkEntity('Whisper Knight', 'hero', 148, 87, '#ffe7a8', { title: 'Secret helper of lost pupils' }),
-  mkEntity('Loopy Lou', 'weird', 152, 89, '#c39bff', { title: 'Invents conspiracy timetables' }),
 );
+
+const studentRoster = [
+  ['Angelface', 'hero', '#ffd58e', { title: 'Handsome kid', traitOverrides: { friendly: 66, funny: 58, luck: 62 } }],
+  ['Einstein', 'swot', '#8effd3', { title: 'Teacher pet', tattles: true, traitOverrides: { intelligence: 94, wisdom: 88, discipline: 86 } }],
+  ['Bully Boy', 'bully', '#ff5f88', { title: 'Playground terror', traitOverrides: { aggression: 86, sadism: 80, strength: 74 } }],
+  ['Boy Wander', 'weird', '#c58eff', { title: 'Chaotic drifter', traitOverrides: { funny: 78, mood: 80, luck: 64 } }],
+  ['Slugger', 'bully', '#ff7ca0', { title: 'Fighter', traitOverrides: { aggression: 84, strength: 82, honor: 28 } }],
+  ['Precious', 'hero', '#ffe6ae', { title: 'Narcissist', traitOverrides: { wit: 74, friendly: 52, honor: 38 } }],
+  ['Nerdy Ned', 'swot', '#78ffcf', { title: 'Homework machine', tattles: true, traitOverrides: { intelligence: 88, discipline: 82 } }],
+  ['Drama Llama', 'weird', '#e5a0ff', { title: 'Monologues in corridors', traitOverrides: { funny: 86, mood: 82, wit: 79 } }],
+  ['Sir Tripsalot', 'hero', '#f7d794', { title: 'Sports captain, zero balance', traitOverrides: { skill: 74, luck: 30, strength: 64 } }],
+  ['Detention Dave', 'bully', '#ff7096', { title: 'Collects detentions like stickers', traitOverrides: { aggression: 79, honor: 24, discipline: 18 } }],
+  ['Quizzy Lizzy', 'swot', '#72ffc8', { title: 'Raises hand before questions exist', tattles: true, traitOverrides: { wit: 80, intelligence: 90, friendly: 54 } }],
+  ['Whisper Knight', 'hero', '#ffe7a8', { title: 'Secret helper of lost pupils', traitOverrides: { friendly: 86, honor: 82, aggression: 22 } }],
+  ['Loopy Lou', 'weird', '#c39bff', { title: 'Invents conspiracy timetables', traitOverrides: { funny: 89, mood: 77, wisdom: 40 } }],
+  ['Turbo Toby', 'hero', '#ffce7a', { title: 'Runs everywhere, always late', traitOverrides: { speed: 88, discipline: 44, luck: 60 } }],
+  ['Captain Cackle', 'weird', '#d99cff', { title: 'Laughs at own jokes', traitOverrides: { funny: 94, wit: 71, friendly: 61 } }],
+  ['Mischief Mina', 'bully', '#ff7b7b', { title: 'Prank architect', traitOverrides: { aggression: 72, sadism: 69, wit: 74 } }],
+  ['Professor Pigeon', 'swot', '#8cf2d8', { title: 'Talks in footnotes', traitOverrides: { intelligence: 91, wisdom: 79, funny: 42 } }],
+  ['Snack Attack Sam', 'hero', '#ffe08f', { title: 'Always near canteen', traitOverrides: { friendly: 68, bladderSize: 78, speed: 52, weight: 'chubby' } }],
+  ['Ninja Noodle', 'weird', '#c4a2ff', { title: 'Silent until bell rings', traitOverrides: { skill: 81, mood: 62, funny: 58 } }],
+  ['Hexa Harriet', 'swot', '#85ffd5', { title: 'Math puzzle machine', tattles: true, traitOverrides: { intelligence: 92, wit: 86, discipline: 88 } }],
+  ['Brick Bruno', 'bully', '#ff6d8e', { title: 'Thinks with fists', traitOverrides: { strength: 88, aggression: 82, wisdom: 33, weight: 'overweight' } }],
+  ['Sunny Saffron', 'hero', '#ffeab5', { title: 'Makes peace in queues', traitOverrides: { friendly: 90, honor: 86, wit: 58 } }],
+  ['Glitch Greta', 'weird', '#d6a7ff', { title: 'Computer-room conspiracy theorist', traitOverrides: { funny: 76, intelect: 80, wisdom: 45 } }],
+  ['Rumble Ruby', 'bully', '#ff668c', { title: 'Laughs in detentions', traitOverrides: { aggression: 78, sadism: 72, masochism: 20 } }],
+  ['Doc Doodles', 'swot', '#7dffd1', { title: 'Writes notes on everything', traitOverrides: { intelligence: 86, skill: 80, discipline: 76 } }],
+  ['Biscuit Baz', 'hero', '#ffd48c', { title: 'Trades snacks for favours', traitOverrides: { friendly: 74, luck: 73, honor: 52 } }],
+  ['Chaos Chloe', 'weird', '#bb95ff', { title: 'Starts songs mid-lesson', traitOverrides: { funny: 88, discipline: 28, mood: 84 } }],
+  ['Mellow Mel', 'hero', '#ffe3a4', { title: 'Calm in every crisis', traitOverrides: { mood: 84, wisdom: 75, aggression: 18 } }],
+  ['Spike Sprite', 'bully', '#ff5a8a', { title: 'Tiny but terrifying', traitOverrides: { aggression: 83, speed: 81, strength: 58 } }],
+  ['Oracle Olive', 'swot', '#89f7cf', { title: 'Predicts quiz questions', traitOverrides: { intelligence: 90, wisdom: 83, funny: 52 } }],
+  ['Velvet Vex', 'weird', '#c7a1ff', { title: 'Poet of odd insults', traitOverrides: { wit: 87, funny: 80, friendly: 36 } }],
+  ['Jester Jet', 'hero', '#ffe59d', { title: 'Class clown with a heart', traitOverrides: { funny: 91, friendly: 79, honor: 64 } }],
+  ['Milo Maso', 'weird', '#c59bff', { title: 'Oddly likes roughhousing', traitOverrides: { masochism: 88, sadism: 26, funny: 71 } }],
+  ['Sarda Sadie', 'bully', '#ff618f', { title: 'Enjoys mean jokes', traitOverrides: { sadism: 90, aggression: 75, honor: 22 } }],
+];
+
+
+const extraStudentRoster = [
+  ['Banter Ben', 'hero', '#ffd3a1', { title: 'Can turn any detention into stand-up', traitOverrides: { funny: 93, friendly: 74, wit: 82 } }],
+  ['Turbo Tina', 'hero', '#ffd08a', { title: 'Sprints between every lesson', traitOverrides: { speed: 90, skill: 76, discipline: 48 } }],
+  ['Murmur Max', 'weird', '#cfa8ff', { title: 'Whispers wild rumours', traitOverrides: { funny: 79, wit: 74, mood: 70 } }],
+  ['Plot Twist Pip', 'weird', '#c6a1ff', { title: 'Always predicts chaos', traitOverrides: { funny: 83, luck: 68, wisdom: 52 } }],
+  ['Comet Cole', 'hero', '#ffd995', { title: 'Fast, loud, and mostly harmless', traitOverrides: { speed: 86, friendly: 67, honor: 63 } }],
+  ['Grump Gus', 'bully', '#ff648f', { title: 'Permanent bad mood', traitOverrides: { aggression: 80, mood: 28, sadism: 66 } }],
+  ['Pixel Penny', 'swot', '#88ffd7', { title: 'Spreadsheet speedrunner', traitOverrides: { intelligence: 90, skill: 88, discipline: 85 } }],
+  ['Algebra Ace', 'swot', '#8fffe0', { title: 'Solves sums before asked', tattles: true, traitOverrides: { intelligence: 95, wisdom: 81, discipline: 90 } }],
+  ['Riff Raffi', 'weird', '#c79aff', { title: 'Desk-drumming virtuoso', traitOverrides: { funny: 87, mood: 79, discipline: 30 } }],
+  ['Bossy Bex', 'bully', '#ff6a8f', { title: 'Queue-cutting specialist', traitOverrides: { aggression: 77, strength: 70, honor: 26 } }],
+  ['Gentle Gio', 'hero', '#ffe9ac', { title: 'Conflict de-escalator', traitOverrides: { friendly: 91, honor: 88, aggression: 18 } }],
+  ['Snarky Noor', 'weird', '#d2abff', { title: 'Sarcasm in human form', traitOverrides: { wit: 89, funny: 78, friendly: 40 } }],
+  ['Crunch Carl', 'swot', '#7ffbd0', { title: 'Data over drama', traitOverrides: { intelligence: 89, skill: 84, funny: 45 } }],
+  ['Maverick Mo', 'hero', '#ffd89f', { title: 'Rule-bender with charm', traitOverrides: { wit: 81, luck: 75, honor: 50 } }],
+  ['Thud Theo', 'bully', '#ff6f94', { title: 'Heavy footsteps, heavier opinions', traitOverrides: { strength: 84, aggression: 74, weight: 'chubby' } }],
+  ['Echo Elle', 'weird', '#c39cff', { title: 'Repeats teachers dramatically', traitOverrides: { funny: 85, mood: 82, discipline: 35 } }],
+  ['Quiz Quill', 'swot', '#86ffd2', { title: 'Raises hand for fun', tattles: true, traitOverrides: { intelligence: 88, wit: 84, discipline: 87 } }],
+  ['Lucky Luca', 'hero', '#ffdd9a', { title: 'Wins every coin toss', traitOverrides: { luck: 94, friendly: 70, wisdom: 58 } }],
+  ['Static Stan', 'weird', '#cca5ff', { title: 'Conspiracy radio host', traitOverrides: { funny: 74, intelect: 82, wisdom: 44 } }],
+  ['Razor Rae', 'bully', '#ff5f86', { title: 'Tiny terror with comebacks', traitOverrides: { aggression: 82, speed: 79, sadism: 68 } }],
+  ['Tutor Taz', 'swot', '#7ef7ce', { title: 'Carries flashcards everywhere', traitOverrides: { intelligence: 92, wisdom: 84, friendly: 58 } }],
+  ['Jolly Juno', 'hero', '#ffe4b0', { title: 'Cheer captain of break-time', traitOverrides: { funny: 84, friendly: 88, mood: 86 } }],
+  ['Bramble Bri', 'weird', '#c8a0ff', { title: 'Invents impossible homework excuses', traitOverrides: { wit: 86, funny: 82, discipline: 26 } }],
+  ['Rex Rumble', 'bully', '#ff668b', { title: 'Arm-wrestling addict', traitOverrides: { strength: 90, aggression: 79, honor: 24 } }],
+  ['Notepad Nia', 'swot', '#84ffd6', { title: 'Writes everything down', traitOverrides: { intelligence: 85, discipline: 90, skill: 78 } }],
+  ['Fizz Finn', 'hero', '#ffd69a', { title: 'Energy drink mascot', traitOverrides: { speed: 82, funny: 73, bladderSize: 80 } }],
+  ['Whimsy Wren', 'weird', '#c49cff', { title: 'Classroom improviser', traitOverrides: { funny: 88, mood: 84, wisdom: 48 } }],
+  ['Nudge Nate', 'bully', '#ff6c92', { title: 'Always starts the shoving', traitOverrides: { aggression: 76, strength: 68, sadism: 61 } }],
+  ['Scholar Skye', 'swot', '#82ffd4', { title: 'Library map in human form', traitOverrides: { intelligence: 91, wisdom: 87, honor: 72 } }],
+  ['Buddy Blue', 'hero', '#ffe2a8', { title: 'Everyone knows Buddy', traitOverrides: { friendly: 92, honor: 76, funny: 65 } }],
+  ['Oddball Oz', 'weird', '#be93ff', { title: 'Builds theories from doodles', traitOverrides: { funny: 77, intelect: 79, mood: 73 } }],
+  ['Spite Spike', 'bully', '#ff5d84', { title: 'Competitive about everything', traitOverrides: { aggression: 84, sadism: 74, strength: 73 } }],
+  ['Merit Mae', 'swot', '#83ffd3', { title: 'Collects praise like badges', tattles: true, traitOverrides: { intelligence: 89, discipline: 91, friendly: 52 } }],
+  ['Harmony Hex', 'hero', '#ffe6b3', { title: 'Can calm any argument', traitOverrides: { friendly: 89, mood: 88, honor: 84 } }],
+];
+
+studentRoster.push(...extraStudentRoster);
+
+studentRoster.forEach(([name, role, color, profile], idx) => {
+  const column = idx % 10;
+  const row = Math.floor(idx / 10);
+  game.entities.push(mkEntity(name, role, 98 + (column * 5.2), 86.5 + (row * 2.2), color, profile));
+});
+
+function initialiseNpcRelationships() {
+  for (const entity of game.entities) {
+    if (entity.role === 'player') continue;
+    const score = entity.relationships?.Eric ?? 0;
+    entity.ericRelationshipType = relationshipLabel(score);
+  }
+}
+
+initialiseNpcRelationships();
 
 function formatTime(mins) {
   const h = Math.floor(mins / 60) % 24;
@@ -542,12 +812,29 @@ function bullyFightChance(currentPeriod) {
   return 0.006;
 }
 
+function isTeacherBackTurned(teacher, now = performance.now()) {
+  return Boolean(teacher && teacher.role === 'teacher' && teacher.writingUntil > now);
+}
+
+function assignedTeacherEntityForPeriod(period = schedule[game.periodIndex]) {
+  const assignedName = assignedTeacherForRoom(period.room);
+  if (!assignedName) return null;
+  return game.entities.find((entity) => entity.role === 'teacher' && entity.name === assignedName) || null;
+}
+
+function isAssignedTeacherBackTurnedForPeriod(period = schedule[game.periodIndex], now = performance.now()) {
+  if (!isSupervisedPeriod(period)) return false;
+  const teacher = assignedTeacherEntityForPeriod(period);
+  return Boolean(teacher && entityRoom(teacher) === period.room && isTeacherBackTurned(teacher, now));
+}
+
 function findWitnessingTeacher(actor, range = 5.4) {
   // Keep witness logic cheap: same room + distance approximates line-of-sight.
   return game.entities.find((entity) => (
     entity.role === 'teacher'
     && entityRoom(entity) === entityRoom(actor)
     && distance(entity, actor) < range
+    && !isTeacherBackTurned(entity)
   ));
 }
 
@@ -565,14 +852,26 @@ function nearestPoint(origin, points) {
 }
 
 
-function sendPlayerToHeadmaster(reason, extraLines = 45) {
+function sendEntityToHeadmaster(entity, reason = 'discipline') {
   const office = roomByName('Headmaster Office');
+  if (!office || !entity) return;
+  entity.x = office.x + (entity === player ? office.w / 2 : Math.max(1.7, Math.min(office.w - 1.8, (entity.seatIndex % 3) + 2)));
+  entity.y = office.y + office.h - (entity === player ? 2 : (2.6 + ((entity.seatIndex % 2) * 1.4)));
+  entity.target = null;
+  entity.vx = 0;
+  entity.vy = 0;
+  entity.isSeated = false;
+  entity.seatedRoom = null;
+}
+
+function sendPlayerToHeadmaster(reason, extraLines = 45) {
   if (extraLines > 0) addLines(extraLines, reason);
-  if (office) {
-    player.x = office.x + office.w / 2;
-    player.y = office.y + office.h - 2;
-  }
+  sendEntityToHeadmaster(player, reason);
+  // Ten-second lecture lock as requested; Eric cannot move while being told off.
+  game.headmasterDetentionUntil = performance.now() + 10000;
+  game.headmasterDismissAnnounced = false;
   announce(`🏫 Mr Wacker marched Eric to the Headmaster Office for ${reason}.`);
+  announce('🧑‍🏫 Headmaster: "You will stand there and think about what you have done."', { force: true });
 }
 
 function nearestThrowableProp(entity) {
@@ -914,18 +1213,24 @@ function getRoomSeatLayout(roomName) {
   if (!room || room.type !== 'classroom') return null;
   if (roomSeatCache.has(roomName)) return roomSeatCache.get(roomName);
 
-  // Build enough seats for everyone so each classroom can seat the full student body.
-  const studentCount = game.entities.filter((entity) => entity.role !== 'teacher').length;
+  // Keep table count based on room geometry (existing layout), not student population.
   const usableW = Math.max(8, room.w - 8);
   const usableH = Math.max(5, room.h - 7);
   const cols = Math.max(3, Math.floor(usableW / 3));
-  const rows = Math.max(2, Math.ceil(studentCount / cols));
+  const rows = Math.max(2, Math.floor(usableH / 2.6));
 
   const seats = [];
+  const seatMinX = room.x + 1.1;
+  const seatMaxX = room.x + room.w - 2.2;
+  const seatMinY = room.y + 2.2;
+  const seatMaxY = room.y + room.h - 1.2;
   for (let row = 0; row < rows; row += 1) {
     for (let col = 0; col < cols; col += 1) {
-      const x = room.x + 4 + ((col + 0.5) / cols) * usableW;
-      const y = room.y + 5 + ((row + 0.5) / rows) * usableH;
+      const rawX = room.x + 4 + ((col + 0.5) / cols) * usableW;
+      const rawY = room.y + 5 + ((row + 0.5) / rows) * usableH;
+      // Clamp seats so tiny rooms (e.g. Headmaster Office) never spill desks into corridors/outside.
+      const x = Math.max(seatMinX, Math.min(seatMaxX, rawX));
+      const y = Math.max(seatMinY, Math.min(seatMaxY, rawY));
       seats.push({ x, y, row, col });
     }
   }
@@ -1137,6 +1442,66 @@ function say(entity, text, opts = {}) {
 function think(entity, text, durationMs = 3200) {
   if (!entity || !text) return;
   entity.thought = { text: String(text), until: performance.now() + durationMs };
+}
+
+function wrapBubbleText(text, maxWidth) {
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let currentLine = '';
+  for (const word of words) {
+    const candidate = currentLine ? `${currentLine} ${word}` : word;
+    if (ctx.measureText(candidate).width <= maxWidth || !currentLine) {
+      currentLine = candidate;
+    } else {
+      lines.push(currentLine);
+      currentLine = word;
+    }
+  }
+  if (currentLine) lines.push(currentLine);
+  return lines.slice(0, 4);
+}
+
+function drawRoundedBubble(x, y, lines, style) {
+  const {
+    paddingX, paddingY, lineHeight, radius,
+    fillColor, strokeColor, shadowColor, shadowBlur,
+    textColor, font, tailOffsetX = 10,
+  } = style;
+
+  ctx.font = font;
+  const bubbleWidth = Math.max(...lines.map((line) => ctx.measureText(line).width), 28) + (paddingX * 2);
+  const bubbleHeight = (lines.length * lineHeight) + (paddingY * 2);
+  const left = Math.round(x - bubbleWidth / 2);
+  const top = Math.round(y - bubbleHeight);
+
+  ctx.save();
+  ctx.shadowColor = shadowColor;
+  ctx.shadowBlur = shadowBlur;
+  ctx.fillStyle = fillColor;
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.roundRect(left, top, bubbleWidth, bubbleHeight, radius);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+
+  // Tail keeps speech/thought ownership clear while preserving the rounded card style.
+  ctx.fillStyle = fillColor;
+  ctx.strokeStyle = strokeColor;
+  ctx.beginPath();
+  ctx.moveTo(left + tailOffsetX, top + bubbleHeight);
+  ctx.lineTo(left + tailOffsetX + 8, top + bubbleHeight);
+  ctx.lineTo(left + tailOffsetX + 4, top + bubbleHeight + 8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = textColor;
+  ctx.font = font;
+  lines.forEach((line, index) => {
+    ctx.fillText(line, left + paddingX, top + paddingY + ((index + 1) * lineHeight) - 2);
+  });
 }
 
 function announce(message, options = {}) {
@@ -1422,6 +1787,12 @@ function handleInput(dt) {
   player.vx = 0;
   player.vy = 0;
 
+  if (performance.now() < game.headmasterDetentionUntil) {
+    // Headmaster lecture phase: Eric is held in office for a short punishment window.
+    sendEntityToHeadmaster(player, 'lecture');
+    return;
+  }
+
   const manualMovement = game.keys.ArrowLeft || game.keys.a || game.keys.ArrowRight || game.keys.d || game.keys.ArrowUp || game.keys.w || game.keys.ArrowDown || game.keys.s;
   if (manualMovement || game.keys.z || game.keys.x || game.keys.e || game.keys.c || game.keys.q) {
     // Manual control immediately overrides autopilot for responsiveness.
@@ -1524,6 +1895,59 @@ function meleeAttack(attacker) {
   for (const target of game.entities) {
     if (target === attacker || target.knockedUntil > performance.now()) continue;
     if (distance(attacker, target) < strikeRange) {
+      const isSeatPunch = attacker === player
+        && target.role !== 'teacher'
+        && target.role !== 'janitor'
+        && target.isSeated
+        && target.seatedRoom
+        && isSupervisedPeriod(schedule[game.periodIndex]);
+
+      if (isSeatPunch) {
+        const now = performance.now();
+        const seatRoom = target.seatedRoom;
+        const seatPos = getSeatPosition(seatRoom, target.seatIndex) || { x: target.x, y: target.y };
+        const floorSit = { x: seatPos.x + (attacker.facing >= 0 ? 0.95 : -0.95), y: seatPos.y + 0.38 };
+        target.x = floorSit.x;
+        target.y = floorSit.y;
+        target.isSeated = true;
+        target.displacedFromSeatUntil = now + 3000;
+        target.displacedSeatRoom = seatRoom;
+        target.displacedSeatPos = seatPos;
+        target.target = floorSit;
+        target.mood = 'angry';
+        target.emotion = Math.max(0, target.emotion - 10);
+        think(target, '😤 Oi! That was my chair!', 2400);
+        announce(`🪑💥 Eric punched ${target.name} off their chair!`, { source: attacker, range: 8 });
+
+        const teacherWitness = findWitnessingTeacher(attacker, 7.4);
+        if (teacherWitness) {
+          announce(`🧑‍🏫 ${teacherWitness.name}: "Both of you — Headmaster. Now!"`, { source: teacherWitness, range: 9 });
+          sendPlayerToHeadmaster('chair-fighting in class', 30);
+          sendEntityToHeadmaster(target, 'chair-fighting');
+          const bondDelta = relationshipDeltaForEricInteraction(target, 'punch');
+          adjustEricRelationship(target, bondDelta + (target.traits?.masochism > 68 ? 6 : -4), 'chair-brawl-headmaster');
+          return;
+        }
+
+        if (game.rng() < 0.1) {
+          const classTeacher = assignedTeacherEntityForPeriod();
+          if (classTeacher && entityRoom(classTeacher) === entityRoom(attacker)) {
+            say(target, '📣 Sir! Eric just decked me off my chair!', { durationMs: 2800 });
+            classTeacher.writingUntil = 0;
+            announce(`🧑‍🏫 ${classTeacher.name} spun around and sent Eric to the Headmaster Office.`, { source: classTeacher, range: 9 });
+            sendPlayerToHeadmaster('chair assault reported by pupil', 25);
+            return;
+          }
+        }
+
+        const responseAggressive = (target.traits?.aggression || 0) >= 60 || (target.traits?.strength || 0) >= 62;
+        target.shouldReclaimSeat = true;
+        target.retaliateForSeatLoss = responseAggressive;
+        const delta = relationshipDeltaForEricInteraction(target, 'punch');
+        adjustEricRelationship(target, delta + (target.traits?.masochism > 70 ? 4 : 0), 'chair-punched');
+        return;
+      }
+
       target.hp -= attacker.profile.cane ? 55 : 45;
       target.mood = 'angry';
       target.emotion = Math.max(0, target.emotion - 12);
@@ -1540,6 +1964,18 @@ function meleeAttack(attacker) {
       attacker.hygiene = Math.max(0, attacker.hygiene - 1.8);
       target.hygiene = Math.max(0, target.hygiene - 3.2);
       if (target.hp <= 0) knockout(target, attacker);
+      if (attacker === player) {
+        const delta = relationshipDeltaForEricInteraction(target, 'punch');
+        adjustEricRelationship(target, delta, 'punched');
+      }
+      if (target === player && attacker.role !== 'teacher' && attacker.role !== 'janitor') {
+        const teacherWitness = findWitnessingTeacher(attacker, 7.2);
+        if (teacherWitness) {
+          announce(`🧑‍🏫 ${teacherWitness.name} caught the fight and marched both pupils to the Headmaster Office.`);
+          sendPlayerToHeadmaster('fighting in class', 20);
+          sendEntityToHeadmaster(attacker, 'fighting in class');
+        }
+      }
       if (attacker === player && target.role === 'teacher') addLines(120, 'striking a teacher');
       spendEntityEnergy(attacker, 7);
       if (target !== player) target.energy = Math.max(10, target.energy - 3.5);
@@ -1704,8 +2140,15 @@ function chooseLessonRoomForStudent(student, currentPeriod) {
   const availableRooms = candidates.filter((roomName) => roomHasOpenSeat(roomName, student));
   if (!availableRooms.length) return currentPeriod.room;
 
-  // Deterministic roster split keeps class populations evenly distributed
-  // across available classrooms instead of bunching to one destination.
+  // Keep the scheduled class lively: target ~80% occupancy in the active room first.
+  const activeLayout = getRoomSeatLayout(currentPeriod.room);
+  const activeCommitted = studentsCommittedToRoom(currentPeriod.room, student);
+  const activeCap = activeLayout ? Math.floor(activeLayout.seats.length * 0.8) : 0;
+  if (activeCap > 0 && activeCommitted < activeCap && roomHasOpenSeat(currentPeriod.room, student)) {
+    return currentPeriod.room;
+  }
+
+  // Overflow then spreads deterministically across other classrooms.
   const attendingStudents = game.entities
     .filter((entity) => entity.role !== 'teacher' && entity.knockedUntil < performance.now())
     .sort((a, b) => a.seatIndex - b.seatIndex);
@@ -1824,6 +2267,15 @@ function interact() {
     updateBladderHud();
     playSfx('urinal');
     announce(`🚹 Eric used ${nearbyUrinal.label}. Bladder ${Math.round(previousBladder)}% → ${Math.round(game.bladder)}%.`);
+    return;
+  }
+
+  // Computer terminals are inspectable so players can see what students are really doing.
+  const nearbyPc = computerStations.find((station) => distance(player, station) < 1.7);
+  if (nearbyPc && entityRoom(player) === 'Computer Room') {
+    const meta = computerUseMeta[nearbyPc.use] || computerUseMeta.word;
+    const userText = nearbyPc.userName ? ` used by ${nearbyPc.userName}` : ' idle';
+    announce(`🖥️ ${meta.icon} ${meta.label}${userText}.`, { force: true });
     return;
   }
 
@@ -1955,6 +2407,38 @@ function dutyTeacherBreakTarget(now = performance.now()) {
     game.lastDutyPatrolAt = now;
   }
   return roomCenter(patrolRooms[game.dutyPatrolIndex]);
+}
+
+
+function nearestComputerStation(entity) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const station of computerStations) {
+    const d = distance(entity, station);
+    if (d < bestDist) {
+      bestDist = d;
+      best = station;
+    }
+  }
+  return best;
+}
+
+function syncComputerStations() {
+  for (const station of computerStations) {
+    station.userName = null;
+    station.temptationBy = null;
+    if (station.use === 'game' || station.use === 'pictures') station.use = 'word';
+  }
+
+  for (const entity of game.entities) {
+    if (entity.role === 'teacher' || entity.role === 'janitor') continue;
+    if (entityRoom(entity) !== 'Computer Room') continue;
+    const station = nearestComputerStation(entity);
+    if (!station || distance(entity, station) > 2.2) continue;
+    station.userName = entity.name;
+    if (entity.computerTask) station.use = entity.computerTask;
+    if (entity.temptedComputerAt > performance.now() - 1400) station.temptationBy = entity.name;
+  }
 }
 
 function chooseTarget(entity, currentPeriod) {
@@ -2172,6 +2656,18 @@ function updateAI(dt) {
   const supervised = isSupervisedPeriod(current);
   const teacherPresent = isTeacherPresentForPeriod(current);
   const assignedTeacherName = assignedTeacherForRoom(current.room);
+  const now = performance.now();
+
+  if (supervised) {
+    if (now > game.lessonQuietUntil) {
+      // Noise ramps back in after a teacher warning, so class hush feels temporary.
+      game.lessonNoiseLevel = Math.min(1, game.lessonNoiseLevel + dt * 0.00016);
+    } else {
+      game.lessonNoiseLevel = Math.max(0, game.lessonNoiseLevel - dt * 0.0018);
+    }
+  } else {
+    game.lessonNoiseLevel = Math.min(1, game.lessonNoiseLevel + dt * 0.0005);
+  }
 
   for (const entity of game.entities) {
     if (entity === player) continue;
@@ -2188,6 +2684,38 @@ function updateAI(dt) {
     const dtSeconds = dt / 1000;
     const isStudent = entity.role !== 'teacher' && entity.role !== 'janitor';
     const isOutside = ['P.E. Field', 'School Gates', 'Bike Sheds'].includes(entityRoom(entity));
+
+    if (isStudent && entity.displacedFromSeatUntil && performance.now() < entity.displacedFromSeatUntil) {
+      entity.target = entity.displacedSeatPos || { x: entity.x, y: entity.y };
+      entity.vx = 0;
+      entity.vy = 0;
+      entity.isSeated = true;
+      updateNpcVitals(entity, dt, false);
+      continue;
+    }
+
+    if (isStudent && entity.displacedFromSeatUntil && performance.now() >= entity.displacedFromSeatUntil) {
+      const roomName = entity.displacedSeatRoom || entity.lessonRoom || current.room;
+      const seatPos = entity.displacedSeatPos || getSeatPosition(roomName, entity.seatIndex);
+      const playerTookSeat = seatPos && player.isSeated && player.seatedRoom === roomName && distance(player, seatPos) < 0.72;
+      if (playerTookSeat) {
+        if (entity.retaliateForSeatLoss) {
+          say(entity, '😡 Move! That is my seat!', { durationMs: 2400 });
+          if (distance(entity, player) < 1.7) meleeAttack(entity);
+          else entity.target = { x: player.x, y: player.y };
+        } else {
+          entity.target = nearestFreeSeatInRoom(roomName, entity) || roomCenter(roomName);
+          say(entity, '😟 Fine... I will sit somewhere else.', { durationMs: 2200 });
+        }
+      } else if (seatPos) {
+        entity.target = seatPos;
+      }
+      entity.displacedFromSeatUntil = 0;
+      entity.displacedSeatPos = null;
+      entity.displacedSeatRoom = null;
+      entity.shouldReclaimSeat = false;
+      entity.retaliateForSeatLoss = false;
+    }
 
     // Keep students in supervised, staffed classrooms instead of empty rooms.
     if (inLesson && isStudent) {
@@ -2220,15 +2748,114 @@ function updateAI(dt) {
     }
 
     // In class students periodically attempt teacher prompts and can daydream.
-    if (inLesson && isStudent && entityRoom(entity) === current.room && game.rng() < 0.0036) {
-      if (game.rng() < 0.74) {
-        const responses = ['I know this! 🙋', 'Maybe 42?', 'Can I try? 🙂', 'I think it is this... 🤔'];
+    const iqFactor = (entity.traits?.intelligence || 50) / 100;
+    const witFactor = (entity.traits?.wit || 50) / 100;
+    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < (0.001 + (game.lessonNoiseLevel * (0.003 + (iqFactor * 0.004))))) {
+      if (game.rng() < (0.45 + (iqFactor * 0.28) + (witFactor * 0.12))) {
+        const responses = ['I know this! 🙋🙂', 'Maybe 42? 😅', 'Can I try, please? 🤓', 'I think it is this... 🤔📘'];
         say(entity, responses[Math.floor(game.rng() * responses.length)]);
         announce(`📚 ${entity.name} attempted the class question.`, { source: entity, range: 7.5 });
         entity.emotion = Math.min(100, entity.emotion + 1.2);
       } else {
-        const daydreams = ['🍕 Lunch soon?', '⚽ After school match...', '🎮 New game later!', '☁️ Looking out the window...'];
+        const daydreams = ['🍕 Lunch soon?', '⚽ After school match... 😎', '🎮 New game later! 🕹️', '☁️ Looking out the window...'];
         think(entity, daydreams[Math.floor(game.rng() * daydreams.length)], 3400);
+      }
+    }
+
+
+    // Computer lesson behaviour: pupils can be tempted to skive, then get corrected by staff.
+    if (inLesson && current.room === 'Computer Room' && isStudent && entityRoom(entity) === 'Computer Room') {
+      if (!entity.computerTask || game.rng() < 0.01) {
+        const productive = ['spreadsheet', 'word', 'database'];
+        entity.computerTask = productive[Math.floor(game.rng() * productive.length)];
+      }
+
+      if (!entity.temptedComputerUse && game.rng() < 0.0018) {
+        entity.temptedComputerUse = game.rng() < 0.52 ? 'game' : 'pictures';
+        entity.temptedComputerAt = now;
+        think(entity, entity.temptedComputerUse === 'game' ? '🎮 Maybe just one quick game...' : '🖼️ I could sneak a picture search...', 2400);
+      }
+
+      if (entity.temptedComputerUse && now - entity.temptedComputerAt > 1800) {
+        entity.computerTask = entity.temptedComputerUse;
+        entity.temptedComputerUse = null;
+      }
+
+      const teacherInRoom = game.entities.find((candidate) => candidate.role === 'teacher' && entityRoom(candidate) === 'Computer Room');
+      const skiving = entity.computerTask === 'game' || entity.computerTask === 'pictures';
+      if (teacherInRoom && skiving && distance(teacherInRoom, entity) < 8.2 && game.rng() < 0.08) {
+        say(teacherInRoom, '🧑‍🏫 Back to work please — this is ICT, not arcade club.', { durationMs: 3000 });
+        say(entity, '😬 Sorry, switching back now!', { durationMs: 2600 });
+        entity.computerTask = game.rng() < 0.5 ? 'word' : 'spreadsheet';
+      }
+    }
+
+
+    // Relationship-driven social reactions with Eric: friendships and rivalries feel distinct.
+    if (isStudent && distance(entity, player) < 2.4 && game.rng() < 0.0022) {
+      const relation = entity.relationships?.Eric ?? 0;
+      if (relation >= 45) {
+        const friendlyLines = ['🤝 Need cover? I did not see anything.', '😄 Eric, that prank was bold!', '🫶 I will save you a seat.'];
+        say(entity, friendlyLines[Math.floor(game.rng() * friendlyLines.length)], { durationMs: 3000 });
+      } else if (relation <= -45) {
+        const hostileLines = ['😒 Keep away from me, Eric.', '📣 Sir, Eric is at it again!', '🙄 You are trouble, mate.'];
+        say(entity, hostileLines[Math.floor(game.rng() * hostileLines.length)], { durationMs: 3000 });
+      }
+    }
+
+    // Students form friendships and enemies from trait chemistry.
+    if (isStudent && game.rng() < 0.0014) {
+      const peer = game.entities.find((candidate) => (
+        candidate !== entity
+        && candidate.role !== 'teacher'
+        && candidate.role !== 'janitor'
+        && distance(candidate, entity) < 2.3
+      ));
+      if (peer) {
+        const sharedVibe = ((entity.traits.friendly + entity.traits.funny + entity.traits.honor) - (peer.traits.aggression + peer.traits.sadism)) / 120;
+        const chemistry = sharedVibe + ((entity.traits.wit - peer.traits.wit) / 300);
+        if (chemistry > 0.35 && game.rng() < 0.5) {
+          entity.friends = entity.friends || {};
+          entity.friends[peer.name] = clampScore((entity.friends[peer.name] || 35) + 9, 0, 100);
+        } else if (chemistry < -0.2 && game.rng() < 0.45) {
+          entity.enemies = entity.enemies || {};
+          entity.enemies[peer.name] = clampScore((entity.enemies[peer.name] || 20) + 8, 0, 100);
+        }
+      }
+    }
+
+    // Corridor and room transitions are now lively with lots of pupil chatter.
+    if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home') && isStudent && game.rng() < 0.02) {
+      const hallwayChatter = [
+        '😆 Wait up, I am coming too!',
+        '📚 I forgot my book again, oh no!',
+        '🍟 Canteen queue is huge today!',
+        '🏃 Last one there buys snacks!',
+        '🤫 Did you hear what happened in maths?',
+      ];
+      say(entity, hallwayChatter[Math.floor(game.rng() * hallwayChatter.length)], { durationMs: 3600 });
+    }
+
+    // Teacher occasionally hushes the class, then students slowly get noisy again.
+    if (inLesson && entity.role === 'teacher' && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.lessonNoiseLevel > 0.34 && game.rng() < 0.004) {
+      const quietCalls = ['🤨 Settle down, class. Quiet voices now.', '🧑‍🏫 Eyes front please, less chatter.', '🔕 Volume down, or everyone gets lines.'];
+      say(entity, quietCalls[Math.floor(game.rng() * quietCalls.length)], { durationMs: 3400 });
+      game.lessonQuietUntil = now + 4200;
+      game.lessonNoiseLevel = 0.04;
+    }
+
+    // Witty teacher comeback when a student asks a silly question.
+    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < 0.0014) {
+      const sillyQuestions = ['🙃 Sir, can we do homework in our dreams?', '😅 Miss, is zero afraid of minus numbers?', '🤔 If I eat my notes, do I absorb the lesson?'];
+      say(entity, sillyQuestions[Math.floor(game.rng() * sillyQuestions.length)], { durationMs: 3600 });
+      const classTeacher = game.entities.find((candidate) => (
+        candidate.role === 'teacher'
+        && entityRoom(candidate) === current.room
+        && candidate.knockedUntil < now
+      ));
+      if (classTeacher) {
+        classTeacher.speech = null;
+        say(classTeacher, ['😏 Nice try. If that worked, I would eat the exam keys.', '🧠 Creative, but knowledge still needs actual study.', '😂 Brilliant joke. Now give me the real answer.'][Math.floor(game.rng() * 3)], { durationMs: 3900 });
       }
     }
 
@@ -2244,12 +2871,12 @@ function updateAI(dt) {
     }
 
     // Teacher discipline: if they catch player in wrong room, assign lines.
-    if (entity.role === 'teacher' && distance(entity, player) < 1.8 && entityRoom(player) !== current.room && supervised && teacherPresent) {
+    if (entity.role === 'teacher' && distance(entity, player) < 1.8 && entityRoom(player) !== current.room && supervised && teacherPresent && !isTeacherBackTurned(entity)) {
       addLines(40, `${entity.name} caught you bunking ${current.period}`);
     }
 
     // Swot tattles if player is misbehaving nearby.
-    if (entity.profile.tattles && distance(entity, player) < 2 && game.rng() < 0.0025 && game.lines > 0) {
+    if (entity.profile.tattles && distance(entity, player) < 2 && game.rng() < (0.0012 + ((entity.traits?.honor || 40) / 50000)) && game.lines > 0) {
       addLines(10, `${entity.name} tattled`);
       announce(`📣 ${entity.name}: "Sir! Eric is being bad!"`, { source: entity, range: 7.5 });
     }
@@ -2275,8 +2902,8 @@ function updateAI(dt) {
     }
 
     // Break-time social bubbles make playground time feel alive.
-    if (current.mode === 'break' && isStudent && game.rng() < 0.007) {
-      const chat = ['😄 Nice pass!', '🤝 Meet by the canteen.', '😲 Did you see that punch?', "🍟 I'm starving.", '🏃 Race you to the field!'];
+    if (current.mode === 'break' && isStudent && game.rng() < 0.014) {
+      const chat = ['😄 Nice pass!', '🤝 Meet by the canteen.', '😲 Did you see that punch?', "🍟 I'm starving.", '🏃 Race you to the field!', '😂 That lesson was chaos!', '🙌 Bell finally rang!'];
       say(entity, chat[Math.floor(game.rng() * chat.length)]);
       entity.emotion = Math.min(100, entity.emotion + 1.8);
     }
@@ -2507,6 +3134,8 @@ function updateAI(dt) {
       entity.facing = boardHere.x >= entity.x ? 1 : -1;
     }
   }
+
+  syncComputerStations();
 }
 
 function updatePellets(dt) {
@@ -2527,6 +3156,8 @@ function updatePellets(dt) {
           }
           game.litter.push({ x: entity.x, y: entity.y, offender: pellet.owner, warned: false, kind: 'rubbish', droppedAt: performance.now() });
           if (pellet.owner === player) {
+            const delta = relationshipDeltaForEricInteraction(entity, 'insult');
+            adjustEricRelationship(entity, delta, 'hit-by-rubbish');
             const witness = findWitnessingTeacher(player, 6.2);
             if (witness) {
               addLines(20, 'throwing rubbish where staff could see');
@@ -2606,7 +3237,8 @@ function updateSchedule(dt) {
     const monitored = isSupervisedPeriod(current);
     const graceWindow = game.periodElapsed < 4;
     // One late penalty per period prevents feed spam and "mystery lines" stacking.
-    if (entityRoom(player) !== current.room && monitored && teacherPresent && !graceWindow && !game.latePenaltyGiven) {
+    const teacherBackTurned = isAssignedTeacherBackTurnedForPeriod(current);
+    if (entityRoom(player) !== current.room && monitored && teacherPresent && !teacherBackTurned && !graceWindow && !game.latePenaltyGiven) {
       addLines(10, `late for ${current.period}`);
       game.latePenaltyGiven = true;
     }
@@ -2684,7 +3316,9 @@ function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
     ? { a: '#7a62c7', b: '#674fb4' }
     : room.floor === 'middle'
       ? { a: '#6f95c7', b: '#5b80b1' }
-      : { a: '#67aa71', b: '#4f905a' };
+      : room.floor === 'ground'
+        ? { a: '#67aa71', b: '#4f905a' }
+        : { a: '#9f8f64', b: '#8a7a55' };
 
   if (room.type === 'corridor') {
     // Corridor tile stripes to suggest worn linoleum with floor-level color coding.
@@ -2707,8 +3341,8 @@ function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
     }
   } else {
     // Classroom/hall checker flooring with per-floor tint for orientation.
-    const baseA = room.floor === 'upper' ? '#c8b7f4' : room.floor === 'middle' ? '#bcd2f1' : '#cbe9ce';
-    const baseB = room.floor === 'upper' ? '#b59ee9' : room.floor === 'middle' ? '#a9c1e4' : '#b6dcb9';
+    const baseA = room.floor === 'upper' ? '#c8b7f4' : room.floor === 'middle' ? '#bcd2f1' : room.floor === 'ground' ? '#cbe9ce' : '#dfd2b0';
+    const baseB = room.floor === 'upper' ? '#b59ee9' : room.floor === 'middle' ? '#a9c1e4' : room.floor === 'ground' ? '#b6dcb9' : '#c7ba98';
     fillDitherRect(drawX, drawY, drawW, drawH, baseA, baseB, 4);
     ctx.strokeStyle = '#c9b38e';
     for (let y = drawY + 8; y < drawY + drawH; y += 16) {
@@ -3003,6 +3637,28 @@ function drawWorld() {
     }
   }
 
+
+  // Computer room terminals display live student activity (work vs skiving).
+  for (const station of computerStations) {
+    const p = worldToScreen(station.x, station.y);
+    const meta = computerUseMeta[station.use] || computerUseMeta.word;
+    ctx.fillStyle = '#6c757d';
+    ctx.fillRect(p.sx - 7, p.sy - 4, 14, 8);
+    ctx.fillStyle = '#343a40';
+    ctx.fillRect(p.sx - 6, p.sy - 9, 12, 7);
+    ctx.fillStyle = meta.color;
+    ctx.fillRect(p.sx - 5, p.sy - 8, 10, 5);
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 6px monospace';
+    ctx.fillText(meta.icon, p.sx - 4, p.sy - 4);
+
+    if (station.temptationBy) {
+      ctx.fillStyle = '#ffb703';
+      ctx.font = 'bold 6px monospace';
+      ctx.fillText('?', p.sx + 5, p.sy - 10);
+    }
+  }
+
   // Themed classroom props visually communicate each room's speciality.
   for (const prop of classroomProps) {
     if (performance.now() < prop.hiddenUntil) continue;
@@ -3140,16 +3796,25 @@ function drawEntities() {
       // Teachers are rendered larger and more formal than students.
       if (entity.role === 'teacher') {
         const attire = entity.profile.attire || 'staff';
+        const backTurned = isWriting;
 
         // Broad shoulders + taller coat silhouette to read clearly at distance.
         ctx.fillStyle = attire === 'scienceCoat' ? '#f8f9fa' : attire === 'flash' ? '#f4d35e' : attire === 'plainBlueDress' ? '#4f86f7' : attire === 'oldBrown' ? '#8d6e63' : '#1e2438';
         ctx.fillRect(px - 9, py - 21 + bob, 18, 15);
 
-        // Formal tie/collar motif helps identify staff quickly.
-        ctx.fillStyle = '#fefefe';
-        ctx.fillRect(px - 2, py - 19 + bob, 4, 4);
-        ctx.fillStyle = '#c1121f';
-        ctx.fillRect(px - 1, py - 15 + bob, 2, 4);
+        // Back-turned board-writing frame: no face/tie visible, jacket seam instead.
+        if (backTurned) {
+          ctx.fillStyle = '#2a334d';
+          ctx.fillRect(px - 1, py - 20 + bob, 2, 13);
+          ctx.fillStyle = '#5b4636';
+          ctx.fillRect(px - 5, py - 24 + bob, 10, 2);
+        } else {
+          // Formal tie/collar motif helps identify staff quickly.
+          ctx.fillStyle = '#fefefe';
+          ctx.fillRect(px - 2, py - 19 + bob, 4, 4);
+          ctx.fillStyle = '#c1121f';
+          ctx.fillRect(px - 1, py - 15 + bob, 2, 4);
+        }
 
         if (entity.name === 'Mr Wacker' || entity.profile.beard) {
           // Headmaster: black suit with beard.
@@ -3226,22 +3891,35 @@ function drawEntities() {
 
     const nowBubble = performance.now();
     if (entity.speech && entity.speech.until > nowBubble) {
-      ctx.fillStyle = 'rgba(255,255,255,0.95)';
-      ctx.strokeStyle = '#1f2937';
-      ctx.fillRect(px - 42, py - 58, 84, 14);
-      ctx.strokeRect(px - 42, py - 58, 84, 14);
-      ctx.fillStyle = '#0f1426';
-      ctx.font = '8px monospace';
-      ctx.fillText(entity.speech.text.slice(0, 16), px - 39, py - 48);
+      const lines = wrapBubbleText(entity.speech.text, 180);
+      drawRoundedBubble(px, py - 42, lines, {
+        paddingX: 8,
+        paddingY: 5,
+        lineHeight: 11,
+        radius: 8,
+        fillColor: 'rgba(255,255,255,0.97)',
+        strokeColor: '#1f2937',
+        shadowColor: 'rgba(10,12,28,0.35)',
+        shadowBlur: 6,
+        textColor: '#0f1426',
+        font: '9px monospace',
+      });
     }
     if (entity.thought && entity.thought.until > nowBubble) {
-      ctx.fillStyle = 'rgba(232,244,255,0.95)';
-      ctx.strokeStyle = '#3a86ff';
-      ctx.fillRect(px - 36, py - 74, 72, 12);
-      ctx.strokeRect(px - 36, py - 74, 72, 12);
-      ctx.fillStyle = '#1d3557';
-      ctx.font = '7px monospace';
-      ctx.fillText(entity.thought.text.slice(0, 18), px - 33, py - 65);
+      const lines = wrapBubbleText(entity.thought.text, 160);
+      drawRoundedBubble(px, py - 60, lines, {
+        paddingX: 8,
+        paddingY: 4,
+        lineHeight: 10,
+        radius: 9,
+        fillColor: 'rgba(232,244,255,0.97)',
+        strokeColor: '#3a86ff',
+        shadowColor: 'rgba(30,80,130,0.25)',
+        shadowBlur: 5,
+        textColor: '#1d3557',
+        font: '8px monospace',
+        tailOffsetX: 12,
+      });
     }
 
     if (entity.carryingTrash) {
@@ -3498,6 +4176,11 @@ function loop(now) {
     checkSchoolExit();
     updateBladder(dt);
     maybeShameEric(now);
+    if (game.headmasterDetentionUntil > 0 && now >= game.headmasterDetentionUntil && !game.headmasterDismissAnnounced) {
+      game.headmasterDismissAnnounced = true;
+      game.headmasterDetentionUntil = 0;
+      announce('🧑‍🏫 Headmaster: "Now get out of my sight and back to class!"', { force: true });
+    }
     recoverEnergy(dt / 1000);
     updateTodo();
   }
