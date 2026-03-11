@@ -1159,40 +1159,52 @@ function roomHasOpenSeat(roomName, student) {
   return studentsCommittedToRoom(roomName, student) < layout.seats.length;
 }
 
-function chooseLessonRoomForStudent(student, currentPeriod) {
-  const assignedTeacherName = assignedTeacherForRoom(currentPeriod.room);
-  const assignedTeacherPresent = game.entities.some((entity) => (
-    entity.role === 'teacher'
-    && (!assignedTeacherName || entity.name === assignedTeacherName)
-    && entityRoom(entity) === currentPeriod.room
-    && entity.knockedUntil < performance.now()
-  ));
+function lessonClassroomCandidates(currentPeriod) {
+  // Keep lesson routing constrained to real classrooms so pupils never drift
+  // into halls (like the Gym) when they should be in supervised lessons.
+  const fallbackClassrooms = rooms
+    .filter((room) => room.type === 'classroom' && room.name !== 'Staff Room')
+    .map((room) => room.name);
 
-  const teacherClassrooms = game.entities
+  const activeTeacherRooms = game.entities
     .filter((entity) => entity.role === 'teacher' && entity.knockedUntil < performance.now())
-    .map((entity) => entityRoom(entity))
-    .filter((roomName) => roomName && roomByName(roomName)?.type === 'classroom');
+    .map((entity) => {
+      const currentTeacherRoom = entityRoom(entity);
+      const safeTeacherRoom = roomByName(currentTeacherRoom)?.type === 'classroom'
+        ? currentTeacherRoom
+        : teacherHomeRoom(entity.name);
+      return roomByName(safeTeacherRoom)?.type === 'classroom' ? safeTeacherRoom : null;
+    })
+    .filter(Boolean);
 
-  const candidateSet = new Set();
-  if (assignedTeacherPresent) candidateSet.add(currentPeriod.room);
-  for (const roomName of teacherClassrooms) candidateSet.add(roomName);
+  const candidateSet = new Set([currentPeriod.room, ...activeTeacherRooms]);
+  const candidates = [...candidateSet]
+    .filter((roomName) => roomByName(roomName)?.type === 'classroom')
+    .sort((a, b) => a.localeCompare(b));
 
-  const candidates = [...candidateSet].filter((roomName) => roomHasOpenSeat(roomName, student));
-  if (!candidates.length) return currentPeriod.room;
+  return candidates.length ? candidates : fallbackClassrooms;
+}
 
-  let bestRoom = candidates[0];
-  let bestScore = Infinity;
-  for (const roomName of candidates) {
-    const seat = nearestFreeSeatInRoom(roomName, student) || roomCenter(roomName);
-    const crowd = studentsCommittedToRoom(roomName, student);
-    const score = crowd * 5.5 + distance(student, seat);
-    if (score < bestScore) {
-      bestScore = score;
-      bestRoom = roomName;
+function chooseLessonRoomForStudent(student, currentPeriod) {
+  const candidates = lessonClassroomCandidates(currentPeriod);
+  const availableRooms = candidates.filter((roomName) => roomHasOpenSeat(roomName, student));
+  if (!availableRooms.length) return currentPeriod.room;
+
+  // Deterministic roster split keeps class populations evenly distributed
+  // across available classrooms instead of bunching to one destination.
+  const attendingStudents = game.entities
+    .filter((entity) => entity.role !== 'teacher' && entity.knockedUntil < performance.now())
+    .sort((a, b) => a.seatIndex - b.seatIndex);
+  const rosterIndex = Math.max(0, attendingStudents.findIndex((entity) => entity === student));
+
+  for (let offset = 0; offset < availableRooms.length; offset += 1) {
+    const roomName = availableRooms[(rosterIndex + offset) % availableRooms.length];
+    if (roomHasOpenSeat(roomName, student)) {
+      return roomName;
     }
   }
 
-  return bestRoom;
+  return availableRooms[0];
 }
 
 function toggleSeat() {
