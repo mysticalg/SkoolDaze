@@ -1319,6 +1319,20 @@ function updateNpcVitals(entity, dt, isRunning) {
   entity.energy = Math.max(16, entity.energy - dtSeconds * drainRate);
 }
 
+function pushStudentAsideForTeacher(teacher, student, dtSeconds) {
+  // Teachers have right-of-way in corridors: nearby students are nudged aside
+  // so staff can reach lessons on time instead of getting body-blocked.
+  const offsetX = student.x - teacher.x;
+  const offsetY = student.y - teacher.y;
+  const gap = Math.hypot(offsetX, offsetY) || 0.001;
+  if (gap > 1.08) return;
+
+  const shove = ((1.08 - gap) / 1.08) * (3.6 * dtSeconds);
+  student.x += (offsetX / gap) * shove;
+  student.y += (offsetY / gap) * shove;
+  constrain(student);
+}
+
 function updateAI(dt) {
   const current = schedule[game.periodIndex];
   const supervised = current.mode === 'lesson' || current.period === 'Tutorial';
@@ -1458,10 +1472,17 @@ function updateAI(dt) {
         const gapY = entity.y - other.y;
         const gap = Math.hypot(gapX, gapY) || 0.001;
         if (gap < 1.45) {
-          // Stronger crowd separation keeps doorway traffic from bunching into one blob.
-          const push = ((1.45 - gap) / 1.45) * 0.46;
+          // Teachers keep priority: students yield more, teachers yield less.
+          let push = ((1.45 - gap) / 1.45) * 0.46;
+          if (entity.role !== 'teacher' && other.role === 'teacher') push *= 2.35;
+          if (entity.role === 'teacher' && other.role !== 'teacher') push *= 0.28;
           dx += (gapX / gap) * push;
           dy += (gapY / gap) * push;
+        }
+
+        // Teachers can physically clear students blocking their path.
+        if (entity.role === 'teacher' && other.role !== 'teacher') {
+          pushStudentAsideForTeacher(entity, other, dt / 1000);
         }
       }
     }
@@ -1488,9 +1509,9 @@ function updateAI(dt) {
     const lateForClass = supervised && teacherPresent && entityRoom(entity) !== expectedRoom;
     const canRun = entity.energy > 20;
     entity.running = lateForClass && canRun;
-    const runBoost = entity.running ? 1.78 : 1;
-    // Faster movement so students visibly travel between rooms at bell changes.
-    const hallwayBoost = entity.role !== 'teacher' ? 3.35 : 3.1;
+    const runBoost = entity.running ? 1.72 : 1;
+    // Teachers are intentionally quicker than students to keep lessons moving.
+    const hallwayBoost = entity.role === 'teacher' ? 3.95 : 3.3;
     // Staff get an extra catch-up boost so lessons do not appear to start without a teacher.
     const staffCatchupBoost = entity.role === 'teacher' && lateForClass ? 1.75 : 1;
     const speed = entity.personality.speed * (entity.energy / 100) * hallwayBoost * runBoost * staffCatchupBoost;
