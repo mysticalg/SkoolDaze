@@ -102,7 +102,33 @@ const stairs = [
   { x: 64, fromFloor: 'ground', toFloor: 'lower', fromY: 78, toY: 112, label: 'Central Lower Stairs' },
   { x: 104, fromFloor: 'ground', toFloor: 'lower', fromY: 78, toY: 112, label: 'East Lower Stairs' },
   { x: 146, fromFloor: 'ground', toFloor: 'lower', fromY: 78, toY: 112, label: 'Annex Lower Stairs' },
+  // Extra route: directly links lower + middle floors to keep navigation flexible.
+  { x: 84, fromFloor: 'middle', toFloor: 'lower', fromY: 52, toY: 112, label: 'Service Stairs' },
 ];
+
+// Lightweight synth SFX keeps interactions responsive without external assets.
+const sfxState = { ctx: null, enabled: true };
+
+const doorTransitionDepth = 1.15;
+
+// All enclosed rooms get explicit doors so both player and NPCs can traverse by interaction.
+const roomDoors = rooms
+  .filter((room) => room.type !== 'corridor' && room.type !== 'outdoor')
+  .map((room) => {
+    const corridorY = room.floor === 'upper' ? 17 : room.floor === 'middle' ? 52 : room.floor === 'ground' ? 78 : 112;
+    const topDist = Math.abs(room.y - corridorY);
+    const bottomDist = Math.abs((room.y + room.h) - corridorY);
+    const corridorAtTop = topDist <= bottomDist;
+    return {
+      room: room.name,
+      floor: room.floor,
+      x: room.x + room.w / 2,
+      y: corridorAtTop ? room.y : room.y + room.h,
+      interiorY: corridorAtTop ? room.y + doorTransitionDepth : room.y + room.h - doorTransitionDepth,
+      exteriorY: corridorAtTop ? room.y - 0.55 : room.y + room.h + 0.55,
+      icon: '🚪',
+    };
+  });
 
 const blackboards = [
   { room: 'Science Lab', x: 21, y: 6, text: '' },
@@ -551,6 +577,32 @@ function roomDoorway(room) {
   };
 }
 
+function nearestDoor(entity, radius = 1.75) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const door of roomDoors) {
+    const d = distance(entity, door);
+    if (d <= radius && d < bestDist) {
+      best = door;
+      bestDist = d;
+    }
+  }
+  return best;
+}
+
+function useDoor(entity, door) {
+  if (!door) return false;
+  const inRoom = entityRoom(entity) === door.room;
+
+  // Snap to either side of the doorway so transitions feel immediate and deterministic.
+  entity.x = door.x;
+  entity.y = inRoom ? door.exteriorY : door.interiorY;
+  entity.vx = 0;
+  entity.vy = 0;
+  constrain(entity);
+  return true;
+}
+
 function doorwayStagingPoint(entity, doorway, room) {
   if (!doorway || !room) return doorway;
   // Spread traffic across each doorway so late students do not stack on one tile.
@@ -675,6 +727,7 @@ function tryUseStairs(entity, desiredFloor = null) {
     if (!destinationStep) continue;
     entity.x = destinationStep.x;
     entity.y = destinationStep.y + (destinationFloor === 'upper' || destinationFloor === 'middle' ? 0.35 : -0.35);
+    if (entity === player) playSfx('stair');
     return true;
   }
   return false;
@@ -875,6 +928,50 @@ function announce(message, options = {}) {
   game.announcements.unshift(`[${formatTime(game.timeMinutes)}] ${message}`);
   game.announcements = game.announcements.slice(0, 12);
   eventsEl.innerHTML = game.announcements.map((line) => `<div>${line}</div>`).join('');
+}
+
+function getSfxContext() {
+  if (!sfxState.enabled) return null;
+  if (!sfxState.ctx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) {
+      sfxState.enabled = false;
+      return null;
+    }
+    sfxState.ctx = new Ctx();
+  }
+  if (sfxState.ctx.state === 'suspended') sfxState.ctx.resume();
+  return sfxState.ctx;
+}
+
+function playSfx(kind) {
+  const ctx = getSfxContext();
+  if (!ctx) return;
+
+  const presets = {
+    door: { freq: 420, endFreq: 250, duration: 0.09, type: 'square', gain: 0.035 },
+    stair: { freq: 310, endFreq: 520, duration: 0.12, type: 'triangle', gain: 0.038 },
+    interact: { freq: 520, endFreq: 470, duration: 0.06, type: 'sine', gain: 0.03 },
+  };
+  const preset = presets[kind] || presets.interact;
+
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  const start = ctx.currentTime;
+  const end = start + preset.duration;
+
+  osc.type = preset.type;
+  osc.frequency.setValueAtTime(preset.freq, start);
+  osc.frequency.linearRampToValueAtTime(preset.endFreq, end);
+
+  gain.gain.setValueAtTime(0.0001, start);
+  gain.gain.exponentialRampToValueAtTime(preset.gain, start + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, end);
+
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(start);
+  osc.stop(end + 0.01);
 }
 
 function updateTodo() {
@@ -1361,14 +1458,28 @@ function interact() {
     player.x = destination.x;
     player.y = destination.y + (movingUp ? 0.4 : -0.4);
     announce(`🪜 Used ${nearbyStair.label} to ${movingUp ? 'go up' : 'go down'} a floor.`);
+    playSfx('stair');
     updateFloorStatus();
     return;
+  }
+
+  // Use explicit room doors: interact toggles between corridor and interior.
+  const nearbyDoor = nearestDoor(player);
+  if (nearbyDoor) {
+    const entering = entityRoom(player) !== nearbyDoor.room;
+    if (useDoor(player, nearbyDoor)) {
+      announce(`${nearbyDoor.icon} Eric ${entering ? 'entered' : 'left'} ${nearbyDoor.room}.`);
+      playSfx('door');
+      updateFloorStatus();
+      return;
+    }
   }
 
   // Use nearby bins to dispose of packaging.
   const nearbyBin = trashCans.find((bin) => distance(player, bin) < 2.1);
   if (nearbyBin && game.playerCarryingTrash) {
     game.playerCarryingTrash = false;
+    playSfx('interact');
     announce(`🗑️ Eric used ${nearbyBin.label} and binned his rubbish.`);
     return;
   }
@@ -1380,6 +1491,7 @@ function interact() {
     game.energy = Math.min(100, game.energy + 4);
     updateBladderHud();
     energyEl.textContent = `⚡ Energy: ${Math.round(game.energy)}`;
+    playSfx('interact');
     announce(`🚰 Eric drinks from ${nearbyFountain.label}. Refreshed and ready.`);
     return;
   }
@@ -1387,6 +1499,7 @@ function interact() {
   // Read blackboard instructions.
   const board = blackboards.find((b) => distance(player, b) < 2.2);
   if (board && board.text) {
+    playSfx('interact');
     announce(`📋 Board: "${board.text}"`);
   }
 
@@ -1402,6 +1515,7 @@ function interact() {
 
     if (closeEnough && tallEnough) {
       shield.found = true;
+      playSfx('interact');
       announce(`🛡️ Found shield letter: ${shield.letter}`);
       updateMission();
       updateTodo();
@@ -1706,6 +1820,18 @@ function updateAI(dt) {
       entity.vy = 0;
       updateNpcVitals(entity, dt, false);
       continue;
+    }
+
+    // NPCs also use doorway transitions instead of clipping through room walls.
+    const npcDoor = nearestDoor(entity, 1.3);
+    if (npcDoor) {
+      const targetRoom = roomAtPosition(entity.target);
+      const currentlyInside = entityRoom(entity) === npcDoor.room;
+      const shouldEnter = targetRoom?.name === npcDoor.room && !currentlyInside;
+      const shouldExit = targetRoom?.name !== npcDoor.room && currentlyInside;
+      if (shouldEnter || shouldExit) {
+        useDoor(entity, npcDoor);
+      }
     }
 
     const expectedRoom = entity.role === 'teacher'
@@ -2145,10 +2271,18 @@ function drawWorld() {
       }
     }
 
-    // Doorway markers communicate where corridors connect rooms.
-    if (room.type !== 'outdoor') {
-      ctx.fillStyle = '#3e7e9c';
-      ctx.fillRect(drawX + drawW / 2 - 7, drawY + drawH - 2, 14, 4);
+    // Door markers make room transitions clear and communicate where E can be used.
+    const door = roomDoors.find((d) => d.room === room.name);
+    if (door) {
+      const doorPos = worldToScreen(door.x, door.y);
+      fillDitherRect(doorPos.sx - 8, doorPos.sy - 7, 16, 14, '#835637', '#6a432a', 2);
+      ctx.fillStyle = '#d3a15b';
+      ctx.fillRect(doorPos.sx - 3, doorPos.sy - 5, 6, 10);
+      ctx.fillStyle = '#2a1b12';
+      ctx.fillRect(doorPos.sx + 1, doorPos.sy, 2, 2);
+      ctx.fillStyle = '#fff1d0';
+      ctx.font = 'bold 7px monospace';
+      ctx.fillText('E', doorPos.sx - 2, doorPos.sy + 16);
     }
 
     ctx.strokeStyle = PALETTE.line;
@@ -2685,7 +2819,7 @@ function loop(now) {
       if (!hasArrivedForCurrentPeriod(entity)) continue;
       const moveMagnitude = Math.abs(entity.vx) + Math.abs(entity.vy);
       // Keep walk cycle readable: slightly slower leg animation while movement speed is higher.
-      entity.animPhase += dt * (0.004 + moveMagnitude * 0.0065);
+      entity.animPhase += dt * (0.0027 + moveMagnitude * 0.0042);
     }
 
     updateAI(dt);
