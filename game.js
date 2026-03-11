@@ -150,11 +150,11 @@ const blackboards = [
 
 // Blackboard card metrics are shared so text wrapping and board size stay in sync.
 const BOARD_DRAW = {
-  width: 58,
-  height: 24,
-  lineHeight: 7,
-  maxLines: 3,
-  maxCharsPerLine: 18,
+  width: 74,
+  height: 32,
+  lineHeight: 8,
+  maxLines: 4,
+  maxCharsPerLine: 22,
 };
 
 const shields = [
@@ -202,28 +202,36 @@ const classroomProps = [
   { room: 'Headmaster Office', x: 164, y: 46, icon: 'R', color: '#e5989b', kind: 'rule book', throwable: true, hiddenUntil: 0 },
 ];
 
-// Bell schedule approximating school-day flow.
-// Arrival now gives a full 30-second travel/setup window before tutorial.
-const ARRIVAL_REAL_SECONDS = 30;
-const ARRIVAL_GAME_MINUTES = (ARRIVAL_REAL_SECONDS / 60);
+// Bell schedule now compresses a full school day to ~15 real-world minutes.
 const schedule = [
-  { period: 'Arrival', room: 'School Gates', mins: ARRIVAL_GAME_MINUTES, mode: 'transition' },
-  { period: 'Tutorial', room: 'Science Lab', mins: 30, mode: 'lesson' },
+  { period: 'Start Day', room: 'School Gates', mins: 10, mode: 'transition' },
+  { period: 'Registration', room: 'Science Lab', mins: 25, mode: 'lesson' },
   { period: 'Lesson 1', room: 'Maths', mins: 60, mode: 'lesson' },
   { period: 'Lesson 2', room: 'English', mins: 60, mode: 'lesson' },
-  { period: 'Lesson 3', room: 'Upper Common', mins: 45, mode: 'lesson' },
-  { period: 'Lesson 4', room: 'Physics Lab', mins: 45, mode: 'lesson' },
-  { period: 'Break', room: 'P.E. Field', mins: 20, mode: 'break' },
-  { period: 'Lesson 5', room: 'Geography', mins: 60, mode: 'lesson' },
-  { period: 'Lesson 6', room: 'History', mins: 60, mode: 'lesson' },
-  { period: 'Lesson 7', room: 'Music Room', mins: 45, mode: 'lesson' },
-  { period: 'Lunch', room: 'P.E. Field', mins: 60, mode: 'break' },
-  { period: 'Lesson 8', room: 'Art Room', mins: 60, mode: 'lesson' },
-  { period: 'Lesson 9', room: 'Computer Room', mins: 60, mode: 'lesson' },
-  { period: 'Lesson 10', room: 'Chem Prep', mins: 45, mode: 'lesson' },
-  { period: 'Lesson 11', room: 'Headmaster Office', mins: 30, mode: 'lesson' },
-  { period: 'Home Time', room: 'School Gates', mins: 30, mode: 'home' },
+  { period: 'Morning Break', room: 'P.E. Field', mins: 25, mode: 'break' },
+  { period: 'Lesson 3', room: 'Geography', mins: 55, mode: 'lesson' },
+  { period: 'Lunch Break', room: 'P.E. Field', mins: 50, mode: 'break' },
+  { period: 'Lesson 4', room: 'Art Room', mins: 60, mode: 'lesson' },
+  { period: 'Lesson 5', room: 'Computer Room', mins: 60, mode: 'lesson' },
+  { period: 'Home Time', room: 'School Gates', mins: 20, mode: 'home' },
+  { period: 'End Day', room: 'School Gates', mins: 10, mode: 'end' },
 ];
+
+const TARGET_DAY_REAL_SECONDS = 15 * 60;
+const TOTAL_DAY_GAME_MINUTES = schedule.reduce((sum, period) => sum + period.mins, 0);
+
+// Period helpers keep schedule checks readable when timetable labels change.
+function isSupervisedPeriod(period) {
+  return period.mode === 'lesson';
+}
+
+function isStartDayPeriod(period) {
+  return period.period === 'Start Day';
+}
+
+function isRegistrationPeriod(period) {
+  return period.period === 'Registration';
+}
 
 const floorMeta = {
   upper: { label: 'Upper', color: 'Purple' },
@@ -295,9 +303,8 @@ const WEEKLY_SICK_DAY_INTERVAL = 5;
 
 const game = {
   timeMinutes: 8 * 60 + 20,
-  // Minutes advanced per real-time second; tuned so lesson travel windows are fair.
-  // Faster school clock keeps lessons moving and reduces long idle stretches.
-  timeScale: 0.14,
+  // Minutes advanced per real-time second so the full school day lasts ~15 real minutes.
+  timeScale: TOTAL_DAY_GAME_MINUTES / TARGET_DAY_REAL_SECONDS,
   periodIndex: 0,
   periodElapsed: 0,
   periodHoldMinutes: 0,
@@ -361,6 +368,11 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     attention: 100,
     profile: traits,
     mood: 'calm',
+    emotion: 55,
+    pride: 10,
+    lastSpokeAt: 0,
+    speech: null,
+    thought: null,
     animPhase: Math.random() * Math.PI * 2,
     seatIndex: seatCounter++,
     carryingTrash: false,
@@ -379,7 +391,7 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     punchUntil: 0,
     fallStartedAt: 0,
     fallDuration: 520,
-    // Arrival staging: students appear over the first 30 seconds, teachers are ready immediately.
+    // Start-of-day staging: students phase in during the opening period while teachers are ready immediately.
     arrivedForDay: true,
     arrivalJoinMins: 0,
     // Movement watchdog helps recover teachers from rare wall-edge stalls.
@@ -487,13 +499,13 @@ function teacherGateLinePosition(teacherIndex) {
 
 function hasArrivedForCurrentPeriod(entity, currentPeriod = schedule[game.periodIndex]) {
   if (entity === player) return true;
-  if (currentPeriod.period !== 'Arrival') return true;
+  if (currentPeriod.period !== 'Start Day') return true;
   return entity.arrivedForDay;
 }
 
 function bullyFightChance(currentPeriod) {
   // Keep mornings civil: fights are very unlikely until break starts.
-  if (currentPeriod.period === 'Arrival' || currentPeriod.period === 'Tutorial') return 0.0001;
+  if (isStartDayPeriod(currentPeriod) || isRegistrationPeriod(currentPeriod)) return 0.0001;
   if (currentPeriod.mode !== 'break') return 0.00035;
   return 0.006;
 }
@@ -664,8 +676,8 @@ function chooseAutoDestination() {
   }
   // Keep Eric in the same gate lineup pattern as everyone else on arrival,
   // instead of dragging him to the middle of the School Gates room.
-  if (current.period === 'Arrival') return gateQueuePosition(player);
-  if (current.mode === 'home') return roomCenter('School Gates');
+  if (isStartDayPeriod(current)) return gateQueuePosition(player);
+  if (current.mode === 'home' || current.mode === 'end') return roomCenter('School Gates');
   return roomCenter(current.room);
 }
 
@@ -950,7 +962,7 @@ function resetToSchoolMorning() {
       entity.x = schoolExit.x + 2.2 + game.rng() * 2.2;
       entity.y = gate.y + 4 + game.rng() * (gate.h - 6);
       entity.arrivedForDay = false;
-      entity.arrivalJoinMins = game.rng() * Math.max(0.01, ARRIVAL_GAME_MINUTES * 0.92);
+      entity.arrivalJoinMins = game.rng() * Math.max(0.01, schedule[0].mins * 0.92);
       entity.target = null;
     }
     entity.vx = 0;
@@ -964,14 +976,14 @@ function resetToSchoolMorning() {
   setPeriod(0);
   updateBladderHud();
   updateHygieneHud();
-  announce('🌅 New school day: students gather at the gates ready for tutorial.');
+  announce('🌅 New school day: students gather at the gates ready for registration.');
 }
 
 function updateAutoPilot(dt) {
   const current = schedule[game.periodIndex];
   const destination = chooseAutoDestination();
   const waypoint = routeWaypoint(player, destination);
-  const lateForClass = (current.mode === 'lesson' || current.period === 'Tutorial')
+  const lateForClass = (isSupervisedPeriod(current))
     && entityRoom(player) !== current.room;
   // Auto mode should feel readable and controlled, not faster than manual play.
   const hallwayBoost = 1.05;
@@ -1060,6 +1072,17 @@ function canPlayerHearSpeaker(source, range) {
   return sameRoom || distance(source, player) <= range;
 }
 
+function say(entity, text, opts = {}) {
+  if (!entity || !text) return;
+  entity.speech = { text: String(text), kind: opts.kind || 'speech', until: performance.now() + (opts.durationMs || 2600) };
+  entity.lastSpokeAt = performance.now();
+}
+
+function think(entity, text, durationMs = 3200) {
+  if (!entity || !text) return;
+  entity.thought = { text: String(text), until: performance.now() + durationMs };
+}
+
 function announce(message, options = {}) {
   const {
     source = null,
@@ -1069,6 +1092,10 @@ function announce(message, options = {}) {
 
   // Speech-style events can be local so the feed reflects what Eric can realistically hear.
   if (!force && source && !canPlayerHearSpeaker(source, range)) return;
+  if (source) {
+    const spoken = String(message).replace(/^.*?:\s*"?/, '').replace(/"$/, '').trim();
+    say(source, spoken || '...');
+  }
 
   game.announcements.unshift(`[${formatTime(game.timeMinutes)}] ${message}`);
   game.announcements = game.announcements.slice(0, 12);
@@ -1292,7 +1319,7 @@ function setPeriod(index) {
     entity.isSeated = false;
     entity.seatedRoom = null;
   }
-  if (current.period === 'Tutorial') game.registrationTaken = false;
+  if (isRegistrationPeriod(current)) game.registrationTaken = false;
 
   // Board content changes each bell to emulate lesson instructions.
   blackboards.forEach((board) => {
@@ -1305,13 +1332,16 @@ function setPeriod(index) {
     }
   });
 
-  if (current.period === 'Arrival') {
+  if (isStartDayPeriod(current)) {
     announce('👨‍🏫 Teachers line the students up at the gates and lead them inside.');
   }
 
   announce(`🔔 Bell! ${current.period} in ${current.room}`);
   if (current.period === 'Home Time') {
     announce('🏠 Home time! Students may leave through the school gates.');
+  }
+  if (current.period === 'End Day') {
+    announce('🌙 End of day bell. Campus is closing.');
   }
   periodEl.textContent = `🔔 Period: ${current.period}`;
   roomTargetEl.textContent = `📍 Target: ${current.room}`;
@@ -1435,6 +1465,9 @@ function meleeAttack(attacker) {
     if (distance(attacker, target) < strikeRange) {
       target.hp -= attacker.profile.cane ? 55 : 45;
       target.mood = 'angry';
+      target.emotion = Math.max(0, target.emotion - 12);
+      think(target, "Ouch... I'm furious.");
+      attacker.pride = Math.min(100, attacker.pride + 6);
       if (attacker.profile.cane) {
         announce(`🪵 ${attacker.name} thwacked ${target.name} with a walking stick`);
       } else {
@@ -1526,6 +1559,9 @@ function knockout(entity, by) {
   entity.fallStartedAt = now;
   entity.punchUntil = 0;
   entity.mood = 'dazed';
+  entity.emotion = Math.max(0, entity.emotion - 16);
+  by.pride = Math.min(100, (by.pride || 0) + 9);
+  think(entity, 'Everything is spinning...');
   announce(`💫 ${entity.name} knocked out by ${by.name}`);
 }
 
@@ -1755,6 +1791,13 @@ function interact() {
     const quiz = { q: 'What is 6 x 7?', answer: '42' };
     game.quizActive = quiz;
     teacherNearby.lastQuizAt = now;
+    const board = blackboards.find((b) => b.room === current.room);
+    if (board) {
+      teacherNearby.target = { x: board.x - 1.2, y: board.y + 1.3 };
+      teacherNearby.writingUntil = performance.now() + 1500;
+      setBoardText(board, quiz.q);
+    }
+    say(teacherNearby, 'Right class, question time.');
     const response = prompt(`${teacherNearby.name} asks: ${quiz.q}`);
     if ((response || '').trim() === quiz.answer) {
       announce(`✅ Correct answer. ${teacherNearby.name} nods approvingly.`, { source: teacherNearby, range: 7 });
@@ -1788,7 +1831,7 @@ function teacherBoardSpot(periodRoom) {
 }
 
 function isAssignedTeacherSeatedForPeriod(currentPeriod = schedule[game.periodIndex]) {
-  if (currentPeriod.mode !== 'lesson' && currentPeriod.period !== 'Tutorial') return true;
+  if (!isSupervisedPeriod(currentPeriod)) return true;
   const assignedTeacherName = assignedTeacherForRoom(currentPeriod.room);
   const assignedSeat = getTeacherSeatPosition(currentPeriod.room);
   return game.entities.some((entity) => (
@@ -1832,7 +1875,7 @@ function chooseTarget(entity, currentPeriod) {
   const p = entity.personality;
   const shouldAttend = game.rng() < p.diligence;
 
-  if (currentPeriod.period === 'Arrival') {
+  if (isStartDayPeriod(currentPeriod)) {
     return gateQueuePosition(entity);
   }
 
@@ -1866,7 +1909,7 @@ function chooseTarget(entity, currentPeriod) {
 }
 
 function isTeacherPresentForPeriod(currentPeriod) {
-  if (currentPeriod.mode !== 'lesson' && currentPeriod.period !== 'Tutorial') return true;
+  if (!isSupervisedPeriod(currentPeriod)) return true;
   // Count attendance by room presence so lessons don't stall when teachers pace near the board.
   return game.entities.some((entity) => (
     entity.role === 'teacher'
@@ -1906,7 +1949,7 @@ function updateNpcVitals(entity, dt, isRunning) {
   const runningExtraDrainPerSecond = 0.58;
   const recoverPerSecond = 0.16;
   const period = schedule[game.periodIndex];
-  const isLunch = period.period === 'Lunch';
+  const isLunch = period.period === 'Lunch Break';
   const inFoodZone = entityRoom(entity) === 'P.E. Field' || entityRoom(entity) === 'Reception';
   const canRecoverFromMeal = period.mode === 'break' && isLunch && inFoodZone;
 
@@ -1917,6 +1960,8 @@ function updateNpcVitals(entity, dt, isRunning) {
 
   const drainRate = baseDrainPerSecond + (isRunning ? runningExtraDrainPerSecond : 0);
   entity.energy = Math.max(16, entity.energy - dtSeconds * drainRate);
+  const emotionDrift = entity.mood === 'furious' || entity.mood === 'angry' ? -0.9 : 0.35;
+  entity.emotion = Math.max(0, Math.min(100, entity.emotion + (emotionDrift * dtSeconds)));
 }
 
 
@@ -2017,7 +2062,7 @@ function pushStudentAsideForTeacher(teacher, student, dtSeconds) {
 
 function updateAI(dt) {
   const current = schedule[game.periodIndex];
-  const supervised = current.mode === 'lesson' || current.period === 'Tutorial';
+  const supervised = isSupervisedPeriod(current);
   const teacherPresent = isTeacherPresentForPeriod(current);
   const assignedTeacherName = assignedTeacherForRoom(current.room);
 
@@ -2032,7 +2077,7 @@ function updateAI(dt) {
     }
     if (entity.knockedUntil > performance.now()) continue;
 
-    const inLesson = current.mode === 'lesson' || current.period === 'Tutorial';
+    const inLesson = isSupervisedPeriod(current);
     const dtSeconds = dt / 1000;
 
     // Keep students in supervised, staffed classrooms instead of empty rooms.
@@ -2098,6 +2143,23 @@ function updateAI(dt) {
       if (victim && entity.carryingTrash && game.rng() < 0.0045) {
         entity.facing = victim.x >= entity.x ? 1 : -1;
         throwRubbish(entity);
+      }
+    }
+
+    // Break-time social bubbles make playground time feel alive.
+    if (current.mode === 'break' && entity.role !== 'teacher' && entity.role !== 'janitor' && game.rng() < 0.007) {
+      const chat = ['Nice pass!', 'Meet by the canteen.', 'Did you see that punch?', "I'm starving.", 'Race you to the field!'];
+      say(entity, chat[Math.floor(game.rng() * chat.length)]);
+      entity.emotion = Math.min(100, entity.emotion + 1.8);
+    }
+
+    // Students congregate on the field and play football in breaks/lunch.
+    if (current.mode === 'break' && entity.role !== 'teacher' && entity.role !== 'janitor' && game.rng() < 0.01) {
+      entity.target = roomCenter('P.E. Field');
+      if (entityRoom(entity) === 'P.E. Field' && game.rng() < 0.18) {
+        say(entity, '⚽ Pass it!');
+        think(entity, 'This is the best part of school.');
+        entity.emotion = Math.min(100, entity.emotion + 2.2);
       }
     }
 
@@ -2197,7 +2259,7 @@ function updateAI(dt) {
     const len = Math.hypot(dx, dy) || 1;
 
     // During gate lineup, lock pupils/teachers still once they reach their slot.
-    if (current.period === 'Arrival' && len < 0.52) {
+    if (isStartDayPeriod(current) && len < 0.52) {
       entity.vx = 0;
       entity.vy = 0;
       entity.running = false;
@@ -2288,7 +2350,7 @@ function updateAI(dt) {
     const canCallOutBoard = entity.role === 'teacher'
       && entity.name === assignedTeacherName
       && entityRoom(entity) === current.room
-      && (current.mode === 'lesson' || current.period === 'Tutorial')
+      && (isSupervisedPeriod(current))
       && (performance.now() - game.lastBoardCalloutAt > boardCooldownMs);
     if (canCallOutBoard && game.rng() < 0.0011) {
       const board = blackboards.find((b) => b.room === current.room);
@@ -2360,7 +2422,7 @@ function updateSchedule(dt) {
   const deltaMins = (dt / 1000) * game.timeScale;
   const teacherPresent = isTeacherPresentForPeriod(current);
   const teacherReadyForLesson = isAssignedTeacherSeatedForPeriod(current);
-  const periodWaiting = (current.mode === 'lesson' || current.period === 'Tutorial')
+  const periodWaiting = (isSupervisedPeriod(current))
     && (!teacherPresent || !teacherReadyForLesson);
 
   // Lessons wait briefly for the teacher to arrive and sit, then continue to avoid soft-locks.
@@ -2380,9 +2442,9 @@ function updateSchedule(dt) {
   }
   game.timeMinutes += deltaMins;
 
-  if (current.period === 'Tutorial' && !game.registrationTaken && game.periodElapsed > 8) {
+  if (isRegistrationPeriod(current) && !game.registrationTaken && game.periodElapsed > 8) {
     game.registrationTaken = true;
-    announce('📘 Tutorial registration complete: all students marked present by tutors.');
+    announce('📘 Registration complete: all students marked present by tutors.');
   }
 
   if (game.periodElapsed >= current.mins) {
@@ -2402,7 +2464,7 @@ function updateSchedule(dt) {
   // Late checks are throttled to avoid line spam and keep simulation smooth.
   game.lastLateTick += dt;
   if (game.lastLateTick > 2000) {
-    const monitored = current.mode === 'lesson' || current.period === 'Tutorial';
+    const monitored = isSupervisedPeriod(current);
     const graceWindow = game.periodElapsed < 4;
     // One late penalty per period prevents feed spam and "mystery lines" stacking.
     if (entityRoom(player) !== current.room && monitored && teacherPresent && !graceWindow && !game.latePenaltyGiven) {
@@ -2434,7 +2496,7 @@ function checkSchoolExit() {
   // Leaving via the gate triggers immediate discipline and a forced return.
   const current = schedule[game.periodIndex];
   if (player.x >= schoolExit.x && player.y >= schoolExit.yMin && player.y <= schoolExit.yMax) {
-    if (current.mode === 'home') {
+    if (current.mode === 'home' || current.mode === 'end') {
       announce('✅ Eric leaves at home time. School day complete.');
       game.dayCount += 1;
       resetToSchoolMorning();
@@ -2949,6 +3011,26 @@ function drawEntities() {
       ctx.fillText(moodGlyph, px - 2, py - 26);
     }
 
+    const nowBubble = performance.now();
+    if (entity.speech && entity.speech.until > nowBubble) {
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      ctx.strokeStyle = '#1f2937';
+      ctx.fillRect(px - 42, py - 58, 84, 14);
+      ctx.strokeRect(px - 42, py - 58, 84, 14);
+      ctx.fillStyle = '#0f1426';
+      ctx.font = '8px monospace';
+      ctx.fillText(entity.speech.text.slice(0, 16), px - 39, py - 48);
+    }
+    if (entity.thought && entity.thought.until > nowBubble) {
+      ctx.fillStyle = 'rgba(232,244,255,0.95)';
+      ctx.strokeStyle = '#3a86ff';
+      ctx.fillRect(px - 36, py - 74, 72, 12);
+      ctx.strokeRect(px - 36, py - 74, 72, 12);
+      ctx.fillStyle = '#1d3557';
+      ctx.font = '7px monospace';
+      ctx.fillText(entity.thought.text.slice(0, 18), px - 33, py - 65);
+    }
+
     if (entity.carryingTrash) {
       ctx.fillStyle = '#f4a261';
       ctx.fillRect(px + 8, py - 14, 4, 4);
@@ -3152,7 +3234,7 @@ function updateEntityTooltip(event) {
   game.hoveredEntity = hovered;
   const role = hovered.role === 'player' ? 'You' : hovered.role;
   const room = entityRoom(hovered);
-  entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>❤️ HP: ${Math.round(hovered.hp)} | ⚡ EN: ${Math.round(hovered.energy)}<br>🚻 Bladder: ${Math.round(hovered.bladder)}% | 🧼 Hyg: ${Math.round(hovered.hygiene || 0)}%<br>📍 ${room}`;
+  entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>❤️ HP: ${Math.round(hovered.hp)} | ⚡ EN: ${Math.round(hovered.energy)}<br>🙂 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>🚻 Bladder: ${Math.round(hovered.bladder)}% | 🧼 Hyg: ${Math.round(hovered.hygiene || 0)}%<br>📍 ${room}`;
 
   // Keep tooltip inside the canvas-wrap bounds for legibility.
   const wrap = canvas.parentElement.getBoundingClientRect();
