@@ -391,6 +391,8 @@ const personalities = {
 
 // Dialogue pacing keeps chatter readable and prevents instant back-to-back spam.
 const MIN_DIALOGUE_INTERVAL_MS = 5000;
+const CLASSROOM_DIALOGUE_INTERVAL_MS = 7600;
+const ERIC_RESERVED_SEAT_CHANCE = 0.9;
 
 // Everyday school items can move through student pockets via trading and bartering.
 const TRADABLE_ITEMS = [
@@ -645,12 +647,82 @@ function createResponseVariants(entity) {
   });
 }
 
+// Build per-NPC roaming chatter so corridor lines feel personal instead of repetitive.
+function createHallwayChatterVariants(entity) {
+  const roleTag = entity.role === 'teacher' ? 'teacher' : 'student';
+  const speedTag = (entity.traits?.speed || 50) > 60 ? 'quick' : 'steady';
+  const moodTag = (entity.traits?.friendly || 50) > 58 ? 'warm' : 'dry';
+  const topic = entity.dialogueProfile?.preferredTopic || 'school drama';
+  const quirk = entity.dialogueProfile?.styleQuirk || 'keeps it brief';
+
+  // Multiple phrase banks are combined deterministically for each NPC name, producing
+  // distinct-but-consistent voice lines across the full school day.
+  const openers = roleTag === 'teacher'
+    ? ['Right then', 'Eyes up', 'Listen in', 'Class, focus', 'Quick reminder']
+    : ['Oi', 'No way', 'Heads up', 'Wait for me', 'Guess what'];
+  const cores = roleTag === 'teacher'
+    ? [
+      `corridor behaviour still needs work`,
+      `we are not turning this into a sprint track`,
+      `I can still hear chatter about ${topic}`,
+      `line up before we enter the room`,
+      `save the gossip for break, not lesson changeover`,
+    ]
+    : [
+      `I am racing to ${topic}`,
+      `someone started more ${topic} drama`,
+      `I forgot my notes again`,
+      `canteen queue is chaos already`,
+      `last one there owes chips`,
+    ];
+  const closers = moodTag === 'warm'
+    ? ['yeah?', 'come on then!', 'you with me?', 'let us move!', 'this is mad!']
+    : ['move.', 'keep up.', 'honestly.', 'typical.', 'seriously.'];
+  const emotes = speedTag === 'quick'
+    ? ['🏃', '⚡', '😅', '📣', '🚀']
+    : ['😌', '🧭', '🙂', '📚', '👀'];
+
+  return Array.from({ length: 30 }, (_, idx) => {
+    const opener = openers[(idx + styleSeedFromName(entity.name || 'npc')) % openers.length];
+    const core = cores[(idx * 3 + styleSeedFromName(entity.name || 'npc')) % cores.length];
+    const closer = closers[(idx * 2 + styleSeedFromName(entity.name || 'npc')) % closers.length];
+    const emote = emotes[idx % emotes.length];
+    const quirkSuffix = idx % 4 === 0 ? ` (${quirk})` : '';
+    return `${emote} ${opener}, ${core} ${closer}${quirkSuffix}`;
+  });
+}
+
+// Internal thought pools are also per-NPC so students don't all think the same sentence.
+function createThoughtVariants(entity) {
+  const topic = entity.dialogueProfile?.preferredTopic || 'class';
+  const confidence = ((entity.traits?.wit || 50) + (entity.traits?.intelligence || 50)) / 2;
+  const confidenceTag = confidence > 62 ? 'I have got this' : 'please let this go smoothly';
+  const tones = ['🍕', '⚽', '🎮', '☁️', '🧠', '📝', '👟', '🎧'];
+  const thoughtTemplates = [
+    `${confidenceTag}... maybe ${topic} will come up.`,
+    `Need to remember my planner this time.`,
+    `If I finish quickly, break will feel longer.`,
+    `Do not get caught daydreaming again.`,
+    `One good answer and I am safe today.`,
+    `Why is the bell always slower before lunch?`,
+    `Stay calm, walk in, look prepared.`,
+    `I should ask about ${topic} later.`,
+  ];
+  return Array.from({ length: 24 }, (_, idx) => {
+    const tone = tones[(idx + styleSeedFromName(entity.name || 'npc')) % tones.length];
+    const template = thoughtTemplates[(idx * 2 + styleSeedFromName(entity.name || 'npc')) % thoughtTemplates.length];
+    return `${tone} ${template}`;
+  });
+}
+
 function ensureDialogueSetup(entity) {
   if (entity.dialogueProfile && entity.dialogue && entity.dialogue.questions?.length) return;
   entity.dialogueProfile = buildDialogueProfile(entity);
   entity.dialogue = {
     questions: createQuestionVariants(entity),
     responses: createResponseVariants(entity),
+    hallwayChatter: createHallwayChatterVariants(entity),
+    thoughts: createThoughtVariants(entity),
   };
 }
 
@@ -736,6 +808,10 @@ const game = {
   weather: 'sunny',
   weatherWeek: 1,
   weatherFx: [],
+  // Daily dialogue memory prevents repeated barks from the same NPC in one day.
+  dialogueDayKey: 1,
+  ericSeatReservedToday: true,
+  ericSeatDecisionPrompted: false,
   toiletDirt: 12,
   toiletsBlocked: false,
   toiletFloodUntil: 0,
@@ -1277,8 +1353,9 @@ function chooseAutoDestination() {
   if (game.bladder >= 75 && !game.toiletsBlocked) return roomCenter('Toilets');
   const current = schedule[game.periodIndex];
   if (current.mode === 'lesson') {
-    // Auto Eric uses the same assigned seat mapping as the other students.
-    return getSeatPosition(current.room, player.seatIndex) || roomCenter(current.room);
+    // Auto Eric prefers his assigned desk; if blocked, wait beside it for player action.
+    const reservedSeat = getSeatPosition(current.room, player.seatIndex) || roomCenter(current.room);
+    return ericSeatOccupant(current.room) ? ericSeatWaitingSpot(current.room) : reservedSeat;
   }
   // Keep Eric in the same gate lineup pattern as everyone else on arrival,
   // instead of dragging him to the middle of the School Gates room.
@@ -1570,6 +1647,30 @@ function getSeatPosition(roomName, seatIndex) {
   return layout.seats[slot];
 }
 
+function isEricAssignedSeat(roomName, seatIndex) {
+  const ericSeat = getSeatPosition(roomName, player.seatIndex);
+  const candidate = getSeatPosition(roomName, seatIndex);
+  if (!ericSeat || !candidate) return false;
+  return distance(ericSeat, candidate) < 0.12;
+}
+
+function ericSeatOccupant(roomName) {
+  const ericSeat = getSeatPosition(roomName, player.seatIndex);
+  if (!ericSeat) return null;
+  return game.entities.find((entity) => (
+    entity !== player
+    && entity.isSeated
+    && entity.seatedRoom === roomName
+    && distance(entity, ericSeat) < 0.65
+  )) || null;
+}
+
+function ericSeatWaitingSpot(roomName) {
+  const seat = getSeatPosition(roomName, player.seatIndex);
+  if (!seat) return roomCenter(roomName);
+  return { x: seat.x - 0.9, y: seat.y + 0.45 };
+}
+
 function getTeacherSeatPosition(roomName) {
   const layout = getRoomSeatLayout(roomName);
   return layout?.teacherSeat || roomCenter(roomName);
@@ -1596,6 +1697,8 @@ function resetToSchoolMorning() {
   game.lastHygieneShameAt = 0;
   game.hygiene = Math.max(55, game.hygiene - 3);
   pickWeeklyWeather();
+  game.dialogueDayKey += 1;
+  game.ericSeatReservedToday = game.rng() < ERIC_RESERVED_SEAT_CHANCE;
 
   if (game.dayCount > 1 && game.dayCount % TOILET_BLOCK_INTERVAL_DAYS === 0) {
     game.toiletsBlocked = true;
@@ -1759,7 +1862,32 @@ function canPlayerHearSpeaker(source, range) {
 
 function canUseDialogue(entity, now, channel = 'speech') {
   const lastAt = channel === 'thought' ? (entity.lastThoughtAt || 0) : (entity.lastSpokeAt || 0);
-  return now - lastAt >= MIN_DIALOGUE_INTERVAL_MS;
+  const inClassroom = channel === 'speech' && isSupervisedPeriod(schedule[game.periodIndex]) && entityRoom(entity) === schedule[game.periodIndex].room;
+  const minInterval = inClassroom ? CLASSROOM_DIALOGUE_INTERVAL_MS : MIN_DIALOGUE_INTERVAL_MS;
+  return now - lastAt >= minInterval;
+}
+
+function resetDialogueDayMemory(entity) {
+  entity.dialogueMemory = { dayKey: game.dialogueDayKey, speech: new Set(), thought: new Set() };
+}
+
+function markDialogueUsed(entity, text, channel = 'speech') {
+  if (!entity || !text) return false;
+  if (!entity.dialogueMemory || entity.dialogueMemory.dayKey !== game.dialogueDayKey) resetDialogueDayMemory(entity);
+  const bucket = entity.dialogueMemory[channel] || entity.dialogueMemory.speech;
+  const normalized = String(text).trim();
+  if (bucket.has(normalized)) return false;
+  bucket.add(normalized);
+  return true;
+}
+
+function pickFreshLine(entity, pool = [], channel = 'speech') {
+  if (!pool?.length) return null;
+  if (!entity.dialogueMemory || entity.dialogueMemory.dayKey !== game.dialogueDayKey) resetDialogueDayMemory(entity);
+  const bucket = entity.dialogueMemory[channel] || entity.dialogueMemory.speech;
+  const fresh = pool.filter((line) => !bucket.has(String(line).trim()));
+  const choices = fresh.length ? fresh : pool;
+  return choices[Math.floor(game.rng() * choices.length)];
 }
 
 function say(entity, text, opts = {}) {
@@ -1769,7 +1897,9 @@ function say(entity, text, opts = {}) {
   // Some pupils are naturally quiet; they often skip optional chatter.
   const silenceBias = clampScore(55 - ((entity.traits?.friendly || 40) * 0.28) - ((entity.traits?.funny || 40) * 0.18) + ((entity.traits?.discipline || 40) * 0.08), 8, 70);
   if (!opts.force && Math.random() < (silenceBias / 100)) return;
-  entity.speech = { text: String(text), kind: opts.kind || 'speech', until: now + (opts.durationMs || 2600) };
+  const spokenText = String(text);
+  if (!opts.force && !markDialogueUsed(entity, spokenText, 'speech')) return;
+  entity.speech = { text: spokenText, kind: opts.kind || 'speech', until: now + (opts.durationMs || 2600) };
   entity.lastSpokeAt = now;
 }
 
@@ -1777,7 +1907,9 @@ function think(entity, text, durationMs = 3200) {
   if (!entity || !text) return;
   const now = performance.now();
   if (!canUseDialogue(entity, now, 'thought')) return;
-  entity.thought = { text: String(text), until: now + durationMs };
+  const thoughtText = String(text);
+  if (!markDialogueUsed(entity, thoughtText, 'thought')) return;
+  entity.thought = { text: thoughtText, until: now + durationMs };
   entity.lastThoughtAt = now;
 }
 
@@ -2123,6 +2255,8 @@ function setPeriod(index) {
   game.periodElapsed = 0;
   game.periodHoldMinutes = 0;
   game.latePenaltyGiven = false;
+  game.ericSeatBlockedWarned = false;
+  game.ericSeatDecisionPrompted = false;
   const current = schedule[game.periodIndex];
   // Bell changes stand everyone up and clears stale routes between periods.
   player.isSeated = false;
@@ -2132,6 +2266,8 @@ function setPeriod(index) {
     entity.target = null;
     entity.isSeated = false;
     entity.seatedRoom = null;
+    // Bell release: students instantly stand and transition toward the next room.
+    entity.bellRushUntil = performance.now() + 4200;
   }
   if (isRegistrationPeriod(current)) game.registrationTaken = false;
 
@@ -2215,6 +2351,23 @@ function handleInput(dt) {
   // Running drains stamina faster than walking.
   if (Math.abs(player.vx) + Math.abs(player.vy) > 0.1) {
     spendEnergy((running ? 1.45 : 0.45) * (dt / 1000));
+  }
+
+  const current = schedule[game.periodIndex];
+  if (isRegistrationPeriod(current) && entityRoom(player) === current.room && !player.isSeated) {
+    const blocker = ericSeatOccupant(current.room);
+    const ericSeat = getSeatPosition(current.room, player.seatIndex);
+    if (blocker && ericSeat && distance(player, ericSeat) < 1.35) {
+      const waitSpot = ericSeatWaitingSpot(current.room);
+      player.x = waitSpot.x;
+      player.y = waitSpot.y;
+      player.vx = 0;
+      player.vy = 0;
+      if (!game.ericSeatDecisionPrompted) {
+        game.ericSeatDecisionPrompted = true;
+        announce('🪑 Eric pauses beside his desk — choose to reclaim the chair or sit elsewhere.');
+      }
+    }
   }
 
   if (game.keys.z) {
@@ -3256,7 +3409,7 @@ function updateAI(dt) {
   if (supervised) {
     if (now > game.lessonQuietUntil) {
       // Noise ramps back in after a teacher warning, so class hush feels temporary.
-      game.lessonNoiseLevel = Math.min(1, game.lessonNoiseLevel + dt * 0.00016);
+      game.lessonNoiseLevel = Math.min(1, game.lessonNoiseLevel + dt * 0.00011);
     } else {
       game.lessonNoiseLevel = Math.max(0, game.lessonNoiseLevel - dt * 0.0018);
     }
@@ -3315,10 +3468,18 @@ function updateAI(dt) {
     // Keep students in supervised, staffed classrooms instead of empty rooms.
     if (inLesson && isStudent) {
       entity.lessonRoom = chooseLessonRoomForStudent(entity, current);
-      // Prefer deterministic seat assignments so pupils stop oscillating between nearby chairs.
-      entity.target = getSeatPosition(entity.lessonRoom, entity.seatIndex)
-        || nearestFreeSeatInRoom(entity.lessonRoom, entity)
-        || roomCenter(entity.lessonRoom);
+      // Registration keeps Eric's desk free most mornings; if not free, player can choose how to react.
+      const reserveEricSeat = isRegistrationPeriod(current) && game.ericSeatReservedToday;
+      const assignedSeat = getSeatPosition(entity.lessonRoom, entity.seatIndex);
+      const usesEricSeat = isEricAssignedSeat(entity.lessonRoom, entity.seatIndex);
+      if (reserveEricSeat && usesEricSeat && entity !== player) {
+        entity.target = nearestFreeSeatInRoom(entity.lessonRoom, entity) || roomCenter(entity.lessonRoom);
+      } else {
+        // Prefer deterministic seat assignments so pupils stop oscillating between nearby chairs.
+        entity.target = assignedSeat
+          || nearestFreeSeatInRoom(entity.lessonRoom, entity)
+          || roomCenter(entity.lessonRoom);
+      }
     } else if (inLesson && entity.role === 'teacher') {
       entity.lessonRoom = null;
       // Dedicated teacher handles the active lesson; others return to their own classrooms.
@@ -3349,7 +3510,7 @@ function updateAI(dt) {
     // In class students periodically attempt teacher prompts and can daydream.
     const iqFactor = (entity.traits?.intelligence || 50) / 100;
     const witFactor = (entity.traits?.wit || 50) / 100;
-    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < (0.001 + (game.lessonNoiseLevel * (0.003 + (iqFactor * 0.004))))) {
+    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < (0.00072 + (game.lessonNoiseLevel * (0.0022 + (iqFactor * 0.0032))))) {
       if (game.rng() < (0.45 + (iqFactor * 0.28) + (witFactor * 0.12))) {
         ensureDialogueSetup(entity);
         const responseLine = contextualResponseFor(entity, assignedTeacherEntityForPeriod(current));
@@ -3357,8 +3518,10 @@ function updateAI(dt) {
         announce(`📚 ${entity.name} attempted the class question.`, { source: entity, range: 7.5 });
         entity.emotion = Math.min(100, entity.emotion + 1.2);
       } else {
-        const daydreams = ['🍕 Lunch soon?', '⚽ After school match... 😎', '🎮 New game later! 🕹️', '☁️ Looking out the window...'];
-        think(entity, daydreams[Math.floor(game.rng() * daydreams.length)], 3400);
+        ensureDialogueSetup(entity);
+        const daydreams = entity.dialogue.thoughts || ['☁️ Looking out the window...'];
+        const daydream = pickFreshLine(entity, daydreams, 'thought');
+        think(entity, daydream || daydreams[0], 3400);
       }
     }
 
@@ -3426,18 +3589,14 @@ function updateAI(dt) {
 
     // Corridor and room transitions are now lively with lots of pupil chatter.
     if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home') && isStudent && game.rng() < 0.02) {
-      const hallwayChatter = [
-        '😆 Wait up, I am coming too!',
-        '📚 I forgot my book again, oh no!',
-        '🍟 Canteen queue is huge today!',
-        '🏃 Last one there buys snacks!',
-        '🤫 Did you hear what happened in maths?',
-      ];
-      say(entity, hallwayChatter[Math.floor(game.rng() * hallwayChatter.length)], { durationMs: 3600 });
+      ensureDialogueSetup(entity);
+      const hallwayChatter = entity.dialogue.hallwayChatter || ['😆 Wait up, I am coming too!'];
+      const line = pickFreshLine(entity, hallwayChatter, 'speech');
+      say(entity, line || hallwayChatter[0], { durationMs: 3600 });
     }
 
     // Teacher occasionally hushes the class, then students slowly get noisy again.
-    if (inLesson && entity.role === 'teacher' && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.lessonNoiseLevel > 0.34 && game.rng() < 0.004) {
+    if (inLesson && entity.role === 'teacher' && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.lessonNoiseLevel > 0.38 && game.rng() < 0.003) {
       ensureDialogueSetup(entity);
       const quietCalls = [
         `🤨 ${entity.name}: posture check — settle down.`,
@@ -3450,7 +3609,7 @@ function updateAI(dt) {
     }
 
     // Witty teacher comeback when a student asks a silly question.
-    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < 0.0014) {
+    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < 0.0009) {
       const sillyQuestions = ['🙃 Sir, can we do homework in our dreams?', '😅 Miss, is zero afraid of minus numbers?', '🤔 If I eat my notes, do I absorb the lesson?'];
       say(entity, sillyQuestions[Math.floor(game.rng() * sillyQuestions.length)], { durationMs: 3600 });
       const classTeacher = game.entities.find((candidate) => (
@@ -3514,11 +3673,11 @@ function updateAI(dt) {
       if (recent && game.rng() < 0.52) {
         say(entity, `🗞 ${recent.text}`);
       } else if (game.rng() < 0.45) {
-        const question = entity.dialogue.questions[Math.floor(game.rng() * entity.dialogue.questions.length)];
+        const question = pickFreshLine(entity, entity.dialogue.questions, 'speech') || entity.dialogue.questions[0];
         say(entity, question);
       } else {
         const chat = ['😄 Nice pass!', '🤝 Meet by the canteen.', '😲 Did you see that punch?', "🍟 I'm starving.", '🏃 Race you to the field!', '😂 That lesson was chaos!', '🙌 Bell finally rang!'];
-        say(entity, chat[Math.floor(game.rng() * chat.length)]);
+        say(entity, pickFreshLine(entity, chat, 'speech') || chat[0]);
       }
       entity.emotion = Math.min(100, entity.emotion + 1.8);
     }
@@ -3682,7 +3841,8 @@ function updateAI(dt) {
       : (supervised && teacherPresent && entityRoom(entity) !== expectedRoom);
     const canRun = entity.energy > 20;
     entity.running = lateForClass && canRun;
-    const runBoost = entity.running ? 1.45 : 1;
+    const bellRushBoost = (!inLesson && isStudent && now < (entity.bellRushUntil || 0)) ? 1.35 : 1;
+    const runBoost = (entity.running ? 1.45 : 1) * bellRushBoost;
     // Teachers are intentionally quicker than students to keep lessons moving.
     const hallwayBoost = entity.role === 'teacher' ? 3.1 : 3.3;
     // Staff get an extra catch-up boost so lessons do not appear to start without a teacher.
@@ -3859,6 +4019,14 @@ function updateSchedule(dt) {
   if (isRegistrationPeriod(current) && !game.registrationTaken && game.periodElapsed > 8) {
     game.registrationTaken = true;
     announce('📘 Registration complete: all students marked present by tutors.');
+  }
+
+  if (isRegistrationPeriod(current) && !game.ericSeatReservedToday && game.periodElapsed < 2.5) {
+    const blocker = ericSeatOccupant(current.room);
+    if (blocker && !game.ericSeatBlockedWarned) {
+      game.ericSeatBlockedWarned = true;
+      announce(`🪑 ${blocker.name} is in Eric's seat. Stop by your desk and choose: move them or sit elsewhere.`);
+    }
   }
 
   if (game.periodElapsed >= current.mins) {
