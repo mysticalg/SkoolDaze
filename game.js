@@ -541,6 +541,8 @@ const game = {
   // Lesson chatter rhythm: teachers hush classes briefly, then noise returns gradually.
   lessonQuietUntil: 0,
   lessonNoiseLevel: 0,
+  headmasterDetentionUntil: 0,
+  headmasterDismissAnnounced: false,
 };
 
 let seatCounter = 0;
@@ -770,12 +772,29 @@ function bullyFightChance(currentPeriod) {
   return 0.006;
 }
 
+function isTeacherBackTurned(teacher, now = performance.now()) {
+  return Boolean(teacher && teacher.role === 'teacher' && teacher.writingUntil > now);
+}
+
+function assignedTeacherEntityForPeriod(period = schedule[game.periodIndex]) {
+  const assignedName = assignedTeacherForRoom(period.room);
+  if (!assignedName) return null;
+  return game.entities.find((entity) => entity.role === 'teacher' && entity.name === assignedName) || null;
+}
+
+function isAssignedTeacherBackTurnedForPeriod(period = schedule[game.periodIndex], now = performance.now()) {
+  if (!isSupervisedPeriod(period)) return false;
+  const teacher = assignedTeacherEntityForPeriod(period);
+  return Boolean(teacher && entityRoom(teacher) === period.room && isTeacherBackTurned(teacher, now));
+}
+
 function findWitnessingTeacher(actor, range = 5.4) {
   // Keep witness logic cheap: same room + distance approximates line-of-sight.
   return game.entities.find((entity) => (
     entity.role === 'teacher'
     && entityRoom(entity) === entityRoom(actor)
     && distance(entity, actor) < range
+    && !isTeacherBackTurned(entity)
   ));
 }
 
@@ -793,14 +812,26 @@ function nearestPoint(origin, points) {
 }
 
 
-function sendPlayerToHeadmaster(reason, extraLines = 45) {
+function sendEntityToHeadmaster(entity, reason = 'discipline') {
   const office = roomByName('Headmaster Office');
+  if (!office || !entity) return;
+  entity.x = office.x + (entity === player ? office.w / 2 : Math.max(1.7, Math.min(office.w - 1.8, (entity.seatIndex % 3) + 2)));
+  entity.y = office.y + office.h - (entity === player ? 2 : (2.6 + ((entity.seatIndex % 2) * 1.4)));
+  entity.target = null;
+  entity.vx = 0;
+  entity.vy = 0;
+  entity.isSeated = false;
+  entity.seatedRoom = null;
+}
+
+function sendPlayerToHeadmaster(reason, extraLines = 45) {
   if (extraLines > 0) addLines(extraLines, reason);
-  if (office) {
-    player.x = office.x + office.w / 2;
-    player.y = office.y + office.h - 2;
-  }
+  sendEntityToHeadmaster(player, reason);
+  // Ten-second lecture lock as requested; Eric cannot move while being told off.
+  game.headmasterDetentionUntil = performance.now() + 10000;
+  game.headmasterDismissAnnounced = false;
   announce(`🏫 Mr Wacker marched Eric to the Headmaster Office for ${reason}.`);
+  announce('🧑‍🏫 Headmaster: "You will stand there and think about what you have done."', { force: true });
 }
 
 function nearestThrowableProp(entity) {
@@ -1142,14 +1173,11 @@ function getRoomSeatLayout(roomName) {
   if (!room || room.type !== 'classroom') return null;
   if (roomSeatCache.has(roomName)) return roomSeatCache.get(roomName);
 
-  // Generate seat grids to target roughly 80% occupancy so classrooms feel busy, not sparse.
-  const studentCount = game.entities.filter((entity) => entity.role !== 'teacher' && entity.role !== 'janitor' && entity.role !== 'player').length;
+  // Keep table count based on room geometry (existing layout), not student population.
   const usableW = Math.max(8, room.w - 8);
   const usableH = Math.max(5, room.h - 7);
-  const maxCols = Math.max(3, Math.floor(usableW / 2.8));
-  const targetSeatCount = Math.ceil(studentCount / 0.82);
-  const rows = Math.max(2, Math.ceil(targetSeatCount / maxCols));
-  const cols = Math.max(3, Math.min(maxCols, Math.ceil(targetSeatCount / rows)));
+  const cols = Math.max(3, Math.floor(usableW / 3));
+  const rows = Math.max(2, Math.floor(usableH / 2.6));
 
   const seats = [];
   const seatMinX = room.x + 1.1;
@@ -1719,6 +1747,12 @@ function handleInput(dt) {
   player.vx = 0;
   player.vy = 0;
 
+  if (performance.now() < game.headmasterDetentionUntil) {
+    // Headmaster lecture phase: Eric is held in office for a short punishment window.
+    sendEntityToHeadmaster(player, 'lecture');
+    return;
+  }
+
   const manualMovement = game.keys.ArrowLeft || game.keys.a || game.keys.ArrowRight || game.keys.d || game.keys.ArrowUp || game.keys.w || game.keys.ArrowDown || game.keys.s;
   if (manualMovement || game.keys.z || game.keys.x || game.keys.e || game.keys.c || game.keys.q) {
     // Manual control immediately overrides autopilot for responsiveness.
@@ -1821,6 +1855,59 @@ function meleeAttack(attacker) {
   for (const target of game.entities) {
     if (target === attacker || target.knockedUntil > performance.now()) continue;
     if (distance(attacker, target) < strikeRange) {
+      const isSeatPunch = attacker === player
+        && target.role !== 'teacher'
+        && target.role !== 'janitor'
+        && target.isSeated
+        && target.seatedRoom
+        && isSupervisedPeriod(schedule[game.periodIndex]);
+
+      if (isSeatPunch) {
+        const now = performance.now();
+        const seatRoom = target.seatedRoom;
+        const seatPos = getSeatPosition(seatRoom, target.seatIndex) || { x: target.x, y: target.y };
+        const floorSit = { x: seatPos.x + (attacker.facing >= 0 ? 0.95 : -0.95), y: seatPos.y + 0.38 };
+        target.x = floorSit.x;
+        target.y = floorSit.y;
+        target.isSeated = true;
+        target.displacedFromSeatUntil = now + 3000;
+        target.displacedSeatRoom = seatRoom;
+        target.displacedSeatPos = seatPos;
+        target.target = floorSit;
+        target.mood = 'angry';
+        target.emotion = Math.max(0, target.emotion - 10);
+        think(target, '😤 Oi! That was my chair!', 2400);
+        announce(`🪑💥 Eric punched ${target.name} off their chair!`, { source: attacker, range: 8 });
+
+        const teacherWitness = findWitnessingTeacher(attacker, 7.4);
+        if (teacherWitness) {
+          announce(`🧑‍🏫 ${teacherWitness.name}: "Both of you — Headmaster. Now!"`, { source: teacherWitness, range: 9 });
+          sendPlayerToHeadmaster('chair-fighting in class', 30);
+          sendEntityToHeadmaster(target, 'chair-fighting');
+          const bondDelta = relationshipDeltaForEricInteraction(target, 'punch');
+          adjustEricRelationship(target, bondDelta + (target.traits?.masochism > 68 ? 6 : -4), 'chair-brawl-headmaster');
+          return;
+        }
+
+        if (game.rng() < 0.1) {
+          const classTeacher = assignedTeacherEntityForPeriod();
+          if (classTeacher && entityRoom(classTeacher) === entityRoom(attacker)) {
+            say(target, '📣 Sir! Eric just decked me off my chair!', { durationMs: 2800 });
+            classTeacher.writingUntil = 0;
+            announce(`🧑‍🏫 ${classTeacher.name} spun around and sent Eric to the Headmaster Office.`, { source: classTeacher, range: 9 });
+            sendPlayerToHeadmaster('chair assault reported by pupil', 25);
+            return;
+          }
+        }
+
+        const responseAggressive = (target.traits?.aggression || 0) >= 60 || (target.traits?.strength || 0) >= 62;
+        target.shouldReclaimSeat = true;
+        target.retaliateForSeatLoss = responseAggressive;
+        const delta = relationshipDeltaForEricInteraction(target, 'punch');
+        adjustEricRelationship(target, delta + (target.traits?.masochism > 70 ? 4 : 0), 'chair-punched');
+        return;
+      }
+
       target.hp -= attacker.profile.cane ? 55 : 45;
       target.mood = 'angry';
       target.emotion = Math.max(0, target.emotion - 12);
@@ -1840,6 +1927,14 @@ function meleeAttack(attacker) {
       if (attacker === player) {
         const delta = relationshipDeltaForEricInteraction(target, 'punch');
         adjustEricRelationship(target, delta, 'punched');
+      }
+      if (target === player && attacker.role !== 'teacher' && attacker.role !== 'janitor') {
+        const teacherWitness = findWitnessingTeacher(attacker, 7.2);
+        if (teacherWitness) {
+          announce(`🧑‍🏫 ${teacherWitness.name} caught the fight and marched both pupils to the Headmaster Office.`);
+          sendPlayerToHeadmaster('fighting in class', 20);
+          sendEntityToHeadmaster(attacker, 'fighting in class');
+        }
       }
       if (attacker === player && target.role === 'teacher') addLines(120, 'striking a teacher');
       spendEntityEnergy(attacker, 7);
@@ -2550,6 +2645,38 @@ function updateAI(dt) {
     const isStudent = entity.role !== 'teacher' && entity.role !== 'janitor';
     const isOutside = ['P.E. Field', 'School Gates', 'Bike Sheds'].includes(entityRoom(entity));
 
+    if (isStudent && entity.displacedFromSeatUntil && performance.now() < entity.displacedFromSeatUntil) {
+      entity.target = entity.displacedSeatPos || { x: entity.x, y: entity.y };
+      entity.vx = 0;
+      entity.vy = 0;
+      entity.isSeated = true;
+      updateNpcVitals(entity, dt, false);
+      continue;
+    }
+
+    if (isStudent && entity.displacedFromSeatUntil && performance.now() >= entity.displacedFromSeatUntil) {
+      const roomName = entity.displacedSeatRoom || entity.lessonRoom || current.room;
+      const seatPos = entity.displacedSeatPos || getSeatPosition(roomName, entity.seatIndex);
+      const playerTookSeat = seatPos && player.isSeated && player.seatedRoom === roomName && distance(player, seatPos) < 0.72;
+      if (playerTookSeat) {
+        if (entity.retaliateForSeatLoss) {
+          say(entity, '😡 Move! That is my seat!', { durationMs: 2400 });
+          if (distance(entity, player) < 1.7) meleeAttack(entity);
+          else entity.target = { x: player.x, y: player.y };
+        } else {
+          entity.target = nearestFreeSeatInRoom(roomName, entity) || roomCenter(roomName);
+          say(entity, '😟 Fine... I will sit somewhere else.', { durationMs: 2200 });
+        }
+      } else if (seatPos) {
+        entity.target = seatPos;
+      }
+      entity.displacedFromSeatUntil = 0;
+      entity.displacedSeatPos = null;
+      entity.displacedSeatRoom = null;
+      entity.shouldReclaimSeat = false;
+      entity.retaliateForSeatLoss = false;
+    }
+
     // Keep students in supervised, staffed classrooms instead of empty rooms.
     if (inLesson && isStudent) {
       entity.lessonRoom = chooseLessonRoomForStudent(entity, current);
@@ -2704,7 +2831,7 @@ function updateAI(dt) {
     }
 
     // Teacher discipline: if they catch player in wrong room, assign lines.
-    if (entity.role === 'teacher' && distance(entity, player) < 1.8 && entityRoom(player) !== current.room && supervised && teacherPresent) {
+    if (entity.role === 'teacher' && distance(entity, player) < 1.8 && entityRoom(player) !== current.room && supervised && teacherPresent && !isTeacherBackTurned(entity)) {
       addLines(40, `${entity.name} caught you bunking ${current.period}`);
     }
 
@@ -3070,7 +3197,8 @@ function updateSchedule(dt) {
     const monitored = isSupervisedPeriod(current);
     const graceWindow = game.periodElapsed < 4;
     // One late penalty per period prevents feed spam and "mystery lines" stacking.
-    if (entityRoom(player) !== current.room && monitored && teacherPresent && !graceWindow && !game.latePenaltyGiven) {
+    const teacherBackTurned = isAssignedTeacherBackTurnedForPeriod(current);
+    if (entityRoom(player) !== current.room && monitored && teacherPresent && !teacherBackTurned && !graceWindow && !game.latePenaltyGiven) {
       addLines(10, `late for ${current.period}`);
       game.latePenaltyGiven = true;
     }
@@ -3628,16 +3756,25 @@ function drawEntities() {
       // Teachers are rendered larger and more formal than students.
       if (entity.role === 'teacher') {
         const attire = entity.profile.attire || 'staff';
+        const backTurned = isWriting;
 
         // Broad shoulders + taller coat silhouette to read clearly at distance.
         ctx.fillStyle = attire === 'scienceCoat' ? '#f8f9fa' : attire === 'flash' ? '#f4d35e' : attire === 'plainBlueDress' ? '#4f86f7' : attire === 'oldBrown' ? '#8d6e63' : '#1e2438';
         ctx.fillRect(px - 9, py - 21 + bob, 18, 15);
 
-        // Formal tie/collar motif helps identify staff quickly.
-        ctx.fillStyle = '#fefefe';
-        ctx.fillRect(px - 2, py - 19 + bob, 4, 4);
-        ctx.fillStyle = '#c1121f';
-        ctx.fillRect(px - 1, py - 15 + bob, 2, 4);
+        // Back-turned board-writing frame: no face/tie visible, jacket seam instead.
+        if (backTurned) {
+          ctx.fillStyle = '#2a334d';
+          ctx.fillRect(px - 1, py - 20 + bob, 2, 13);
+          ctx.fillStyle = '#5b4636';
+          ctx.fillRect(px - 5, py - 24 + bob, 10, 2);
+        } else {
+          // Formal tie/collar motif helps identify staff quickly.
+          ctx.fillStyle = '#fefefe';
+          ctx.fillRect(px - 2, py - 19 + bob, 4, 4);
+          ctx.fillStyle = '#c1121f';
+          ctx.fillRect(px - 1, py - 15 + bob, 2, 4);
+        }
 
         if (entity.name === 'Mr Wacker' || entity.profile.beard) {
           // Headmaster: black suit with beard.
@@ -3999,6 +4136,11 @@ function loop(now) {
     checkSchoolExit();
     updateBladder(dt);
     maybeShameEric(now);
+    if (game.headmasterDetentionUntil > 0 && now >= game.headmasterDetentionUntil && !game.headmasterDismissAnnounced) {
+      game.headmasterDismissAnnounced = true;
+      game.headmasterDetentionUntil = 0;
+      announce('🧑‍🏫 Headmaster: "Now get out of my sight and back to class!"', { force: true });
+    }
     recoverEnergy(dt / 1000);
     updateTodo();
   }
