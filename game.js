@@ -168,7 +168,7 @@ const blackboards = [
 
 // Blackboard card metrics are shared so text wrapping and board size stay in sync.
 const BOARD_DRAW = {
-  width: 74,
+  width: 88,
   height: 32,
   lineHeight: 8,
   maxLines: 4,
@@ -219,7 +219,6 @@ const showers = [
   { x: 146, y: 42, label: 'Gym Shower B' },
   { x: 152, y: 42, label: 'Gym Shower C' },
 ];
-
 
 const collectableSpawnPoints = [
   { x: 14, y: 8 }, { x: 28, y: 10 }, { x: 48, y: 9 }, { x: 74, y: 10 }, { x: 108, y: 10 },
@@ -288,6 +287,12 @@ const classroomProps = [
   { room: 'Medical Bay', x: 102, y: 118, icon: '🩺', color: '#ffb3c6', kind: 'stethoscope', throwable: false, hiddenUntil: 0, size: 2 },
   { room: 'Medical Bay', x: 110, y: 118, icon: '💊', color: '#cddafd', kind: 'medical cabinet', throwable: false, hiddenUntil: 0, size: 2 },
   { room: 'Medical Bay', x: 118, y: 120, icon: '🛏', color: '#d8f3dc', kind: 'recovery bed', throwable: false, hiddenUntil: 0, size: 3 },
+  // Extra prop variety keeps classrooms feeling less repetitive across periods.
+  { room: 'Computer Room', x: 130, y: 10, icon: '🖱', color: '#c7d2fe', kind: 'mouse', throwable: true, hiddenUntil: 0 },
+  { room: 'English', x: 63, y: 44, icon: '✒', color: '#e9c46a', kind: 'ink pen set', throwable: true, hiddenUntil: 0 },
+  { room: 'Geography', x: 24, y: 90, icon: '🗺', color: '#9bf6ff', kind: 'map roll', throwable: true, hiddenUntil: 0 },
+  { room: 'History', x: 70, y: 90, icon: '🏺', color: '#e6ccb2', kind: 'history artifact', throwable: false, hiddenUntil: 0 },
+  { room: 'Music Room', x: 121, y: 45, icon: '🎷', color: '#ffadad', kind: 'saxophone', throwable: true, hiddenUntil: 0 },
 ];
 
 
@@ -399,6 +404,7 @@ const personalities = {
   teacher: { speed: 1.22, aggression: 0.55, diligence: 1.0, focus: 1.0 },
   janitor: { speed: 1.28, aggression: 0.05, diligence: 1.0, focus: 1.0 },
   nurse: { speed: 1.24, aggression: 0.06, diligence: 1.0, focus: 1.0 },
+  dinnerlady: { speed: 1.2, aggression: 0.18, diligence: 1.0, focus: 0.95 },
   player: { speed: 1.19, aggression: 0, diligence: 0, focus: 0 },
 };
 
@@ -410,7 +416,7 @@ const ERIC_RESERVED_SEAT_CHANCE = 0.9;
 // Everyday school items can move through student pockets via trading and bartering.
 const TRADABLE_ITEMS = [
   'chewing gum', 'packed lunch', 'textbook', 'sunglasses', 'cap', 'conkers', 'apple',
-  'walkman stereo', 'cassette tape', 'letter', 'toy robot', 'paper airplane', 'trading cards',
+  'walkman stereo', 'cassette tape', 'letter', 'toy robot', 'paper airplane', 'trading cards', 'video game cart', 'video game disk',
 ];
 
 // Rare collectibles rotate around school and can be traded like pocket items.
@@ -432,6 +438,39 @@ const COLLECTABLE_LIFETIME_MS = 60000;
 const COLLECTABLE_SPAWN_INTERVAL_MS = 4200;
 const MAX_ACTIVE_COLLECTABLES = 7;
 
+const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const MONSTER_PREFIXES = ['Aero', 'Blaze', 'Crystal', 'Dread', 'Echo', 'Frost', 'Giga', 'Hex', 'Iron', 'Jade', 'Nova', 'Shadow', 'Solar', 'Storm', 'Venom', 'Wild'];
+const MONSTER_SUFFIXES = ['Drake', 'Mantis', 'Golem', 'Specter', 'Hydra', 'Raptor', 'Warden', 'Seraph', 'Wisp', 'Leviathan', 'Titan', 'Sprite', 'Colossus', 'Phantom', 'Wyvern', 'Stalker'];
+const MONSTER_ABILITIES = ['Flame burst', 'Mind shield', 'Quick strike', 'Poison cloud', 'Stone skin', 'Arc pulse', 'Mirror dodge', 'Moon howl'];
+const CARD_RARITY = {
+  common: { icon: '🃏', tint: '#d9d9d9', weight: 72, bonus: 0 },
+  silver: { icon: '🥈', tint: '#c0d6df', weight: 22, bonus: 10 },
+  legendary: { icon: '🥇', tint: '#ffd166', weight: 6, bonus: 22 },
+};
+
+function generateTradingCardCatalog() {
+  const cards = [];
+  for (let i = 0; i < 256; i += 1) {
+    const prefix = MONSTER_PREFIXES[i % MONSTER_PREFIXES.length];
+    const suffix = MONSTER_SUFFIXES[Math.floor(i / MONSTER_PREFIXES.length) % MONSTER_SUFFIXES.length];
+    const rarity = i < 184 ? 'common' : i < 238 ? 'silver' : 'legendary';
+    const rarityBonus = CARD_RARITY[rarity].bonus;
+    const base = 28 + (i % 36);
+    cards.push({
+      id: `TC-${String(i + 1).padStart(3, '0')}`,
+      name: `${prefix} ${suffix}`,
+      ability: MONSTER_ABILITIES[i % MONSTER_ABILITIES.length],
+      strength: base + rarityBonus,
+      defense: 24 + ((i * 7) % 44) + Math.floor(rarityBonus * 0.8),
+      weakness: ['Fire', 'Water', 'Wind', 'Earth', 'Light', 'Dark'][i % 6],
+      rarity,
+    });
+  }
+  return cards;
+}
+
+const TRADING_CARD_CATALOG = generateTradingCardCatalog();
+
 const NPC_POSTURES = ['upright', 'slouched', 'bouncy', 'swagger', 'careful', 'stiff', 'dramatic'];
 
 
@@ -452,6 +491,7 @@ const npcTraitBackendDb = window.TRAIT_BACKEND_DB || {
     teacher: { intelligence: 22, wisdom: 20, discipline: 26, honor: 14, aggression: 8, skill: 10, barter: 4 },
     janitor: { wisdom: 10, friendly: 8, discipline: 16, aggression: -8, bladderSize: 6 },
     nurse: { wisdom: 18, friendly: 18, discipline: 22, aggression: -10, immuneSystem: 14 },
+    dinnerlady: { wisdom: 12, friendly: 8, discipline: 24, aggression: 4, honor: 14 },
     player: { funny: 10, wit: 8, luck: 10, discipline: -8 },
   },
   levels: Array.from({ length: 10 }, (_, index) => {
@@ -485,7 +525,7 @@ const npcTraitBackendDb = window.TRAIT_BACKEND_DB || {
 };
 
 function randomInventoryFor(role) {
-  const baseline = role === 'teacher' ? ['textbook', 'letter', 'apple'] : ['textbook', 'paper airplane'];
+  const baseline = (role === 'teacher' || role === 'dinnerlady') ? ['textbook', 'letter', 'apple'] : ['textbook', 'paper airplane'];
   const picks = 2 + Math.floor(Math.random() * 3);
   const items = [...baseline];
   for (let i = 0; i < picks; i += 1) {
@@ -502,6 +542,7 @@ function traitLevelForEntity(role) {
   if (role === 'teacher') return 8;
   if (role === 'janitor') return 6;
   if (role === 'nurse') return 7;
+  if (role === 'dinnerlady') return 6;
   if (role === 'player') return 5;
   return 3 + Math.floor(Math.random() * 4);
 }
@@ -835,6 +876,14 @@ const game = {
   lastHygieneAuraAt: 0,
   smelledStudents: {},
   selectedInteractionTarget: null,
+  // Optional after-school free-play window for computer gaming.
+  stayingAfterSchoolUntil: 0,
+  choseToStayAfterSchool: false,
+  playerComputerPlayUntil: 0,
+  playerComputerStationId: null,
+  // Trading-card mission progression.
+  cardCollection: new Set(),
+  cardCollectionCount: 0,
   weeklySickScheduledDay: WEEKLY_SICK_DAY_INTERVAL,
   janitorTask: null,
   // Lesson chatter rhythm: teachers hush classes briefly, then noise returns gradually.
@@ -850,9 +899,63 @@ const game = {
 
 let seatCounter = 0;
 const roomSeatCache = new Map();
+const STUDENT_ROLES = new Set(['player', 'hero', 'swot', 'bully', 'weird']);
+
+function isStudentCharacter(entity) {
+  return STUDENT_ROLES.has(entity?.role);
+}
+
+function isStaffRole(role) {
+  return role === 'teacher' || role === 'janitor' || role === 'nurse' || role === 'dinnerlady';
+}
+
+function buildAppearanceProfile(name, role, traitProfile, profile = {}) {
+  const seed = styleSeedFromName(name);
+  const skinPalette = {
+    white: '#f6d2bb',
+    paleWhite: '#fde8dc',
+    black: '#7a4a32',
+    yellow: '#e0bf7a',
+    lightBrown: '#b98057',
+    green: '#6fbc5f',
+    red: '#d76363',
+  };
+  const hairPalette = ['#1b1713', '#4a2f1e', '#7a4f2f', '#b56d3f', '#f0d7a5', '#4f2546', '#2e6f95', '#8a5cff'];
+  const skinToneKey = profile.appearanceOverrides?.skinTone || 'white';
+  const skinTone = skinPalette[skinToneKey] || skinPalette.white;
+  const eyeHue = (seed * 47 + Math.round(traitProfile.wit * 2.1)) % 360;
+
+  // Students get stronger silhouette variation so personalities read visually.
+  const roleBuild = role === 'bully' ? 1 : role === 'swot' ? -0.4 : role === 'weird' ? -0.15 : 0;
+  const bodyType = clampScore((traitProfile.strength - 50) / 34 + roleBuild + ((traitProfile.weightValue - 50) / 120), -1.1, 1.2);
+  const armType = clampScore((traitProfile.strength - 50) / 40 + (traitProfile.aggression - 50) / 110, -1, 1);
+  const legType = clampScore((traitProfile.speed - 50) / 40 + (traitProfile.skill - 50) / 130, -1, 1);
+
+  const overrides = profile.appearanceOverrides || {};
+  return {
+    skinTone,
+    hairColor: overrides.hairColor || hairPalette[seed % hairPalette.length],
+    eyeColor: overrides.eyeColor || `hsl(${eyeHue} 72% 54%)`,
+    // Keep heads in the normal range even for extreme body types.
+    headWidth: overrides.headWidth || (9 + (seed % 4)),
+    headHeight: overrides.headHeight || (6 + (seed % 2)),
+    earSize: overrides.earSize || (1 + (seed % 2)),
+    noseType: overrides.noseType || ['dot', 'stubby', 'long', 'button'][seed % 4],
+    eyeSpread: overrides.eyeSpread || (1 + (seed % 2)),
+    jawType: overrides.jawType || ['soft', 'round', 'square'][seed % 3],
+    acne: overrides.acne ?? (traitProfile.mood < 43 || traitProfile.luck < 38),
+    heightOffset: overrides.heightOffset ?? Math.round(clampScore(((traitProfile.speed - 50) / 25) + ((seed % 5) - 2) * 0.25, -2, 2)),
+    bodyWidth: overrides.bodyWidth || (12 + Math.round(bodyType * 2)),
+    armWidth: overrides.armWidth || (2 + (armType > 0.45 ? 1 : 0)),
+    armLength: overrides.armLength || (7 + (armType < -0.35 ? -1 : armType > 0.45 ? 1 : 0)),
+    legWidth: overrides.legWidth || (4 + (legType > 0.35 ? 1 : 0)),
+    legLength: overrides.legLength || (8 + (legType > 0.45 ? 1 : legType < -0.45 ? -1 : 0)),
+  };
+}
 
 function mkEntity(name, role, x, y, color, traits = {}) {
   const traitProfile = buildTraitProfile(role, traits.traitOverrides || {});
+  const appearance = buildAppearanceProfile(name, role, traitProfile, traits);
   const basePersonality = personalities[role] || personalities.hero;
   const personality = {
     ...basePersonality,
@@ -878,6 +981,7 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     attention: 100,
     profile: traits,
     traits: traitProfile,
+    appearance,
     relationships: role === 'player' ? {} : { Eric: Math.round(((traitProfile.friendly + traitProfile.honor) / 8) - (traitProfile.aggression / 7) + ((Math.random() * 16) - 8)) },
     // Everyone now carries school-day possessions and pocket money for lunch/trading.
     inventory: randomInventoryFor(role),
@@ -934,6 +1038,15 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     posture: null,
     dialogueProfile: null,
     dialogue: null,
+    // Wrong-room excuse throttle keeps corridor chatter readable.
+    lastWrongRoomExcuseAt: 0,
+    // Facial animation timers keep eyes/mouth lively without expensive sprite swaps.
+    blinkUntil: 0,
+    nextBlinkAt: performance.now() + 2000 + Math.random() * 7000,
+    dailyCards: [],
+    refusesEricUntilDay: 0,
+    lastWhistleAt: 0,
+    lookingAwayUntil: 0,
   };
 }
 
@@ -989,6 +1102,11 @@ game.entities.push(
 );
 
 
+const dinnerLady = mkEntity('Dinner Lady Dot', 'dinnerlady', 118, 86, '#ffb4a2', {
+  title: 'Lunch supervisor', attire: 'dinnerLady', quotes: ['No running on my watch!'],
+  traitOverrides: { discipline: 90, wisdom: 78, friendly: 54, aggression: 38, honor: 72 },
+});
+
 const nurse = mkEntity('Nurse Nia', 'nurse', 108, 120, '#ff8fab', {
   title: 'School Nurse', attire: 'plainBlueDress',
   traitOverrides: { friendly: 92, wisdom: 90, discipline: 84, intelligence: 80, aggression: 8 },
@@ -997,7 +1115,7 @@ const nurse = mkEntity('Nurse Nia', 'nurse', 108, 120, '#ff8fab', {
 nurse.arrivedForDay = false;
 nurse.arrivalJoinMins = Infinity;
 nurse.target = roomCenter('Medical Bay');
-game.entities.push(nurse);
+game.entities.push(nurse, dinnerLady);
 
 const studentRoster = [
   ['Angelface', 'hero', '#ffd58e', { title: 'Handsome kid', traitOverrides: { friendly: 66, funny: 58, luck: 62 } }],
@@ -1095,6 +1213,56 @@ function maxStudentPopulationForLessons() {
 
 const maxStudentPopulation = maxStudentPopulationForLessons();
 const activeStudentRoster = studentRoster.slice(0, maxStudentPopulation);
+
+function applyStudentAppearancePlan(roster) {
+  // Keep requested diversity mix, now including two pale-white students.
+  const skinPlan = ['green', 'red', 'black', 'black', 'yellow', 'yellow', 'yellow', 'lightBrown', 'lightBrown', 'lightBrown', 'paleWhite', 'paleWhite'];
+  for (let i = 0; i < roster.length; i += 1) {
+    const entry = roster[i];
+    const profile = entry[3] || {};
+    profile.appearanceOverrides = profile.appearanceOverrides || {};
+    profile.appearanceOverrides.skinTone = skinPlan[i] || 'white';
+    entry[3] = profile;
+  }
+
+  // Explicit hair overrides requested for visual contrast.
+  if (roster[0]) {
+    roster[0][3] = roster[0][3] || {};
+    roster[0][3].appearanceOverrides = roster[0][3].appearanceOverrides || {};
+    roster[0][3].appearanceOverrides.hairColor = '#f5f5f5';
+  }
+  if (roster[1]) {
+    roster[1][3] = roster[1][3] || {};
+    roster[1][3].appearanceOverrides = roster[1][3].appearanceOverrides || {};
+    roster[1][3].appearanceOverrides.hairColor = '#070707';
+  }
+
+  // Strong silhouette contrast: one very wide pupil and one very skinny pupil.
+  if (roster[2]) {
+    roster[2][3] = roster[2][3] || {};
+    roster[2][3].appearanceOverrides = roster[2][3].appearanceOverrides || {};
+    // Nearly 2x torso width of a normal pupil while keeping normal head size.
+    roster[2][3].appearanceOverrides.bodyWidth = 24;
+    roster[2][3].appearanceOverrides.armWidth = 4;
+    roster[2][3].appearanceOverrides.legWidth = 7;
+    roster[2][3].appearanceOverrides.headWidth = 10;
+    roster[2][3].appearanceOverrides.headHeight = 6;
+  }
+  if (roster[3]) {
+    roster[3][3] = roster[3][3] || {};
+    roster[3][3].appearanceOverrides = roster[3][3].appearanceOverrides || {};
+    // Very thin body/limbs while keeping a normal-sized head for stylised contrast.
+    roster[3][3].appearanceOverrides.bodyWidth = 6;
+    roster[3][3].appearanceOverrides.armWidth = 1;
+    roster[3][3].appearanceOverrides.armLength = 8;
+    roster[3][3].appearanceOverrides.legWidth = 2;
+    roster[3][3].appearanceOverrides.legLength = 8;
+    roster[3][3].appearanceOverrides.headWidth = 10;
+    roster[3][3].appearanceOverrides.headHeight = 6;
+  }
+}
+
+applyStudentAppearancePlan(activeStudentRoster);
 if (activeStudentRoster.length < studentRoster.length) {
   // Keep simulation smooth: cap active students so classes never exceed chair capacity.
   announce(`📉 Roster balanced to ${activeStudentRoster.length} students so every class has enough chairs.`);
@@ -1105,6 +1273,15 @@ activeStudentRoster.forEach(([name, role, color, profile], idx) => {
   const row = Math.floor(idx / 10);
   game.entities.push(mkEntity(name, role, 98 + (column * 5.2), 86.5 + (row * 2.2), color, profile));
 });
+
+function seedSwotGameTraders() {
+  const swots = game.entities.filter((entity) => entity.role === 'swot').slice(0, 4);
+  for (const swot of swots) {
+    if (!hasVideoGameItem(swot)) swot.inventory.push(game.rng() < 0.5 ? 'video game cart' : 'video game disk');
+  }
+}
+
+seedSwotGameTraders();
 
 function initialiseNpcRelationships() {
   for (const entity of game.entities) {
@@ -1121,6 +1298,56 @@ function formatTime(mins) {
   const h = Math.floor(mins / 60) % 24;
   const m = Math.floor(mins % 60);
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function weekdayLabelForDay(day = game.dayCount) {
+  return WEEKDAY_NAMES[(Math.max(1, day) - 1) % WEEKDAY_NAMES.length];
+}
+
+function weightedCardRarityRoll(rng = Math.random) {
+  const total = Object.values(CARD_RARITY).reduce((sum, entry) => sum + entry.weight, 0);
+  let roll = rng() * total;
+  for (const [rarity, meta] of Object.entries(CARD_RARITY)) {
+    roll -= meta.weight;
+    if (roll <= 0) return rarity;
+  }
+  return 'common';
+}
+
+function dailyCardCountForStudent(entity) {
+  const base = 1 + Math.floor(game.rng() * 5);
+  const swotBonus = entity.role === 'swot' ? 1 : 0;
+  return Math.max(1, Math.min(5, base + swotBonus - (game.rng() < 0.4 ? 1 : 0)));
+}
+
+function pickDailyCardsForEntity(entity) {
+  const count = dailyCardCountForStudent(entity);
+  const cards = [];
+  const npcSeed = styleSeedFromName(entity.name) + game.dayCount * 13;
+  const weekday = (game.dayCount - 1) % 7;
+  for (let i = 0; i < count; i += 1) {
+    let rarity = weightedCardRarityRoll(game.rng);
+    // Rare scheduling rule: some legendary cards appear only on specific days for specific NPCs.
+    if ((npcSeed + i) % 11 === weekday && game.periodIndex <= 2) rarity = 'legendary';
+    const pool = TRADING_CARD_CATALOG.filter((card) => card.rarity === rarity);
+    const idx = Math.abs(npcSeed + i * 17) % pool.length;
+    cards.push(pool[idx]);
+  }
+  return cards;
+}
+
+function assignDailyTradingCards() {
+  for (const entity of game.entities) {
+    if (isStaffRole(entity.role) || entity.role === 'player') continue;
+    entity.dailyCards = pickDailyCardsForEntity(entity);
+  }
+}
+
+function updateCardCollectionFromCards(cards = []) {
+  for (const card of cards) {
+    if (card?.id) game.cardCollection.add(card.id);
+  }
+  game.cardCollectionCount = game.cardCollection.size;
 }
 
 function roomByName(name) {
@@ -1158,10 +1385,24 @@ function hasArrivedForCurrentPeriod(entity, currentPeriod = schedule[game.period
   return entity.arrivedForDay;
 }
 
+function activeDinnerLady() {
+  return game.entities.find((entity) => entity.role === 'dinnerlady') || null;
+}
+
+function dinnerLadySupervisingLunch(currentPeriod, now = performance.now()) {
+  if (currentPeriod?.period !== 'Lunch Break') return false;
+  const dinnerLady = activeDinnerLady();
+  if (!dinnerLady) return false;
+  const onField = entityRoom(dinnerLady) === 'P.E. Field';
+  const lookingAway = now < (dinnerLady.lookingAwayUntil || 0);
+  return onField && !lookingAway;
+}
+
 function bullyFightChance(currentPeriod) {
   // Keep mornings civil: fights are very unlikely until break starts.
   if (isStartDayPeriod(currentPeriod) || isRegistrationPeriod(currentPeriod)) return 0.0001;
   if (currentPeriod.mode !== 'break') return 0.00035;
+  if (dinnerLadySupervisingLunch(currentPeriod)) return 0.00045;
   return 0.006;
 }
 
@@ -1742,6 +1983,8 @@ function resetToSchoolMorning() {
   game.hygiene = Math.max(55, game.hygiene - 3);
   pickWeeklyWeather();
   game.dialogueDayKey += 1;
+  game.playerComputerPlayUntil = 0;
+  game.playerComputerStationId = null;
   game.ericSeatReservedToday = game.rng() < ERIC_RESERVED_SEAT_CHANCE;
 
   if (game.dayCount > 1 && game.dayCount % TOILET_BLOCK_INTERVAL_DAYS === 0) {
@@ -1755,6 +1998,10 @@ function resetToSchoolMorning() {
   const gate = roomByName('School Gates');
   let teacherIndex = 0;
   for (const entity of game.entities) {
+    if (entity.refusesEricUntilDay && game.dayCount >= entity.refusesEricUntilDay) {
+      // Gradual forgiveness: grudges can persist for days before interactions reopen.
+      entity.refusesEricUntilDay = 0;
+    }
     if (entity === player) {
       entity.x = gate.x + gate.w / 2;
       entity.y = gate.y + gate.h - 4;
@@ -1800,6 +2047,9 @@ function resetToSchoolMorning() {
   }
 
   assignDailyDutyTeacher();
+  assignDailyTradingCards();
+  player.dailyCards = pickDailyCardsForEntity(player);
+  updateCardCollectionFromCards(player.dailyCards);
 
   setPeriod(0);
   updateBladderHud();
@@ -1815,17 +2065,23 @@ function updateAutoPilot(dt) {
   const current = schedule[game.periodIndex];
   const destination = chooseAutoDestination();
   const waypoint = routeWaypoint(player, destination);
-  const lateForClass = (isSupervisedPeriod(current))
-    && entityRoom(player) !== current.room;
-  // Auto mode should feel readable and controlled, not faster than manual play.
-  const hallwayBoost = 1.05;
-  const lateRunBoost = lateForClass ? 1.15 : 1;
-  const autoSlowdown = 0.5; // Explicitly halve Eric's auto movement speed.
-  const speed = ((player.personality.speed * game.energy) / 100) * hallwayBoost * lateRunBoost * autoSlowdown;
+  // Auto mode should move at student pace (not superhuman speed).
+  // NPC students use a hallway multiplier near 3.0 and move with dt/1000,
+  // while Eric uses dt*0.011, so we convert with /11 for parity.
+  const studentHallwayBoost = 3.05 / 11;
+  const speed = ((player.personality.speed * game.energy) / 100) * studentHallwayBoost;
 
   const dx = waypoint.x - player.x;
   const dy = waypoint.y - player.y;
-  const len = Math.hypot(dx, dy) || 1;
+  const lenRaw = Math.hypot(dx, dy);
+  const len = lenRaw || 1;
+
+  // Arrival deadzone avoids tiny auto-corrections that look like shaking in queues.
+  if (lenRaw < 0.12) {
+    player.vx = 0;
+    player.vy = 0;
+    return;
+  }
 
   // In lessons, lock Eric to his seat once he reaches it so he does not hover.
   const inLesson = current.mode === 'lesson';
@@ -2005,6 +2261,71 @@ function tryTrade(actor, partner, { isPlayerInitiated = false } = {}) {
   } else if (canPlayerHearSpeaker(actor, 7.2) || canPlayerHearSpeaker(partner, 7.2)) {
     announce(`🤝 ${actor.name} and ${partner.name} swapped ${actorOffer} and ${partnerOffer}.`, { source: actor, range: 7.2 });
   }
+  return true;
+}
+
+function hasVideoGameItem(entity) {
+  return Boolean(entity?.inventory?.some((item) => /video game/i.test(String(item))));
+}
+
+function itemTradeValue(item) {
+  const label = String(item || '').toLowerCase();
+  if (label.includes('video game')) return 14;
+  if (label.includes('walkman') || label.includes('toy robot')) return 10;
+  if (label.includes('trading card')) return 8;
+  return 4 + Math.min(5, Math.floor(label.length / 4));
+}
+
+function attemptInteractionTrade(target, { haggle = false } = {}) {
+  if (!target || target === player) return false;
+  if (!player.inventory?.length || !target.inventory?.length) {
+    announce('🎒 Trade failed: someone has no items to swap.');
+    return false;
+  }
+
+  const actorOffer = player.inventory[Math.floor(game.rng() * player.inventory.length)];
+  const partnerOffer = target.inventory[Math.floor(game.rng() * target.inventory.length)];
+  const relation = target.relationships?.Eric || 0;
+  const friendliness = target.traits?.friendly || 50;
+  const discipline = target.traits?.discipline || 50;
+  const playerBarter = (player.traits?.barter || 50) + (haggle ? 18 : 0);
+  const acceptance = 0.26 + (relation / 180) + (friendliness / 280) + (playerBarter / 220) - (discipline / 360);
+
+  const actorValue = itemTradeValue(actorOffer);
+  const partnerValue = itemTradeValue(partnerOffer);
+  const valueGap = partnerValue - actorValue;
+  const worthTolerance = 2 + ((target.traits?.trading || 45) / 28);
+
+  if (valueGap > worthTolerance && !haggle) {
+    announce(`🤨 ${target.name} thinks ${actorOffer} is not worth ${partnerOffer}. Try haggling.`, { source: target, range: 8, force: true });
+    adjustEricRelationship(target, -1.5, 'trade-refused');
+    return false;
+  }
+
+  const haggleRisk = haggle ? 0.12 : 0;
+  const accepted = game.rng() < Math.max(0.06, Math.min(0.94, acceptance - haggleRisk + ((worthTolerance - valueGap) / 14)));
+  if (!accepted) {
+    announce(`🙅 ${target.name} refused the ${haggle ? 'haggle' : 'trade'} offer.`, { source: target, range: 8, force: true });
+    adjustEricRelationship(target, haggle ? -3 : -2, haggle ? 'haggle-failed' : 'trade-failed');
+    return false;
+  }
+
+  const actorIdx = player.inventory.indexOf(actorOffer);
+  const partnerIdx = target.inventory.indexOf(partnerOffer);
+  if (actorIdx < 0 || partnerIdx < 0) return false;
+  player.inventory.splice(actorIdx, 1);
+  target.inventory.splice(partnerIdx, 1);
+  player.inventory.push(partnerOffer);
+  target.inventory.push(actorOffer);
+
+  const price = haggle ? 0 : Math.max(0, Math.floor((partnerValue - actorValue) / 3));
+  if (price > 0 && player.money >= price) {
+    player.money -= price;
+    target.money = (target.money || 0) + price;
+  }
+
+  adjustEricRelationship(target, haggle ? 2.5 : 2, haggle ? 'haggle-trade' : 'trade-success');
+  announce(`🤝 Eric traded ${actorOffer} for ${partnerOffer}${price > 0 ? ` (+£${price})` : ''} with ${target.name}.`, { source: target, range: 8, force: true });
   return true;
 }
 
@@ -2214,6 +2535,7 @@ function updateTodo() {
     `Rain: students shelter indoors | Snow: snowball chatter | Sun: football | Wind: running`,
     `If toilets are blocked/flooded, avoid bladder emergencies until they reopen`,
     `Avoid teachers while bunking`,
+    `Lunch field is supervised by Dinner Lady Dot; rowdy groups get dispersed`,
   ];
   todoEl.innerHTML = todoItems.map((t) => `<li>${t}</li>`).join('');
 }
@@ -2333,12 +2655,19 @@ function setPeriod(index) {
   announce(`🔔 Bell! ${current.period} in ${current.room}`);
   if (current.period === 'Home Time') {
     announce('🏠 Home time! Students may leave through the school gates.');
+    announce('🎮 Want extra computer time? At the gates, press E to stay for one extra hour.', { force: true });
+    game.choseToStayAfterSchool = false;
+    game.stayingAfterSchoolUntil = 0;
   }
   if (current.period === 'End Day') {
     announce('🌙 End of day bell. Campus is closing.');
   }
   periodEl.textContent = `🔔 Period: ${current.period}`;
   roomTargetEl.textContent = `📍 Target: ${current.room}`;
+  if (current.period === 'Home Time' && game.choseToStayAfterSchool && game.timeMinutes < game.stayingAfterSchoolUntil) {
+    periodEl.textContent = `🔔 Period: Home Time (Free play until ${formatTime(game.stayingAfterSchoolUntil)})`;
+    roomTargetEl.textContent = '📍 Target: Computer Room (optional)';
+  }
   updateFloorStatus();
   updateTodo();
 }
@@ -2680,7 +3009,7 @@ function updateMedicalSystem() {
   if (!nurse) return;
 
   const severePatients = game.entities
-    .filter((entity) => entity.role !== 'teacher' && entity.role !== 'janitor' && entity.role !== 'nurse')
+    .filter((entity) => !isStaffRole(entity.role))
     .filter((entity) => entity.knockoutCount >= 3 && now <= entity.needsNurseUntil)
     .sort((a, b) => b.knockoutCount - a.knockoutCount);
 
@@ -2932,6 +3261,16 @@ function interact() {
     }
   }
 
+  // At home-time gates, Eric can choose an optional extra hour for computer gaming.
+  const currentPeriod = schedule[game.periodIndex];
+  const nearSchoolGate = player.x >= (schoolExit.x - 3.2) && player.y >= schoolExit.yMin && player.y <= schoolExit.yMax;
+  if (nearSchoolGate && currentPeriod.period === 'Home Time' && !game.choseToStayAfterSchool) {
+    game.choseToStayAfterSchool = true;
+    game.stayingAfterSchoolUntil = game.timeMinutes + 60;
+    announce(`🕹️ Eric chose to stay after school until ${formatTime(game.stayingAfterSchoolUntil)} for computer time.`, { force: true });
+    return;
+  }
+
   // Use nearby bins to dispose of packaging.
   const nearbyBin = trashCans.find((bin) => distance(player, bin) < 2.1);
   if (nearbyBin && game.playerCarryingTrash) {
@@ -3007,12 +3346,28 @@ function interact() {
     return;
   }
 
-  // Computer terminals are inspectable so players can see what students are really doing.
+  // Computer terminals support lunchtime games if Eric has traded for one.
   const nearbyPc = computerStations.find((station) => distance(player, station) < 1.7);
   if (nearbyPc && entityRoom(player) === 'Computer Room') {
+    const currentPeriod = schedule[game.periodIndex];
+    const lunchOrAfterHours = currentPeriod.period === 'Lunch Break' || game.choseToStayAfterSchool;
+    if (lunchOrAfterHours && hasVideoGameItem(player)) {
+      game.playerComputerStationId = nearbyPc.id;
+      game.playerComputerPlayUntil = performance.now() + 12000;
+      nearbyPc.use = 'game';
+      nearbyPc.userName = 'Eric';
+      game.energy = Math.min(100, game.energy + 6);
+      updateTodo();
+      announce('🎮 Eric loaded a traded video game on the school computer.', { force: true });
+      return;
+    }
+
     const meta = computerUseMeta[nearbyPc.use] || computerUseMeta.word;
     const userText = nearbyPc.userName ? ` used by ${nearbyPc.userName}` : ' idle';
     announce(`🖥️ ${meta.icon} ${meta.label}${userText}.`, { force: true });
+    if (currentPeriod.period !== 'Lunch Break' && !game.choseToStayAfterSchool && hasVideoGameItem(player)) {
+      announce('💡 You have a video game item. Use computers at lunch or during after-school free-play.');
+    }
     return;
   }
 
@@ -3117,12 +3472,16 @@ function updateCollectables(now = performance.now()) {
 function updateMission() {
   const letters = shields.filter((s) => s.found).map((s) => s.letter);
   game.safeCombo = letters.join('');
-  if (letters.length === shields.length) {
+  const shieldProgress = `${letters.length}/${shields.length}`;
+  const cardProgress = `${game.cardCollectionCount}/256`;
+  missionEl.textContent = `🛡️ Shields ${shieldProgress} | 🃏 Card Collection ${cardProgress}`;
+
+  if (letters.length === shields.length && !game.missionComplete) {
     game.missionComplete = true;
-    missionEl.textContent = `🛡️ Mission: Complete! Safe combo ${game.safeCombo}`;
     announce(`🏆 You collected all shield letters: ${game.safeCombo}`);
-  } else {
-    missionEl.textContent = `🛡️ Mission: Letters ${letters.join('')} (${letters.length}/${shields.length})`;
+  }
+  if (game.cardCollectionCount >= 256) {
+    announce('🏆 Full trading card collection completed: all 256 cards!');
   }
 }
 
@@ -3204,8 +3563,17 @@ function syncComputerStations() {
     if (station.use === 'game' || station.use === 'pictures') station.use = 'word';
   }
 
+  // If Eric chose lunch/free-time gaming, keep his station marked as in use.
+  if (game.playerComputerPlayUntil > performance.now() && game.playerComputerStationId) {
+    const playerStation = computerStations.find((station) => station.id === game.playerComputerStationId);
+    if (playerStation) {
+      playerStation.use = 'game';
+      playerStation.userName = 'Eric';
+    }
+  }
+
   for (const entity of game.entities) {
-    if (entity.role === 'teacher' || entity.role === 'janitor' || entity.role === 'nurse') continue;
+    if (isStaffRole(entity.role)) continue;
     if (entityRoom(entity) !== 'Computer Room') continue;
     const station = nearestComputerStation(entity);
     if (!station || distance(entity, station) > 2.2) continue;
@@ -3228,6 +3596,11 @@ function chooseTarget(entity, currentPeriod) {
       ? game.entities.find((candidate) => candidate.name === emergencyName)
       : null;
     return patient ? { x: patient.x, y: patient.y } : roomCenter('Medical Bay');
+  }
+
+  if (entity.role === 'dinnerlady') {
+    if (currentPeriod.period === 'Lunch Break') return roomCenter('P.E. Field');
+    return roomCenter('Reception');
   }
 
   // High bladder urgency overrides normal timetable targets.
@@ -3354,7 +3727,7 @@ function updateNpcVitals(entity, dt, isRunning) {
   if (entity.bladder >= 100) {
     entity.bladder = 24;
     entity.hygiene = 0;
-    if (entity.role !== 'teacher' && entity.role !== 'janitor') {
+    if (!isStaffRole(entity.role)) {
       entity.target = roomCenter('Headmaster Office');
       entity.mood = 'shamed';
     }
@@ -3404,7 +3777,7 @@ function queueJanitorTask(task) {
 
 function scheduleWeeklySickEvent() {
   if (game.dayCount !== game.weeklySickScheduledDay) return;
-  const student = game.entities.find((entity) => entity.role !== 'teacher' && entity.role !== 'janitor' && entity !== player);
+  const student = game.entities.find((entity) => !isStaffRole(entity.role) && entity !== player);
   if (!student) return;
   if (game.litter.some((item) => item.kind === 'sick')) return;
 
@@ -3510,7 +3883,7 @@ function updateAI(dt) {
 
     const inLesson = isSupervisedPeriod(current);
     const dtSeconds = dt / 1000;
-    const isStudent = entity.role !== 'teacher' && entity.role !== 'janitor' && entity.role !== 'nurse';
+    const isStudent = !isStaffRole(entity.role);
     const isOutside = ['P.E. Field', 'School Gates', 'Bike Sheds'].includes(entityRoom(entity));
 
     if (isStudent && entity.displacedFromSeatUntil && performance.now() < entity.displacedFromSeatUntil) {
@@ -3667,12 +4040,29 @@ function updateAI(dt) {
       }
     }
 
-    // Corridor and room transitions are now lively with lots of pupil chatter.
-    if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home') && isStudent && game.rng() < 0.02) {
+    // Students keep chatting while walking corridors/transition routes,
+    // and only really settle once inside their assigned classroom.
+    const expectedRoomNow = entity.role === 'teacher'
+      ? (assignedTeacherName && entity.name === assignedTeacherName ? current.room : teacherHomeRoom(entity.name))
+      : (inLesson ? (entity.lessonRoom || current.room) : current.room);
+    const inAssignedClassroom = inLesson && isStudent && entityRoom(entity) === expectedRoomNow;
+    const walkingToClass = inLesson && isStudent && !inAssignedClassroom;
+    if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home' || walkingToClass) && isStudent && game.rng() < 0.018) {
       ensureDialogueSetup(entity);
       const hallwayChatter = entity.dialogue.hallwayChatter || ['😆 Wait up, I am coming too!'];
       const line = pickFreshLine(entity, hallwayChatter, 'speech');
       say(entity, line || hallwayChatter[0], { durationMs: 3600 });
+    }
+
+    // If a student wanders into the wrong classroom during lesson, they make an excuse and leave.
+    const inAnyClassroom = roomAtPosition(entity)?.type === 'classroom';
+    if (walkingToClass && inAnyClassroom && entityRoom(entity) !== expectedRoomNow && (now - (entity.lastWrongRoomExcuseAt || 0)) > 7000) {
+      entity.lastWrongRoomExcuseAt = now;
+      const excuses = ['😅 Sorry, wrong class — I need to get to my lesson.', '🙋 Oops, wrong room. I am heading to the right one now.', '📚 Excuse me, I should be in another class.'];
+      say(entity, excuses[Math.floor(game.rng() * excuses.length)], { durationMs: 2600 });
+      entity.target = getSeatPosition(expectedRoomNow, entity.seatIndex)
+        || roomCenter(expectedRoomNow)
+        || entity.target;
     }
 
     // Teacher occasionally hushes the class, then students slowly get noisy again.
@@ -3726,6 +4116,44 @@ function updateAI(dt) {
       announce(`📣 ${entity.name}: "Sir! Eric is being bad!"`, { source: entity, range: 7.5 });
     }
 
+    // Dinner lady supervises lunch field behavior: whistle, calm-down, and enforcement.
+    if (entity.role === 'dinnerlady' && current.period === 'Lunch Break') {
+      const fieldStudents = game.entities.filter((candidate) => !isStaffRole(candidate.role) && entityRoom(candidate) === 'P.E. Field');
+      const rowdyStudents = fieldStudents.filter((candidate) => candidate.mood === 'angry' || candidate.mood === 'furious' || (candidate.running && candidate.energy > 22));
+      const clusteredStudents = fieldStudents.filter((candidate) => fieldStudents.some((other) => other !== candidate && distance(candidate, other) < 1.2));
+
+      // Occasionally she turns away briefly, opening a short trouble window.
+      if (game.rng() < 0.00045) entity.lookingAwayUntil = now + 2600;
+      const watching = now >= (entity.lookingAwayUntil || 0);
+
+      if (watching && rowdyStudents.length && now - (entity.lastWhistleAt || 0) > 9000) {
+        entity.lastWhistleAt = now;
+        announce('📯 Dinner Lady Dot blows her whistle: "Settle down and spread out!"', { source: entity, range: 10, force: true });
+        for (const candidate of rowdyStudents.slice(0, 7)) {
+          candidate.speech = null;
+          candidate.running = false;
+          candidate.mood = 'calm';
+          candidate.target = { x: 95 + game.rng() * 58, y: 82 + game.rng() * 22 };
+        }
+      }
+
+      // Severe rowdy behavior can trigger direct discipline to headmaster.
+      const culprit = rowdyStudents.find((candidate) => (candidate.traits?.aggression || 50) > 70 && game.rng() < 0.0032);
+      if (watching && culprit) {
+        culprit.x = 89.2;
+        culprit.y = 90.1;
+        announce(`🚨 Dinner Lady Dot dragged ${culprit.name} off the field for discipline.`, { force: true });
+        sendEntityToHeadmaster(culprit, 'lunch-time rowdiness');
+      }
+
+      // She discourages tight cliques: nearby groups disperse while she is watching.
+      if (watching && clusteredStudents.length > 3 && game.rng() < 0.004) {
+        for (const candidate of clusteredStudents.slice(0, 6)) {
+          candidate.target = { x: 95 + game.rng() * 58, y: 82 + game.rng() * 22 };
+        }
+      }
+    }
+
     // Bully behaviour is period-aware so mornings stay mostly calm.
     if (entity.role === 'bully' && game.rng() < bullyFightChance(current)) {
       meleeAttack(entity);
@@ -3736,7 +4164,7 @@ function updateAI(dt) {
     if (entity.role === 'bully' && !teacherWatchingBully) {
       const victim = game.entities.find((candidate) => (
         candidate !== entity
-        && candidate.role !== 'teacher'
+        && !isStaffRole(candidate.role)
         && candidate.knockedUntil < performance.now()
         && distance(entity, candidate) < 4.4
       ));
@@ -3790,13 +4218,13 @@ function updateAI(dt) {
     }
 
     // Students can buy food/drink at vending machines and then carry packaging.
-    if (entity.role !== 'teacher' && entity.role !== 'janitor' && !entity.carryingTrash && current.mode === 'break' && game.rng() < 0.0018) {
+    if (!isStaffRole(entity.role) && !entity.carryingTrash && current.mode === 'break' && game.rng() < 0.0018) {
       entity.carryingTrash = true;
       entity.target = nearestPoint(entity, vendingMachines);
     }
 
     // Most students bin litter; some occasionally drop it and get told off.
-    if (entity.role !== 'teacher' && entity.role !== 'janitor' && entity.carryingTrash && !inLesson) {
+    if (!isStaffRole(entity.role) && entity.carryingTrash && !inLesson) {
       const nearestBin = nearestPoint(entity, trashCans);
       const littering = game.rng() < 0.001;
       if (littering) {
@@ -3861,7 +4289,9 @@ function updateAI(dt) {
 
     // Lightweight separation avoids visual clumping, but we skip it for seated pupils
     // so classroom rows stay stable and students don't drift toward the blackboard.
-    const canPhaseThroughCrowd = entity.phaseThroughUntil > performance.now();
+    // Doorway/stair choke points allow temporary stacking so flows do not deadlock.
+    const crowdChokePoint = isNearDoorway(entity, 2.4) || isNearDoorway(routedTarget, 2.4) || nearStair;
+    const canPhaseThroughCrowd = entity.phaseThroughUntil > performance.now() || crowdChokePoint;
     if (!(inLesson && studentInCurrentClass) && !canPhaseThroughCrowd) {
       for (const other of game.entities) {
         if (other === entity || other.knockedUntil > performance.now()) continue;
@@ -4110,7 +4540,10 @@ function updateSchedule(dt) {
   }
 
   if (game.periodElapsed >= current.mins) {
-    if (game.periodIndex === schedule.length - 1) {
+    if (current.period === 'Home Time' && game.choseToStayAfterSchool && game.timeMinutes < game.stayingAfterSchoolUntil) {
+      // Optional after-school free-play keeps Home Time active for one extra in-game hour.
+      game.periodElapsed = Math.min(current.mins, game.periodElapsed);
+    } else if (game.periodIndex === schedule.length - 1) {
       // Keep home-time active until player exits via gates.
       game.periodElapsed = current.mins;
     } else {
@@ -4146,12 +4579,16 @@ function updateSchedule(dt) {
     }
   }
 
-  clockEl.textContent = `🕘 Time: ${formatTime(game.timeMinutes)}`;
+  clockEl.textContent = `🕘 ${weekdayLabelForDay()} ${formatTime(game.timeMinutes)}`;
   const waitingLabel = !periodWaiting
     ? ''
     : (!teacherPresent ? ' (waiting for teacher to arrive)' : ' (waiting for teacher to sit)');
   periodEl.textContent = `🔔 Period: ${current.period}${waitingLabel}`;
   roomTargetEl.textContent = `📍 Target: ${current.room}`;
+  if (current.period === 'Home Time' && game.choseToStayAfterSchool && game.timeMinutes < game.stayingAfterSchoolUntil) {
+    periodEl.textContent = `🔔 Period: Home Time (Free play until ${formatTime(game.stayingAfterSchoolUntil)})`;
+    roomTargetEl.textContent = '📍 Target: Computer Room (optional)';
+  }
   updateAttendanceHud(current);
   updateFloorStatus();
 }
@@ -4161,6 +4598,12 @@ function checkSchoolExit() {
   const current = schedule[game.periodIndex];
   if (player.x >= schoolExit.x && player.y >= schoolExit.yMin && player.y <= schoolExit.yMax) {
     if (current.mode === 'home' || current.mode === 'end') {
+      if (game.choseToStayAfterSchool && game.timeMinutes < game.stayingAfterSchoolUntil) {
+        announce(`🕹️ Eric decides to stay for extra computer time until ${formatTime(game.stayingAfterSchoolUntil)}.`, { force: true });
+        player.x = schoolExit.x - 2.2;
+        player.y = 90;
+        return;
+      }
       announce('✅ Eric leaves at home time. School day complete.');
       game.dayCount += 1;
       resetToSchoolMorning();
@@ -4410,14 +4853,15 @@ function drawWorld() {
     const door = roomDoors.find((d) => d.room === room.name);
     if (door) {
       const doorPos = worldToScreen(door.x, door.y);
-      fillDitherRect(doorPos.sx - 8, doorPos.sy - 7, 16, 14, '#835637', '#6a432a', 2);
+      // Taller door sprites read better at zoom and improve interaction affordance.
+      fillDitherRect(doorPos.sx - 8, doorPos.sy - 10, 16, 20, '#835637', '#6a432a', 2);
       ctx.fillStyle = '#d3a15b';
-      ctx.fillRect(doorPos.sx - 3, doorPos.sy - 5, 6, 10);
+      ctx.fillRect(doorPos.sx - 3, doorPos.sy - 8, 6, 14);
       ctx.fillStyle = '#2a1b12';
-      ctx.fillRect(doorPos.sx + 1, doorPos.sy, 2, 2);
+      ctx.fillRect(doorPos.sx + 1, doorPos.sy + 1, 2, 2);
       ctx.fillStyle = '#fff1d0';
       ctx.font = 'bold 7px monospace';
-      ctx.fillText('E', doorPos.sx - 2, doorPos.sy + 16);
+      ctx.fillText('E', doorPos.sx - 2, doorPos.sy + 18);
     }
 
     ctx.strokeStyle = PALETTE.line;
@@ -4445,12 +4889,17 @@ function drawWorld() {
     const points = [stair.fromY, stair.toY];
     for (const y of points) {
       const pos = worldToScreen(stair.x, y);
+      const towardArrow = y === stair.fromY
+        ? (stair.toY > stair.fromY ? '↓' : '↑')
+        : (stair.fromY > stair.toY ? '↓' : '↑');
       fillDitherRect(pos.sx - 14, pos.sy - 10, 28, 20, '#f4d06f', '#ffbf3c', 4);
       ctx.fillStyle = '#8f5a00';
       for (let i = 0; i < 4; i += 1) ctx.fillRect(pos.sx - 12 + i * 6, pos.sy - 8, 2, 16);
       ctx.fillStyle = PALETTE.ink;
       ctx.font = 'bold 8px monospace';
       ctx.fillText('STAIR', pos.sx - 13, pos.sy - 12);
+      ctx.font = 'bold 9px monospace';
+      ctx.fillText(towardArrow, pos.sx - 3, pos.sy - 12);
       ctx.font = 'bold 7px monospace';
       ctx.fillText('E', pos.sx - 2, pos.sy + 15);
     }
@@ -4629,6 +5078,7 @@ function drawEntities() {
       : entity.role === 'teacher' ? '#4cc9f0'
       : entity.role === 'janitor' ? '#f8f9fa'
       : entity.role === 'nurse' ? '#ff8fab'
+      : entity.role === 'dinnerlady' ? '#ffb4a2'
       : entity.role === 'bully' ? '#f94144'
       : entity.role === 'swot' ? '#43aa8b'
       : entity.role === 'weird' ? '#9d4edd'
@@ -4676,44 +5126,111 @@ function drawEntities() {
       const punchLift = punchFrame === 0 ? -2 : 0;
       const writingFrame = isWriting ? Math.floor((now / 90) % 4) : 0;
 
-      // Head
-      ctx.fillStyle = '#ffd7b5';
-      ctx.fillRect(px - 5, py - 24 + bob, 10, 6);
-      // Hair cap
-      ctx.fillStyle = '#513b2f';
-      ctx.fillRect(px - 5, py - 24 + bob, 10, 2);
-      // Body jacket
-      ctx.fillStyle = body;
-      ctx.fillRect(px - 7, py - 18 + bob, 14, 12);
-      // Arms
-      ctx.fillStyle = '#ffd7b5';
       const strikeDir = entity.facing >= 0 ? 1 : -1;
-      const rightArmX = strikeDir > 0 ? px + 7 + punchReach : px + 7;
-      const leftArmX = strikeDir < 0 ? px - 10 - punchReach : px - 10;
-      ctx.fillRect(leftArmX, py - 17 + armKick + (strikeDir < 0 ? punchLift : 0) - (isWriting ? writingFrame : 0), 3, 8);
-      ctx.fillRect(rightArmX, py - 17 - armKick + (strikeDir > 0 ? punchLift : 0) + (isWriting ? writingFrame : 0), 3, 8);
+      const appearance = entity.appearance || {};
+      const useUniform = isStudentCharacter(entity);
+      const headW = Math.max(8, appearance.headWidth || 10);
+      const headH = Math.max(5, appearance.headHeight || 6);
+      const bodyW = Math.max(11, appearance.bodyWidth || 14);
+      const armW = Math.max(1, appearance.armWidth || 3);
+      const armL = Math.max(6, appearance.armLength || 8);
+      const legW = Math.max(2, appearance.legWidth || 5);
+      const legL = Math.max(6, appearance.legLength || 8);
+      const heightShift = appearance.heightOffset || 0;
+      const skinTone = appearance.skinTone || '#ffd7b5';
+      const hairColor = appearance.hairColor || '#513b2f';
+
+      // Head + facial variation per student personality profile.
+      ctx.fillStyle = skinTone;
+      ctx.fillRect(px - Math.floor(headW / 2), py - 24 + bob - heightShift, headW, headH);
+      ctx.fillStyle = hairColor;
+      ctx.fillRect(px - Math.floor(headW / 2), py - 24 + bob - heightShift, headW, 2);
+      // Ears and nose shapes make pupils less identical.
+      const earSize = appearance.earSize || 1;
+      ctx.fillStyle = skinTone;
+      ctx.fillRect(px - Math.floor(headW / 2) - 1, py - 21 + bob - heightShift, earSize, 2);
+      ctx.fillRect(px + Math.floor(headW / 2), py - 21 + bob - heightShift, earSize, 2);
+      ctx.fillStyle = '#6d4c41';
+      const noseX = appearance.noseType === 'long' ? px : px - 1;
+      const noseH = appearance.noseType === 'button' ? 1 : appearance.noseType === 'long' ? 2 : 1;
+      ctx.fillRect(noseX, py - 20 + bob - heightShift, 1, noseH);
+      // Eyes: white + iris color + black pupil pixels; blink every ~10s randomly.
+      const eyeSpread = appearance.eyeSpread || 1;
+      if (now >= (entity.nextBlinkAt || 0)) {
+        entity.blinkUntil = now + 130;
+        entity.nextBlinkAt = now + (8000 + game.rng() * 4000);
+      }
+      const isBlinking = now < (entity.blinkUntil || 0);
+      const eyeY = py - 22 + bob - heightShift;
+      if (isBlinking) {
+        ctx.fillStyle = '#2f2f2f';
+        ctx.fillRect(px - eyeSpread - 2, eyeY, 3, 1);
+        ctx.fillRect(px + eyeSpread - 1, eyeY, 3, 1);
+      } else {
+        // Left eye triplet.
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(px - eyeSpread - 2, eyeY, 1, 1);
+        ctx.fillStyle = appearance.eyeColor || '#1d3557';
+        ctx.fillRect(px - eyeSpread - 1, eyeY, 1, 1);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(px - eyeSpread, eyeY, 1, 1);
+        // Right eye triplet.
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(px + eyeSpread - 1, eyeY, 1, 1);
+        ctx.fillStyle = appearance.eyeColor || '#1d3557';
+        ctx.fillRect(px + eyeSpread, eyeY, 1, 1);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(px + eyeSpread + 1, eyeY, 1, 1);
+      }
+      if (appearance.acne) {
+        ctx.fillStyle = '#d98f8f';
+        ctx.fillRect(px - 3, py - 20 + bob - heightShift, 1, 1);
+      }
+
+      // Mouth opens while speaking to make dialogue readable from sprites.
+      const isSpeaking = Boolean(entity.speech && entity.speech.until > now);
+      ctx.fillStyle = '#4a1e1e';
+      if (isSpeaking) ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 2);
+      else ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 1);
+
+      // School uniform: white shirt + blue tie + black trousers/shoes for students.
+      ctx.fillStyle = useUniform ? '#f8f9fa' : body;
+      ctx.fillRect(px - Math.floor(bodyW / 2), py - 18 + bob - heightShift, bodyW, 12);
+      if (useUniform) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(px - 2, py - 18 + bob - heightShift, 4, 4);
+        ctx.fillStyle = '#2b59c3';
+        ctx.fillRect(px - 1, py - 14 + bob - heightShift, 2, 4);
+      }
+
+      // Arms reflect skinny/thick build while keeping animation timing.
+      ctx.fillStyle = skinTone;
+      const rightArmX = strikeDir > 0 ? px + Math.floor(bodyW / 2) + punchReach : px + Math.floor(bodyW / 2);
+      const leftArmX = strikeDir < 0 ? px - Math.floor(bodyW / 2) - armW - punchReach : px - Math.floor(bodyW / 2) - armW;
+      ctx.fillRect(leftArmX, py - 17 + armKick + (strikeDir < 0 ? punchLift : 0) - (isWriting ? writingFrame : 0) - heightShift, armW, armL);
+      ctx.fillRect(rightArmX, py - 17 - armKick + (strikeDir > 0 ? punchLift : 0) + (isWriting ? writingFrame : 0) - heightShift, armW, armL);
       if (isWriting && entity.role === 'teacher') {
         ctx.fillStyle = '#f8f9fa';
         const chalkX = strikeDir > 0 ? px + 14 : px - 14;
         ctx.fillRect(chalkX, py - 15, 3, 2);
       }
-      // Legs use a bent seated frame when pupils sit in chairs.
-      ctx.fillStyle = '#1f2a44';
+
+      // Legs vary by profile; student trousers remain black to enforce uniform.
+      ctx.fillStyle = useUniform ? '#111827' : '#1f2a44';
       if (seated) {
-        ctx.fillRect(px - 7, py - 8, 6, 3);
-        ctx.fillRect(px + 1, py - 8, 6, 3);
-        ctx.fillRect(px - 8, py - 5, 4, 6);
-        ctx.fillRect(px + 4, py - 5, 4, 6);
-        ctx.fillStyle = '#13151a';
-        ctx.fillRect(px - 8, py + 1, 4, 2);
-        ctx.fillRect(px + 4, py + 1, 4, 2);
+        ctx.fillRect(px - Math.floor(bodyW / 2), py - 8 - heightShift, 6, 3);
+        ctx.fillRect(px + Math.floor(bodyW / 2) - 6, py - 8 - heightShift, 6, 3);
+        ctx.fillRect(px - Math.floor(bodyW / 2), py - 5 - heightShift, legW, 6);
+        ctx.fillRect(px + Math.floor(bodyW / 2) - legW, py - 5 - heightShift, legW, 6);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(px - Math.floor(bodyW / 2), py + 1 - heightShift, legW, 2);
+        ctx.fillRect(px + Math.floor(bodyW / 2) - legW, py + 1 - heightShift, legW, 2);
       } else {
-        ctx.fillRect(px - 6, py - 6 + legKick, 5, 8);
-        ctx.fillRect(px + 1, py - 6 - legKick, 5, 8);
-        // Shoe details
-        ctx.fillStyle = '#13151a';
-        ctx.fillRect(px - 6, py + 2 + legKick, 5, 2);
-        ctx.fillRect(px + 1, py + 2 - legKick, 5, 2);
+        ctx.fillRect(px - legW - 1, py - 6 + legKick - heightShift, legW, legL);
+        ctx.fillRect(px + 1, py - 6 - legKick - heightShift, legW, legL);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(px - legW - 1, py + 2 + legKick + (legL - 8) - heightShift, legW, 2);
+        ctx.fillRect(px + 1, py + 2 - legKick + (legL - 8) - heightShift, legW, 2);
       }
 
       // Teachers are rendered larger and more formal than students.
@@ -4780,6 +5297,16 @@ function drawEntities() {
         }
       }
 
+
+      if (entity.role === 'dinnerlady') {
+        // Dinner lady uniform: apron + whistle so lunchtime supervision reads clearly.
+        ctx.fillStyle = '#ffe8cc';
+        ctx.fillRect(px - 9, py - 21 + bob, 18, 10);
+        ctx.fillStyle = '#9d4edd';
+        ctx.fillRect(px - 8, py - 11 + bob, 16, 6);
+        ctx.fillStyle = '#f4d35e';
+        ctx.fillRect(px + 4, py - 16 + bob, 3, 3);
+      }
 
       if (entity.role === 'janitor') {
         // Janitor outfit: white overalls + blue jeans + spiky hair + moustache.
@@ -5014,6 +5541,20 @@ function getEntityScreenPosition(entity) {
   };
 }
 
+function canvasPointerToInternal(event) {
+  const rect = canvas.getBoundingClientRect();
+  // Pointer coordinates are in CSS pixels; convert them to canvas buffer pixels.
+  // This keeps hover/click hitboxes accurate even when the canvas is scaled.
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    mouseX: (event.clientX - rect.left) * scaleX,
+    mouseY: (event.clientY - rect.top) * scaleY,
+    wrapX: event.clientX - rect.left,
+    wrapY: event.clientY - rect.top,
+  };
+}
+
 function findHoveredEntityAtScreen(mouseX, mouseY) {
   const current = schedule[game.periodIndex];
   // Reverse order makes overlapping hover match what is visually on top.
@@ -5041,10 +5582,8 @@ function tooltipBar(value, color) {
 }
 
 function updateEntityTooltip(event) {
-  const rect = canvas.getBoundingClientRect();
-  const mouseX = event.clientX - rect.left;
-  const mouseY = event.clientY - rect.top;
-  const hovered = findHoveredEntityAtScreen(mouseX, mouseY);
+  const pointer = canvasPointerToInternal(event);
+  const hovered = findHoveredEntityAtScreen(pointer.mouseX, pointer.mouseY);
 
   if (!hovered) {
     hideEntityTooltip();
@@ -5061,14 +5600,18 @@ function updateEntityTooltip(event) {
 
   // Keep tooltip inside the canvas-wrap bounds for legibility.
   const wrap = canvas.parentElement.getBoundingClientRect();
-  const left = Math.min(mouseX + 16, wrap.width - 260);
-  const top = Math.max(8, mouseY - 118);
+  const left = Math.min(pointer.wrapX + 16, wrap.width - 260);
+  const top = Math.max(8, pointer.wrapY - 118);
   entityTooltipEl.style.left = `${left}px`;
   entityTooltipEl.style.top = `${top}px`;
   entityTooltipEl.hidden = false;
 }
 
 const studentInteractions = [
+  { id: 'trade', icon: '🤝', label: 'Offer a fair trade', action: 'trade', baseDelta: 3, lines: ['Fancy a swap?', 'Trade you something useful?', 'Want to exchange items?'] },
+  { id: 'haggle', icon: '💬', label: 'Try to haggle a better deal', action: 'haggle', baseDelta: 1, lines: ['Come on, I can sweeten this deal.', 'Let me talk you into this swap.', 'Surely that is worth a better bargain?'] },
+  { id: 'card-battle', icon: '🃏', label: 'Challenge to trump card battle', action: 'card-battle', baseDelta: 2, lines: ['Fancy a card duel?', 'Let us battle cards.', 'Trump card showdown?'] },
+  { id: 'mug-cards', icon: '🕶️', label: 'Mug them for their cards', action: 'mug-cards', baseDelta: -20, lines: ['Hand over your cards.', 'Give me your deck. Now.', 'I am taking your cards.'] },
   { id: 'compliment', icon: '✨', label: 'Compliment their style', baseDelta: 7, lines: ['Your trainers are elite today.', 'You handled class brilliantly.', 'You make this place less grim.'] },
   { id: 'joke', icon: '😄', label: 'Crack a joke', baseDelta: 5, lines: ['Need a laugh before next lesson?', 'I have got a joke about detentions.', 'This corridor needs better comedy.'] },
   { id: 'study', icon: '📚', label: 'Ask for study tips', baseDelta: 4, lines: ['Can you help me revise this topic?', 'What is your trick for remembering dates?', 'Any smart shortcut for homework?'] },
@@ -5076,6 +5619,73 @@ const studentInteractions = [
   { id: 'tease', icon: '🙃', label: 'Light teasing', baseDelta: -2, lines: ['Bit slow in PE today, eh?', 'Still hiding from that pop quiz?', 'You call that stealth?'] },
   { id: 'insult', icon: '😬', label: 'Throw an insult', baseDelta: -8, lines: ['You are all bark and no bite.', 'Your chat is pure detention bait.', 'Even the timetable is more interesting.'] },
 ];
+
+const staffInteractions = [
+  { id: 'greet', icon: '👋', label: 'Give a polite greeting', baseDelta: 3, lines: ['Good day, sir.', 'Morning miss.', 'Ready for lesson, sir.'] },
+  { id: 'ask-help', icon: '🧭', label: 'Ask for directions', baseDelta: 2, lines: ['Which room should I head to?', 'Can you point me to my class?', 'I am lost between floors.'] },
+  { id: 'apologise', icon: '🙏', label: 'Apologise for behavior', baseDelta: 4, lines: ['Sorry for earlier, sir.', 'I will do better this lesson.', 'No trouble from me now.'] },
+  { id: 'challenge', icon: '😏', label: 'Challenge authority', baseDelta: -6, lines: ['Rules are a bit much, no?', 'You cannot watch every corridor.', 'I am not convinced by that line.'] },
+];
+
+function interactionOptionsFor(target) {
+  if (!target || target.role === 'player') return [];
+  if (isStaffRole(target.role)) return staffInteractions;
+  return studentInteractions;
+}
+
+function playTrumpCardBattle(target) {
+  const myCards = (player.dailyCards || []);
+  const theirCards = (target.dailyCards || []);
+  if (!myCards.length) {
+    announce('🃏 Eric has no daily cards in hand. Trade or wait for tomorrow.');
+    return false;
+  }
+  if (!theirCards.length) {
+    announce(`🃏 ${target.name} did not bring cards today.`);
+    return false;
+  }
+
+  const myCard = myCards[Math.floor(game.rng() * myCards.length)];
+  const theirCard = theirCards[Math.floor(game.rng() * theirCards.length)];
+  const stat = ['strength', 'defense'][Math.floor(game.rng() * 2)];
+  const myScore = myCard[stat] + ((player.traits?.luck || 50) / 20);
+  const theirScore = theirCard[stat] + ((target.traits?.luck || 50) / 20);
+
+  announce(`🃏 Duel: Eric plays ${myCard.name} (${stat} ${myCard[stat]}) vs ${target.name}'s ${theirCard.name} (${stat} ${theirCard[stat]}).`, { force: true });
+  if (myScore >= theirScore) {
+    target.dailyCards = theirCards.filter((card) => card.id !== theirCard.id);
+    player.dailyCards.push(theirCard);
+    updateCardCollectionFromCards([theirCard]);
+    adjustEricRelationship(target, 2, 'card-win');
+    announce(`🏆 Eric won and took ${theirCard.name}!`, { force: true });
+  } else {
+    player.dailyCards = myCards.filter((card) => card.id !== myCard.id);
+    target.dailyCards.push(myCard);
+    adjustEricRelationship(target, -4, 'card-loss');
+    announce(`💥 Eric lost and handed over ${myCard.name}.`, { force: true });
+  }
+  updateMission();
+  return true;
+}
+
+function mugCardsFromTarget(target) {
+  const theirCards = target.dailyCards || [];
+  if (!theirCards.length) {
+    announce(`🕶️ ${target.name} has no cards to steal.`);
+    return false;
+  }
+  const stolen = theirCards.splice(0, Math.min(2, theirCards.length));
+  player.dailyCards = player.dailyCards || [];
+  player.dailyCards.push(...stolen);
+  updateCardCollectionFromCards(stolen);
+  target.refusesEricUntilDay = game.dayCount + 3 + Math.floor(game.rng() * 4);
+  target.relationships = target.relationships || {};
+  target.relationships.Eric = -100;
+  target.ericReputation = Math.max(-100, (target.ericReputation || 0) - 35);
+  announce(`🚨 Eric mugged ${target.name} and stole ${stolen.length} card(s). They refuse to speak for days.`, { force: true });
+  updateMission();
+  return true;
+}
 
 function calculateStudentInteractionDelta(target, option) {
   const traits = target.traits || {};
@@ -5096,46 +5706,67 @@ function calculateStudentInteractionDelta(target, option) {
 }
 
 function openInteractionPanelFor(target) {
-  if (!target || target.role === 'player' || target.role === 'teacher' || target.role === 'janitor' || target.role === 'nurse') return;
+  if (!target || target.role === 'player') return;
   game.selectedInteractionTarget = target;
   interactionPanelEl.hidden = false;
   interactionTitleEl.textContent = `Talk to ${target.name}`;
-  interactionMetaEl.textContent = `Relationship: ${relationshipLabel(target.relationships?.Eric || 0)} • Reputation: ${Math.round(target.ericReputation || 0)}`;
+  if ((target.refusesEricUntilDay || 0) > game.dayCount) {
+    interactionMetaEl.textContent = `${target.name} is still upset and refuses to talk until a later day.`;
+    interactionOptionsEl.innerHTML = '<p>🙅 They are ignoring Eric after past betrayal.</p>';
+    return;
+  }
+  interactionMetaEl.textContent = `Relationship: ${relationshipLabel(target.relationships?.Eric || 0)} • Reputation: ${Math.round(target.ericReputation || 0)} • Cards: ${(target.dailyCards || []).length}`;
   interactionOptionsEl.innerHTML = '';
 
+  const options = interactionOptionsFor(target);
+  if (!options.length) {
+    interactionOptionsEl.innerHTML = '<p>⚠️ No interactions available right now.</p>';
+    return;
+  }
+
   // Button list is generated from a single data table for fast UI updates.
-  for (const option of studentInteractions) {
+  for (const option of options) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.title = `Try: ${option.label}. Outcome depends on ${target.name}'s traits and your charisma.`;
     btn.textContent = `${option.icon} ${option.label}`;
     btn.onclick = () => {
       const line = option.lines[Math.floor(game.rng() * option.lines.length)];
-      const delta = calculateStudentInteractionDelta(target, option);
-      adjustEricRelationship(target, delta, `social:${option.id}`);
-      target.ericReputation = Math.max(-100, Math.min(100, (target.ericReputation || 0) + delta));
       announce(`🗨️ Eric to ${target.name}: "${line}"`);
-      if (delta >= 4) announce(`🙂 ${target.name}: "Fair play, Eric."`, { source: target, range: 8, force: true });
-      else if (delta <= -4) announce(`😠 ${target.name}: "Not cool, Eric."`, { source: target, range: 8, force: true });
-      else announce(`😐 ${target.name}: "Hmm... maybe."`, { source: target, range: 8, force: true });
-      interactionMetaEl.textContent = `Relationship: ${relationshipLabel(target.relationships?.Eric || 0)} • Reputation: ${Math.round(target.ericReputation || 0)}`;
+
+      if (option.action === 'trade') {
+        attemptInteractionTrade(target, { haggle: false });
+      } else if (option.action === 'haggle') {
+        attemptInteractionTrade(target, { haggle: true });
+      } else if (option.action === 'card-battle') {
+        playTrumpCardBattle(target);
+      } else if (option.action === 'mug-cards') {
+        mugCardsFromTarget(target);
+      } else {
+        const delta = calculateStudentInteractionDelta(target, option);
+        adjustEricRelationship(target, delta, `social:${option.id}`);
+        target.ericReputation = Math.max(-100, Math.min(100, (target.ericReputation || 0) + delta));
+        if (delta >= 4) announce(`🙂 ${target.name}: "Fair play, Eric."`, { source: target, range: 8, force: true });
+        else if (delta <= -4) announce(`😠 ${target.name}: "Not cool, Eric."`, { source: target, range: 8, force: true });
+        else announce(`😐 ${target.name}: "Hmm... maybe."`, { source: target, range: 8, force: true });
+      }
+
+      interactionMetaEl.textContent = `Relationship: ${relationshipLabel(target.relationships?.Eric || 0)} • Reputation: ${Math.round(target.ericReputation || 0)} • Cards: ${(target.dailyCards || []).length}`;
     };
     interactionOptionsEl.appendChild(btn);
   }
 }
 
 function onCanvasClick(event) {
-  const rect = canvas.getBoundingClientRect();
-  const mouseX = event.clientX - rect.left;
-  const mouseY = event.clientY - rect.top;
-  const clicked = findHoveredEntityAtScreen(mouseX, mouseY);
+  const pointer = canvasPointerToInternal(event);
+  const clicked = findHoveredEntityAtScreen(pointer.mouseX, pointer.mouseY);
   if (!clicked) {
     interactionPanelEl.hidden = true;
     game.selectedInteractionTarget = null;
     return;
   }
   if (distance(player, clicked) > 5.5) {
-    announce('💬 Move closer to chat with that student.');
+    announce('💬 Move closer to chat with that person.');
     return;
   }
   openInteractionPanelFor(clicked);
