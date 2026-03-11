@@ -307,6 +307,12 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     arrivalJoinMins: 0,
     // Movement watchdog helps recover teachers from rare wall-edge stalls.
     stuckSeconds: 0,
+    // Congestion watchdog resets pathing when a doorway jam persists.
+    jamSeconds: 0,
+    // Short-lived pass-through mode allows overlap while clearing tight bottlenecks.
+    phaseThroughUntil: 0,
+    // During supervised periods, students cache which classroom they are trying to attend.
+    lessonRoom: null,
     lastX: x,
     lastY: y,
   };
@@ -551,6 +557,37 @@ function doorwayStagingPoint(entity, doorway, room) {
     x: Math.max(minX, Math.min(maxX, doorway.x + laneOffsetX)),
     y: doorway.y,
   };
+}
+
+function isNearDoorway(pos, radius = 1.9) {
+  // Doorway proximity is used as a choke-point hint for congestion handling.
+  for (const room of rooms) {
+    const door = roomDoorway(room);
+    if (door && distance(pos, door) <= radius) return true;
+  }
+  return false;
+}
+
+function resetEntityPathing(entity, destination) {
+  const destinationRoom = roomAtPosition(destination);
+  const entryDoor = destinationRoom ? roomDoorway(destinationRoom) : null;
+  const stagedDoor = destinationRoom ? doorwayStagingPoint(entity, entryDoor, destinationRoom) : null;
+
+  // Temporary no-separation movement lets jammed pupils/teachers overlap long enough
+  // to pass through tight door bottlenecks instead of deadlocking.
+  entity.phaseThroughUntil = performance.now() + 1450;
+  entity.jamSeconds = 0;
+
+  if (stagedDoor) {
+    const nudgeSign = entity.seatIndex % 2 ? 1 : -1;
+    entity.x += nudgeSign * 0.32;
+    entity.y += (entity.seatIndex % 3 - 1) * 0.12;
+    constrain(entity);
+    entity.target = stagedDoor;
+    return;
+  }
+
+  entity.target = destination;
 }
 
 function routeWaypoint(entity, destination) {
@@ -1101,6 +1138,63 @@ function nearestFreeSeatInRoom(roomName, actor) {
   return best;
 }
 
+
+function studentsCommittedToRoom(roomName, ignoreEntity = null) {
+  return game.entities.filter((entity) => (
+    entity !== ignoreEntity
+    && entity.role !== 'teacher'
+    && entity.knockedUntil < performance.now()
+    && (
+      entity.seatedRoom === roomName
+      || entity.lessonRoom === roomName
+      || roomAtPosition(entity.target || entity)?.name === roomName
+      || roomAtPosition(entity)?.name === roomName
+    )
+  )).length;
+}
+
+function roomHasOpenSeat(roomName, student) {
+  const layout = getRoomSeatLayout(roomName);
+  if (!layout || !layout.seats.length) return false;
+  return studentsCommittedToRoom(roomName, student) < layout.seats.length;
+}
+
+function chooseLessonRoomForStudent(student, currentPeriod) {
+  const assignedTeacherName = assignedTeacherForRoom(currentPeriod.room);
+  const assignedTeacherPresent = game.entities.some((entity) => (
+    entity.role === 'teacher'
+    && (!assignedTeacherName || entity.name === assignedTeacherName)
+    && entityRoom(entity) === currentPeriod.room
+    && entity.knockedUntil < performance.now()
+  ));
+
+  const teacherClassrooms = game.entities
+    .filter((entity) => entity.role === 'teacher' && entity.knockedUntil < performance.now())
+    .map((entity) => entityRoom(entity))
+    .filter((roomName) => roomName && roomByName(roomName)?.type === 'classroom');
+
+  const candidateSet = new Set();
+  if (assignedTeacherPresent) candidateSet.add(currentPeriod.room);
+  for (const roomName of teacherClassrooms) candidateSet.add(roomName);
+
+  const candidates = [...candidateSet].filter((roomName) => roomHasOpenSeat(roomName, student));
+  if (!candidates.length) return currentPeriod.room;
+
+  let bestRoom = candidates[0];
+  let bestScore = Infinity;
+  for (const roomName of candidates) {
+    const seat = nearestFreeSeatInRoom(roomName, student) || roomCenter(roomName);
+    const crowd = studentsCommittedToRoom(roomName, student);
+    const score = crowd * 5.5 + distance(student, seat);
+    if (score < bestScore) {
+      bestScore = score;
+      bestRoom = roomName;
+    }
+  }
+
+  return bestRoom;
+}
+
 function toggleSeat() {
   const currentRoom = entityRoom(player);
   const room = roomByName(currentRoom);
@@ -1387,19 +1481,21 @@ function updateAI(dt) {
     if (entity.knockedUntil > performance.now()) continue;
 
     const inLesson = current.mode === 'lesson' || current.period === 'Tutorial';
-    const studentInCurrentClass = entity.role !== 'teacher' && entityRoom(entity) === current.room;
 
-    // Keep students focused in class: continuously pull them to their classroom seat.
+    // Keep students in supervised, staffed classrooms instead of empty rooms.
     if (inLesson && entity.role !== 'teacher') {
-      entity.target = getSeatPosition(current.room, entity.seatIndex)
-        || nearestFreeSeatInRoom(current.room, entity)
-        || roomCenter(current.room);
+      entity.lessonRoom = chooseLessonRoomForStudent(entity, current);
+      entity.target = nearestFreeSeatInRoom(entity.lessonRoom, entity)
+        || getSeatPosition(entity.lessonRoom, entity.seatIndex)
+        || roomCenter(entity.lessonRoom);
     } else if (inLesson && entity.role === 'teacher') {
+      entity.lessonRoom = null;
       // Dedicated teacher handles the active lesson; others return to their own classrooms.
       const isAssignedTeacher = !assignedTeacherName || entity.name === assignedTeacherName;
       const destinationRoom = isAssignedTeacher ? current.room : teacherHomeRoom(entity.name);
       entity.target = teacherBoardSpot(destinationRoom);
     } else if (!entity.target || game.rng() < 0.01) {
+      entity.lessonRoom = null;
       entity.target = chooseTarget(entity, current);
     }
 
@@ -1495,13 +1591,19 @@ function updateAI(dt) {
       continue;
     }
 
+    const expectedRoom = entity.role === 'teacher'
+      ? (assignedTeacherName && entity.name === assignedTeacherName ? current.room : teacherHomeRoom(entity.name))
+      : (inLesson ? (entity.lessonRoom || current.room) : current.room);
+    const studentInCurrentClass = entity.role !== 'teacher' && entityRoom(entity) === expectedRoom;
+
     const routedTarget = routeWaypoint(entity, entity.target);
     let dx = routedTarget.x - entity.x;
     let dy = routedTarget.y - entity.y;
 
     // Lightweight separation avoids visual clumping, but we skip it for seated pupils
     // so classroom rows stay stable and students don't drift toward the blackboard.
-    if (!(inLesson && studentInCurrentClass)) {
+    const canPhaseThroughCrowd = entity.phaseThroughUntil > performance.now();
+    if (!(inLesson && studentInCurrentClass) && !canPhaseThroughCrowd) {
       for (const other of game.entities) {
         if (other === entity || other.knockedUntil > performance.now()) continue;
         const gapX = entity.x - other.x;
@@ -1538,10 +1640,6 @@ function updateAI(dt) {
       updateNpcVitals(entity, dt, false);
       continue;
     }
-
-    const expectedRoom = entity.role === 'teacher'
-      ? (assignedTeacherName && entity.name === assignedTeacherName ? current.room : teacherHomeRoom(entity.name))
-      : current.room;
 
     // During lessons all teachers should be seated in their designated classroom,
     // not just the currently assigned teacher in the active period room.
@@ -1589,10 +1687,25 @@ function updateAI(dt) {
       entity.stuckSeconds = 0;
     }
 
+    // Generic doorway jam recovery for all NPCs. If movement stalls in a choke-point,
+    // refresh pathing and briefly allow overlap so queues can flow through one-tile doors.
+    const farFromGoal = distance(entity, entity.target) > 1.6;
+    const doorwayChoke = isNearDoorway(entity) || isNearDoorway(routedTarget, 2.2);
+    if (farFromGoal && doorwayChoke) {
+      entity.jamSeconds = moved < 0.05 ? (entity.jamSeconds + (dt / 1000)) : Math.max(0, entity.jamSeconds - (dt / 1400));
+      if (entity.jamSeconds > 1.15) resetEntityPathing(entity, entity.target);
+    } else {
+      entity.jamSeconds = 0;
+    }
+
     constrain(entity);
     updateNpcVitals(entity, dt, entity.running);
 
-    if (distance(entity, entity.target) < 0.9) entity.target = null;
+    if (distance(entity, entity.target) < 0.9) {
+      entity.target = null;
+      entity.jamSeconds = 0;
+      entity.phaseThroughUntil = 0;
+    }
 
     // Teachers occasionally issue live board tasks.
     if (entity.role === 'teacher' && game.rng() < 0.002) {
