@@ -234,7 +234,8 @@ const personalities = {
 const game = {
   timeMinutes: 8 * 60 + 20,
   // Minutes advanced per real-time second; tuned so lesson travel windows are fair.
-  timeScale: 0.06,
+  // Slightly faster school clock so periods progress at a snappier pace.
+  timeScale: 0.09,
   periodIndex: 0,
   periodElapsed: 0,
   periodHoldMinutes: 0,
@@ -304,6 +305,10 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     // Arrival staging: students appear over the first 10 seconds, teachers are ready immediately.
     arrivedForDay: true,
     arrivalJoinMins: 0,
+    // Movement watchdog helps recover teachers from rare wall-edge stalls.
+    stuckSeconds: 0,
+    lastX: x,
+    lastY: y,
   };
 }
 
@@ -430,7 +435,13 @@ function nearestThrowableProp(entity) {
 }
 
 function entityRoom(entity) {
-  return rooms.find((r) => entity.x > r.x && entity.x < r.x + r.w && entity.y > r.y && entity.y < r.y + r.h)?.name || 'Corridor';
+  const eps = 0.12;
+  return rooms.find((r) => (
+    entity.x >= r.x + eps
+    && entity.x <= r.x + r.w - eps
+    && entity.y >= r.y + eps
+    && entity.y <= r.y + r.h - eps
+  ))?.name || 'Corridor';
 }
 
 function entityFloor(entity) {
@@ -507,7 +518,13 @@ function chooseAutoDestination() {
 }
 
 function roomAtPosition(pos) {
-  return rooms.find((r) => pos.x > r.x && pos.x < r.x + r.w && pos.y > r.y && pos.y < r.y + r.h) || null;
+  const eps = 0.12;
+  return rooms.find((r) => (
+    pos.x >= r.x + eps
+    && pos.x <= r.x + r.w - eps
+    && pos.y >= r.y + eps
+    && pos.y <= r.y + r.h - eps
+  )) || null;
 }
 
 function roomDoorway(room) {
@@ -1493,8 +1510,9 @@ function updateAI(dt) {
 
         // Teachers get deterministic pathing: they move through crowds while students
         // are displaced, instead of staff being deflected into walls/doorway loops.
-        if (entity.role === 'teacher' && other.role !== 'teacher') {
-          pushStudentAsideForTeacher(entity, other, dt / 1000);
+        if (entity.role === 'teacher') {
+          // Staff can phase through crowds/chairs so they reliably reach desks.
+          if (other.role !== 'teacher') pushStudentAsideForTeacher(entity, other, dt / 1000);
           continue;
         }
 
@@ -1535,11 +1553,11 @@ function updateAI(dt) {
       : (supervised && teacherPresent && entityRoom(entity) !== expectedRoom);
     const canRun = entity.energy > 20;
     entity.running = lateForClass && canRun;
-    const runBoost = entity.running ? 1.72 : 1;
+    const runBoost = entity.running ? 1.45 : 1;
     // Teachers are intentionally quicker than students to keep lessons moving.
-    const hallwayBoost = entity.role === 'teacher' ? 3.95 : 3.3;
+    const hallwayBoost = entity.role === 'teacher' ? 3.1 : 3.3;
     // Staff get an extra catch-up boost so lessons do not appear to start without a teacher.
-    const staffCatchupBoost = entity.role === 'teacher' && lateForClass ? 2.35 : 1;
+    const staffCatchupBoost = entity.role === 'teacher' && lateForClass ? 1.35 : 1;
     const speed = entity.personality.speed * (entity.energy / 100) * hallwayBoost * runBoost * staffCatchupBoost;
 
     entity.vx = entity.isSeated ? 0 : (dx / len) * speed;
@@ -1547,6 +1565,29 @@ function updateAI(dt) {
 
     entity.x += entity.vx * (dt / 1000);
     entity.y += entity.vy * (dt / 1000);
+
+    constrain(entity);
+
+    // Anti-stuck recovery: if a teacher is late and barely moving for several
+    // seconds, snap to a clean waypoint toward their expected room.
+    const moved = Math.hypot(entity.x - entity.lastX, entity.y - entity.lastY);
+    entity.lastX = entity.x;
+    entity.lastY = entity.y;
+    if (entity.role === 'teacher' && lateForClass && distance(entity, entity.target) > 2.1) {
+      entity.stuckSeconds = moved < 0.06 ? (entity.stuckSeconds + (dt / 1000)) : 0;
+      if (entity.stuckSeconds > 2.4) {
+        const rescueRoom = roomByName(expectedRoom);
+        const rescueDoor = roomDoorway(rescueRoom);
+        if (rescueDoor) {
+          entity.x = rescueDoor.x;
+          entity.y = rescueDoor.y;
+          entity.target = teacherBoardSpot(expectedRoom);
+        }
+        entity.stuckSeconds = 0;
+      }
+    } else {
+      entity.stuckSeconds = 0;
+    }
 
     constrain(entity);
     updateNpcVitals(entity, dt, entity.running);
