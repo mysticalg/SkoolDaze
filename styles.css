@@ -157,3 +157,62 @@ dialog {
   main { grid-template-columns: 1fr; }
   .panel { max-height: none; overflow: visible; }
 }
+
+
+.interaction-panel {
+  position: absolute;
+  right: 0.8rem;
+  top: 0.8rem;
+  width: 320px;
+  max-height: calc(100% - 1.6rem);
+  overflow: auto;
+  border: 1px solid #6ea7d9;
+  border-radius: 10px;
+  background: rgba(7, 14, 25, 0.95);
+  padding: 0.55rem;
+  z-index: 6;
+}
+.interaction-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+.interaction-panel h3 {
+  margin: 0;
+  font-size: 0.82rem;
+}
+.interaction-panel button {
+  background: #102640;
+  color: #d8efff;
+  border: 1px solid #38648a;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.interaction-panel p { margin: 0.35rem 0; font-size: 0.72rem; }
+.interaction-options {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.34rem;
+}
+.interaction-options button {
+  width: 100%;
+  text-align: left;
+  padding: 0.35rem 0.4rem;
+  font-size: 0.72rem;
+}
+
+.tooltip-meter {
+  display: inline-block;
+  width: 54px;
+  height: 6px;
+  border: 1px solid #6f8daa;
+  border-radius: 999px;
+  overflow: hidden;
+  vertical-align: middle;
+  margin-left: 0.2rem;
+}
+.tooltip-meter > span {
+  display: block;
+  height: 100%;
+}
