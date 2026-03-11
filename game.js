@@ -850,9 +850,56 @@ const game = {
 
 let seatCounter = 0;
 const roomSeatCache = new Map();
+const STUDENT_ROLES = new Set(['player', 'hero', 'swot', 'bully', 'weird']);
+
+function isStudentCharacter(entity) {
+  return STUDENT_ROLES.has(entity?.role);
+}
+
+function buildAppearanceProfile(name, role, traitProfile, profile = {}) {
+  const seed = styleSeedFromName(name);
+  const skinPalette = {
+    white: '#f6d2bb',
+    black: '#7a4a32',
+    yellow: '#e0bf7a',
+    lightBrown: '#b98057',
+    green: '#6fbc5f',
+    red: '#d76363',
+  };
+  const hairPalette = ['#1b1713', '#4a2f1e', '#7a4f2f', '#b56d3f', '#f0d7a5', '#4f2546', '#2e6f95', '#8a5cff'];
+  const eyePalette = ['#1d3557', '#2a9d8f', '#6d597a', '#8d99ae', '#5f0f40'];
+  const skinToneKey = profile.appearanceOverrides?.skinTone || 'white';
+  const skinTone = skinPalette[skinToneKey] || skinPalette.white;
+
+  // Students get stronger silhouette variation so personalities read visually.
+  const roleBuild = role === 'bully' ? 1 : role === 'swot' ? -0.4 : role === 'weird' ? -0.15 : 0;
+  const bodyType = clampScore((traitProfile.strength - 50) / 34 + roleBuild + ((traitProfile.weightValue - 50) / 120), -1.1, 1.2);
+  const armType = clampScore((traitProfile.strength - 50) / 40 + (traitProfile.aggression - 50) / 110, -1, 1);
+  const legType = clampScore((traitProfile.speed - 50) / 40 + (traitProfile.skill - 50) / 130, -1, 1);
+
+  return {
+    skinTone,
+    hairColor: hairPalette[seed % hairPalette.length],
+    eyeColor: eyePalette[(seed + Math.round(traitProfile.wit)) % eyePalette.length],
+    headWidth: 9 + (seed % 4),
+    headHeight: 6 + (seed % 2),
+    earSize: 1 + (seed % 2),
+    noseType: ['dot', 'stubby', 'long', 'button'][seed % 4],
+    eyeSpread: 1 + (seed % 2),
+    jawType: ['soft', 'round', 'square'][seed % 3],
+    acne: traitProfile.mood < 43 || traitProfile.luck < 38,
+    heightOffset: Math.round(clampScore(((traitProfile.speed - 50) / 25) + ((seed % 5) - 2) * 0.25, -2, 2)),
+    bodyWidth: 12 + Math.round(bodyType * 2),
+    armWidth: 2 + (armType > 0.45 ? 1 : 0),
+    armLength: 7 + (armType < -0.35 ? -1 : armType > 0.45 ? 1 : 0),
+    legWidth: 4 + (legType > 0.35 ? 1 : 0),
+    legLength: 8 + (legType > 0.45 ? 1 : legType < -0.45 ? -1 : 0),
+  };
+}
 
 function mkEntity(name, role, x, y, color, traits = {}) {
   const traitProfile = buildTraitProfile(role, traits.traitOverrides || {});
+  const appearance = buildAppearanceProfile(name, role, traitProfile, traits);
   const basePersonality = personalities[role] || personalities.hero;
   const personality = {
     ...basePersonality,
@@ -878,6 +925,7 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     attention: 100,
     profile: traits,
     traits: traitProfile,
+    appearance,
     relationships: role === 'player' ? {} : { Eric: Math.round(((traitProfile.friendly + traitProfile.honor) / 8) - (traitProfile.aggression / 7) + ((Math.random() * 16) - 8)) },
     // Everyone now carries school-day possessions and pocket money for lunch/trading.
     inventory: randomInventoryFor(role),
@@ -1095,6 +1143,21 @@ function maxStudentPopulationForLessons() {
 
 const maxStudentPopulation = maxStudentPopulationForLessons();
 const activeStudentRoster = studentRoster.slice(0, maxStudentPopulation);
+
+function applyStudentAppearancePlan(roster) {
+  // Explicit diversity mix requested: mostly white, some yellow/light-brown,
+  // exactly two black pupils, plus one green and one red stylised student.
+  const skinPlan = ['green', 'red', 'black', 'black', 'yellow', 'yellow', 'yellow', 'lightBrown', 'lightBrown', 'lightBrown'];
+  for (let i = 0; i < roster.length; i += 1) {
+    const entry = roster[i];
+    const profile = entry[3] || {};
+    profile.appearanceOverrides = profile.appearanceOverrides || {};
+    profile.appearanceOverrides.skinTone = skinPlan[i] || 'white';
+    entry[3] = profile;
+  }
+}
+
+applyStudentAppearancePlan(activeStudentRoster);
 if (activeStudentRoster.length < studentRoster.length) {
   // Keep simulation smooth: cap active students so classes never exceed chair capacity.
   announce(`📉 Roster balanced to ${activeStudentRoster.length} students so every class has enough chairs.`);
@@ -4676,44 +4739,82 @@ function drawEntities() {
       const punchLift = punchFrame === 0 ? -2 : 0;
       const writingFrame = isWriting ? Math.floor((now / 90) % 4) : 0;
 
-      // Head
-      ctx.fillStyle = '#ffd7b5';
-      ctx.fillRect(px - 5, py - 24 + bob, 10, 6);
-      // Hair cap
-      ctx.fillStyle = '#513b2f';
-      ctx.fillRect(px - 5, py - 24 + bob, 10, 2);
-      // Body jacket
-      ctx.fillStyle = body;
-      ctx.fillRect(px - 7, py - 18 + bob, 14, 12);
-      // Arms
-      ctx.fillStyle = '#ffd7b5';
       const strikeDir = entity.facing >= 0 ? 1 : -1;
-      const rightArmX = strikeDir > 0 ? px + 7 + punchReach : px + 7;
-      const leftArmX = strikeDir < 0 ? px - 10 - punchReach : px - 10;
-      ctx.fillRect(leftArmX, py - 17 + armKick + (strikeDir < 0 ? punchLift : 0) - (isWriting ? writingFrame : 0), 3, 8);
-      ctx.fillRect(rightArmX, py - 17 - armKick + (strikeDir > 0 ? punchLift : 0) + (isWriting ? writingFrame : 0), 3, 8);
+      const appearance = entity.appearance || {};
+      const useUniform = isStudentCharacter(entity);
+      const headW = Math.max(8, appearance.headWidth || 10);
+      const headH = Math.max(5, appearance.headHeight || 6);
+      const bodyW = Math.max(11, appearance.bodyWidth || 14);
+      const armW = Math.max(2, appearance.armWidth || 3);
+      const armL = Math.max(6, appearance.armLength || 8);
+      const legW = Math.max(3, appearance.legWidth || 5);
+      const legL = Math.max(6, appearance.legLength || 8);
+      const heightShift = appearance.heightOffset || 0;
+      const skinTone = appearance.skinTone || '#ffd7b5';
+      const hairColor = appearance.hairColor || '#513b2f';
+
+      // Head + facial variation per student personality profile.
+      ctx.fillStyle = skinTone;
+      ctx.fillRect(px - Math.floor(headW / 2), py - 24 + bob - heightShift, headW, headH);
+      ctx.fillStyle = hairColor;
+      ctx.fillRect(px - Math.floor(headW / 2), py - 24 + bob - heightShift, headW, 2);
+      // Ears and nose shapes make pupils less identical.
+      const earSize = appearance.earSize || 1;
+      ctx.fillStyle = skinTone;
+      ctx.fillRect(px - Math.floor(headW / 2) - 1, py - 21 + bob - heightShift, earSize, 2);
+      ctx.fillRect(px + Math.floor(headW / 2), py - 21 + bob - heightShift, earSize, 2);
+      ctx.fillStyle = '#6d4c41';
+      const noseX = appearance.noseType === 'long' ? px : px - 1;
+      const noseH = appearance.noseType === 'button' ? 1 : appearance.noseType === 'long' ? 2 : 1;
+      ctx.fillRect(noseX, py - 20 + bob - heightShift, 1, noseH);
+      // Eyes remain tiny for pixel style but differ in spread/color.
+      const eyeSpread = appearance.eyeSpread || 1;
+      ctx.fillStyle = appearance.eyeColor || '#1d3557';
+      ctx.fillRect(px - eyeSpread - 1, py - 22 + bob - heightShift, 1, 1);
+      ctx.fillRect(px + eyeSpread, py - 22 + bob - heightShift, 1, 1);
+      if (appearance.acne) {
+        ctx.fillStyle = '#d98f8f';
+        ctx.fillRect(px - 3, py - 20 + bob - heightShift, 1, 1);
+      }
+
+      // School uniform: white shirt + blue tie + black trousers/shoes for students.
+      ctx.fillStyle = useUniform ? '#f8f9fa' : body;
+      ctx.fillRect(px - Math.floor(bodyW / 2), py - 18 + bob - heightShift, bodyW, 12);
+      if (useUniform) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(px - 2, py - 18 + bob - heightShift, 4, 4);
+        ctx.fillStyle = '#2b59c3';
+        ctx.fillRect(px - 1, py - 14 + bob - heightShift, 2, 4);
+      }
+
+      // Arms reflect skinny/thick build while keeping animation timing.
+      ctx.fillStyle = skinTone;
+      const rightArmX = strikeDir > 0 ? px + Math.floor(bodyW / 2) + punchReach : px + Math.floor(bodyW / 2);
+      const leftArmX = strikeDir < 0 ? px - Math.floor(bodyW / 2) - armW - punchReach : px - Math.floor(bodyW / 2) - armW;
+      ctx.fillRect(leftArmX, py - 17 + armKick + (strikeDir < 0 ? punchLift : 0) - (isWriting ? writingFrame : 0) - heightShift, armW, armL);
+      ctx.fillRect(rightArmX, py - 17 - armKick + (strikeDir > 0 ? punchLift : 0) + (isWriting ? writingFrame : 0) - heightShift, armW, armL);
       if (isWriting && entity.role === 'teacher') {
         ctx.fillStyle = '#f8f9fa';
         const chalkX = strikeDir > 0 ? px + 14 : px - 14;
         ctx.fillRect(chalkX, py - 15, 3, 2);
       }
-      // Legs use a bent seated frame when pupils sit in chairs.
-      ctx.fillStyle = '#1f2a44';
+
+      // Legs vary by profile; student trousers remain black to enforce uniform.
+      ctx.fillStyle = useUniform ? '#111827' : '#1f2a44';
       if (seated) {
-        ctx.fillRect(px - 7, py - 8, 6, 3);
-        ctx.fillRect(px + 1, py - 8, 6, 3);
-        ctx.fillRect(px - 8, py - 5, 4, 6);
-        ctx.fillRect(px + 4, py - 5, 4, 6);
-        ctx.fillStyle = '#13151a';
-        ctx.fillRect(px - 8, py + 1, 4, 2);
-        ctx.fillRect(px + 4, py + 1, 4, 2);
+        ctx.fillRect(px - Math.floor(bodyW / 2), py - 8 - heightShift, 6, 3);
+        ctx.fillRect(px + Math.floor(bodyW / 2) - 6, py - 8 - heightShift, 6, 3);
+        ctx.fillRect(px - Math.floor(bodyW / 2), py - 5 - heightShift, legW, 6);
+        ctx.fillRect(px + Math.floor(bodyW / 2) - legW, py - 5 - heightShift, legW, 6);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(px - Math.floor(bodyW / 2), py + 1 - heightShift, legW, 2);
+        ctx.fillRect(px + Math.floor(bodyW / 2) - legW, py + 1 - heightShift, legW, 2);
       } else {
-        ctx.fillRect(px - 6, py - 6 + legKick, 5, 8);
-        ctx.fillRect(px + 1, py - 6 - legKick, 5, 8);
-        // Shoe details
-        ctx.fillStyle = '#13151a';
-        ctx.fillRect(px - 6, py + 2 + legKick, 5, 2);
-        ctx.fillRect(px + 1, py + 2 - legKick, 5, 2);
+        ctx.fillRect(px - legW - 1, py - 6 + legKick - heightShift, legW, legL);
+        ctx.fillRect(px + 1, py - 6 - legKick - heightShift, legW, legL);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(px - legW - 1, py + 2 + legKick + (legL - 8) - heightShift, legW, 2);
+        ctx.fillRect(px + 1, py + 2 - legKick + (legL - 8) - heightShift, legW, 2);
       }
 
       // Teachers are rendered larger and more formal than students.
