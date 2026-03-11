@@ -362,6 +362,15 @@ const personalities = {
   player: { speed: 1.19, aggression: 0, diligence: 0, focus: 0 },
 };
 
+// Dialogue pacing keeps chatter readable and prevents instant back-to-back spam.
+const MIN_DIALOGUE_INTERVAL_MS = 5000;
+
+// Everyday school items can move through student pockets via trading and bartering.
+const TRADABLE_ITEMS = [
+  'chewing gum', 'packed lunch', 'textbook', 'sunglasses', 'cap', 'conkers', 'apple',
+  'walkman stereo', 'cassette tape', 'letter', 'toy robot', 'paper airplane', 'trading cards',
+];
+
 
 // Lightweight in-memory backend database for trait balancing and per-level tuning.
 const npcTraitBackendDb = window.TRAIT_BACKEND_DB || {
@@ -369,17 +378,17 @@ const npcTraitBackendDb = window.TRAIT_BACKEND_DB || {
   traitKeys: [
     'aggression', 'funny', 'friendly', 'mood', 'wit', 'intelligence', 'speed', 'skill', 'luck',
     'bladderSize', 'boneStrength', 'immuneSystem', 'intelect', 'wisdom', 'honor', 'strength',
-    'sadism', 'masochism', 'discipline',
+    'sadism', 'masochism', 'discipline', 'trading', 'barter',
   ],
   weightClasses: ['overweight', 'slim', 'skinny', 'normal', 'chubby', 'obese'],
   roleBias: {
     bully: { aggression: 24, strength: 14, sadism: 18, friendly: -12, honor: -14, discipline: -16 },
     swot: { intelligence: 20, wisdom: 15, funny: -4, aggression: -18, discipline: 20, honor: 12 },
-    hero: { friendly: 15, honor: 14, wit: 8, aggression: -4, strength: 8 },
+    hero: { friendly: 15, honor: 14, wit: 8, aggression: -4, strength: 8, trading: 6 },
     weird: { funny: 16, luck: 10, mood: 12, discipline: -12, wit: 10 },
-    teacher: { intelligence: 22, wisdom: 20, discipline: 26, honor: 14, aggression: 8, skill: 10 },
+    teacher: { intelligence: 22, wisdom: 20, discipline: 26, honor: 14, aggression: 8, skill: 10, barter: 4 },
     janitor: { wisdom: 10, friendly: 8, discipline: 16, aggression: -8, bladderSize: 6 },
-    player: { funny: 10, wit: 8, luck: 10, discipline: -8 },
+    player: { funny: 10, wit: 8, luck: 10, discipline: -8, trading: 12, barter: 14 },
   },
   levels: Array.from({ length: 10 }, (_, index) => {
     const level = index + 1;
@@ -405,9 +414,21 @@ const npcTraitBackendDb = window.TRAIT_BACKEND_DB || {
       sadism: base - 4,
       masochism: base - 5,
       discipline: base + 2,
+      trading: base + 1,
+      barter: base,
     };
   }),
 };
+
+function randomInventoryFor(role) {
+  const baseline = role === 'teacher' ? ['textbook', 'letter', 'apple'] : ['textbook', 'paper airplane'];
+  const picks = 2 + Math.floor(Math.random() * 3);
+  const items = [...baseline];
+  for (let i = 0; i < picks; i += 1) {
+    items.push(TRADABLE_ITEMS[Math.floor(Math.random() * TRADABLE_ITEMS.length)]);
+  }
+  return items;
+}
 
 function clampScore(value, min = 0, max = 100) {
   return Math.max(min, Math.min(max, value));
@@ -576,12 +597,17 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     profile: traits,
     traits: traitProfile,
     relationships: role === 'player' ? {} : { Eric: Math.round(((traitProfile.friendly + traitProfile.honor) / 8) - (traitProfile.aggression / 7) + ((Math.random() * 16) - 8)) },
+    // Everyone now carries school-day possessions and pocket money for lunch/trading.
+    inventory: randomInventoryFor(role),
+    money: Math.round((role === 'player' ? 13 : role === 'teacher' ? 18 : 8) + Math.random() * 16),
+    lastTradeAt: 0,
     mood: 'calm',
     emotion: 55,
     pride: 10,
     lastSpokeAt: 0,
     speech: null,
     thought: null,
+    lastThoughtAt: 0,
     animPhase: Math.random() * Math.PI * 2,
     seatIndex: seatCounter++,
     carryingTrash: false,
@@ -625,6 +651,7 @@ const player = mkEntity('Eric', 'player', 48, 64, '#ffe04d', {
   title: 'Troublemaker with potential',
   prefers: ['P.E. Field'],
   quotes: ['Not me, sir!', 'I was only looking!'],
+  traitOverrides: { trading: 72, barter: 70, friendly: 62, wit: 78 },
 });
 
 game.entities.push(
@@ -1433,15 +1460,79 @@ function canPlayerHearSpeaker(source, range) {
   return sameRoom || distance(source, player) <= range;
 }
 
+function canUseDialogue(entity, now, channel = 'speech') {
+  const lastAt = channel === 'thought' ? (entity.lastThoughtAt || 0) : (entity.lastSpokeAt || 0);
+  return now - lastAt >= MIN_DIALOGUE_INTERVAL_MS;
+}
+
 function say(entity, text, opts = {}) {
   if (!entity || !text) return;
-  entity.speech = { text: String(text), kind: opts.kind || 'speech', until: performance.now() + (opts.durationMs || 2600) };
-  entity.lastSpokeAt = performance.now();
+  const now = performance.now();
+  if (!opts.force && !canUseDialogue(entity, now, 'speech')) return;
+  // Some pupils are naturally quiet; they often skip optional chatter.
+  const silenceBias = clampScore(55 - ((entity.traits?.friendly || 40) * 0.28) - ((entity.traits?.funny || 40) * 0.18) + ((entity.traits?.discipline || 40) * 0.08), 8, 70);
+  if (!opts.force && Math.random() < (silenceBias / 100)) return;
+  entity.speech = { text: String(text), kind: opts.kind || 'speech', until: now + (opts.durationMs || 2600) };
+  entity.lastSpokeAt = now;
 }
 
 function think(entity, text, durationMs = 3200) {
   if (!entity || !text) return;
-  entity.thought = { text: String(text), until: performance.now() + durationMs };
+  const now = performance.now();
+  if (!canUseDialogue(entity, now, 'thought')) return;
+  entity.thought = { text: String(text), until: now + durationMs };
+  entity.lastThoughtAt = now;
+}
+
+function tradeChanceFor(actor, partner, isPlayerInitiated = false) {
+  const actorTrading = actor.traits?.trading || 40;
+  const actorBarter = actor.traits?.barter || 35;
+  const partnerGuard = partner.traits?.discipline || 50;
+  const relation = partner.relationships?.Eric || 0;
+  const base = isPlayerInitiated
+    ? 0.28 + (actorTrading / 200) + (actorBarter / 190)
+    : 0.1 + (actorTrading / 260);
+  return Math.max(0.08, Math.min(0.92, base + (relation / 240) - (partnerGuard / 420)));
+}
+
+function tryTrade(actor, partner, { isPlayerInitiated = false } = {}) {
+  if (!actor || !partner || actor === partner) return false;
+  const now = performance.now();
+  if ((now - (actor.lastTradeAt || 0)) < MIN_DIALOGUE_INTERVAL_MS || (now - (partner.lastTradeAt || 0)) < MIN_DIALOGUE_INTERVAL_MS) return false;
+  if (!actor.inventory?.length || !partner.inventory?.length) return false;
+
+  if (Math.random() > tradeChanceFor(actor, partner, isPlayerInitiated)) return false;
+  const actorOfferIndex = Math.floor(Math.random() * actor.inventory.length);
+  const partnerOfferIndex = Math.floor(Math.random() * partner.inventory.length);
+  const actorOffer = actor.inventory[actorOfferIndex];
+  const partnerOffer = partner.inventory[partnerOfferIndex];
+  const price = 1 + Math.floor(Math.random() * 4);
+
+  const barterPower = (actor.traits?.barter || 40) + ((actor.traits?.trading || 40) * 0.4);
+  const generosityRoll = (barterPower / 160) + ((partner.relationships?.Eric || 0) / 120);
+  const freebie = isPlayerInitiated && Math.random() < Math.max(0.03, Math.min(0.55, generosityRoll));
+
+  if (!freebie) {
+    if ((actor.money || 0) < price) return false;
+    actor.money -= price;
+    partner.money = (partner.money || 0) + price;
+  }
+
+  actor.inventory.splice(actorOfferIndex, 1);
+  partner.inventory.splice(partnerOfferIndex, 1);
+  actor.inventory.push(partnerOffer);
+  partner.inventory.push(actorOffer);
+  actor.lastTradeAt = now;
+  partner.lastTradeAt = now;
+
+  if (isPlayerInitiated) {
+    announce(freebie
+      ? `🆓 ${partner.name} was charmed by Eric's bartering and swapped ${partnerOffer} for free!`
+      : `🤝 Eric traded ${actorOffer} for ${partnerOffer} with ${partner.name} (£${price}).`, { source: actor, range: 8, force: true });
+  } else if (canPlayerHearSpeaker(actor, 7.2) || canPlayerHearSpeaker(partner, 7.2)) {
+    announce(`🤝 ${actor.name} and ${partner.name} swapped ${actorOffer} and ${partnerOffer}.`, { source: actor, range: 7.2 });
+  }
+  return true;
 }
 
 function wrapBubbleText(text, maxWidth) {
@@ -1794,7 +1885,7 @@ function handleInput(dt) {
   }
 
   const manualMovement = game.keys.ArrowLeft || game.keys.a || game.keys.ArrowRight || game.keys.d || game.keys.ArrowUp || game.keys.w || game.keys.ArrowDown || game.keys.s;
-  if (manualMovement || game.keys.z || game.keys.x || game.keys.e || game.keys.c || game.keys.q) {
+  if (manualMovement || game.keys.z || game.keys.x || game.keys.e || game.keys.c || game.keys.q || game.keys.t || game.keys.v) {
     // Manual control immediately overrides autopilot for responsiveness.
     if (game.autoMode) {
       game.autoMode = false;
@@ -1886,6 +1977,19 @@ function handleInput(dt) {
       }
     }
     game.keys.v = false;
+  }
+
+  if (game.keys.t) {
+    const partner = nearestTradePartner(player, 2.4);
+    if (!partner) {
+      announce('🤝 No one close enough to trade with. Move closer and try T.');
+    } else if (!player.inventory?.length) {
+      announce('🎒 Eric has nothing left to trade.');
+    } else {
+      const traded = tryTrade(player, partner, { isPlayerInitiated: true });
+      if (!traded) announce(`🤝 ${partner.name} declined the trade for now.`);
+    }
+    game.keys.t = false;
   }
 }
 
@@ -2101,6 +2205,21 @@ function studentsCommittedToRoom(roomName, ignoreEntity = null) {
       || roomAtPosition(entity)?.name === roomName
     )
   )).length;
+}
+
+function nearestTradePartner(entity, range = 2.3) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const candidate of game.entities) {
+    if (candidate === entity || candidate.knockedUntil > performance.now()) continue;
+    if (candidate.role === 'janitor') continue;
+    const d = distance(entity, candidate);
+    if (d <= range && d < bestDist && candidate.inventory?.length) {
+      best = candidate;
+      bestDist = d;
+    }
+  }
+  return best;
 }
 
 function roomHasOpenSeat(roomName, student) {
@@ -2906,6 +3025,12 @@ function updateAI(dt) {
       const chat = ['😄 Nice pass!', '🤝 Meet by the canteen.', '😲 Did you see that punch?', "🍟 I'm starving.", '🏃 Race you to the field!', '😂 That lesson was chaos!', '🙌 Bell finally rang!'];
       say(entity, chat[Math.floor(game.rng() * chat.length)]);
       entity.emotion = Math.min(100, entity.emotion + 1.8);
+    }
+
+    // Students and teachers can swap pocket items during breaks and corridor transitions.
+    if ((current.mode === 'break' || (!inLesson && !supervised)) && game.rng() < 0.0042) {
+      const partner = nearestTradePartner(entity, 1.85);
+      if (partner) tryTrade(entity, partner);
     }
 
     // Weather drives break-time choices and social reactions.
@@ -4125,12 +4250,14 @@ function updateEntityTooltip(event) {
   game.hoveredEntity = hovered;
   const role = hovered.role === 'player' ? 'You' : hovered.role;
   const room = entityRoom(hovered);
-  entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>❤️ HP: ${Math.round(hovered.hp)} | ⚡ EN: ${Math.round(hovered.energy)}<br>🙂 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>🚻 Bladder: ${Math.round(hovered.bladder)}% | 🧼 Hyg: ${Math.round(hovered.hygiene || 0)}%<br>📍 ${room}`;
+  const pocketItems = (hovered.inventory || []).slice(0, 3).join(', ');
+  const moreItems = (hovered.inventory || []).length > 3 ? ` +${hovered.inventory.length - 3}` : '';
+  entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>❤️ HP: ${Math.round(hovered.hp)} | ⚡ EN: ${Math.round(hovered.energy)}<br>🙂 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>🚻 Bladder: ${Math.round(hovered.bladder)}% | 🧼 Hyg: ${Math.round(hovered.hygiene || 0)}%<br>💷 £${Math.round(hovered.money || 0)} | 🤝 Trade ${Math.round(hovered.traits?.trading || 0)} | 🗣️ Barter ${Math.round(hovered.traits?.barter || 0)}<br>🎒 ${pocketItems || 'nothing useful'}${moreItems}<br>📍 ${room}`;
 
   // Keep tooltip inside the canvas-wrap bounds for legibility.
   const wrap = canvas.parentElement.getBoundingClientRect();
   const left = Math.min(mouseX + 16, wrap.width - 190);
-  const top = Math.max(8, mouseY - 56);
+  const top = Math.max(8, mouseY - 92);
   entityTooltipEl.style.left = `${left}px`;
   entityTooltipEl.style.top = `${top}px`;
   entityTooltipEl.hidden = false;
