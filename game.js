@@ -152,7 +152,7 @@ const classroomProps = [
 // Arrival is intentionally short in real-time so pupils quickly move from the
 // gate lineup into tutorial without getting stuck outside.
 const ARRIVAL_REAL_SECONDS = 10;
-const ARRIVAL_GAME_MINUTES = (ARRIVAL_REAL_SECONDS * 0.001) * 60;
+const ARRIVAL_GAME_MINUTES = (ARRIVAL_REAL_SECONDS / 60);
 const schedule = [
   { period: 'Arrival', room: 'School Gates', mins: ARRIVAL_GAME_MINUTES, mode: 'transition' },
   { period: 'Tutorial', room: 'Science Lab', mins: 30, mode: 'lesson' },
@@ -257,6 +257,9 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     punchUntil: 0,
     fallStartedAt: 0,
     fallDuration: 520,
+    // Arrival staging: students appear over the first 10 seconds, teachers are ready immediately.
+    arrivedForDay: true,
+    arrivalJoinMins: 0,
   };
 }
 
@@ -304,6 +307,21 @@ function gateQueuePosition(entity) {
     x: gates.x + 2 + lane * 2.05,
     y: gates.y + 3 + row * 1.9,
   };
+}
+
+function teacherGateLinePosition(teacherIndex) {
+  const gates = roomByName('School Gates');
+  // Teachers stand ready on the front line during arrival.
+  return {
+    x: gates.x + 3 + teacherIndex * 2.8,
+    y: gates.y + 2,
+  };
+}
+
+function hasArrivedForCurrentPeriod(entity, currentPeriod = schedule[game.periodIndex]) {
+  if (entity === player) return true;
+  if (currentPeriod.period !== 'Arrival') return true;
+  return entity.arrivedForDay;
 }
 
 function bullyFightChance(currentPeriod) {
@@ -446,11 +464,28 @@ function resetToSchoolMorning() {
   game.playerHeldItem = null;
 
   const gate = roomByName('School Gates');
+  let teacherIndex = 0;
   for (const entity of game.entities) {
-    const lane = entity.seatIndex % 6;
-    entity.x = gate.x + 2 + lane * 2.3;
-    entity.y = gate.y + 3 + Math.floor(entity.seatIndex / 6) * 2.4;
-    entity.target = null;
+    if (entity === player) {
+      entity.x = gate.x + gate.w / 2;
+      entity.y = gate.y + gate.h - 4;
+      entity.arrivedForDay = true;
+      entity.arrivalJoinMins = 0;
+    } else if (entity.role === 'teacher') {
+      const pos = teacherGateLinePosition(teacherIndex++);
+      entity.x = pos.x;
+      entity.y = pos.y;
+      entity.arrivedForDay = true;
+      entity.arrivalJoinMins = 0;
+      entity.target = { ...pos };
+    } else {
+      // Students appear at random moments during the 10-second arrival phase.
+      entity.x = schoolExit.x + 2.2 + game.rng() * 2.2;
+      entity.y = gate.y + 4 + game.rng() * (gate.h - 6);
+      entity.arrivedForDay = false;
+      entity.arrivalJoinMins = game.rng() * Math.max(0.01, ARRIVAL_GAME_MINUTES * 0.92);
+      entity.target = null;
+    }
     entity.vx = 0;
     entity.vy = 0;
     entity.carryingTrash = false;
@@ -949,6 +984,13 @@ function updateAI(dt) {
 
   for (const entity of game.entities) {
     if (entity === player) continue;
+    if (!hasArrivedForCurrentPeriod(entity, current)) {
+      if (game.periodElapsed >= entity.arrivalJoinMins) {
+        entity.arrivedForDay = true;
+      } else {
+        continue;
+      }
+    }
     if (entity.knockedUntil > performance.now()) continue;
 
     if (!entity.target || game.rng() < 0.01) {
@@ -1104,6 +1146,7 @@ function updatePellets(dt) {
     pellet.vy += 0.0008 * dt;
 
     for (const entity of game.entities) {
+      if (!hasArrivedForCurrentPeriod(entity)) continue;
       if (entity === pellet.owner || entity.knockedUntil > performance.now()) continue;
       if (distance(pellet, entity) < 0.75) {
         if (pellet.kind === 'rubbish') {
@@ -1470,7 +1513,9 @@ function drawEntities() {
   const sx = canvas.width / CAMERA.w;
   const sy = canvas.height / CAMERA.h;
 
+  const current = schedule[game.periodIndex];
   for (const entity of game.entities) {
+    if (!hasArrivedForCurrentPeriod(entity, current)) continue;
     const now = performance.now();
     const knocked = entity.knockedUntil > now;
     const isPunching = entity.punchUntil > now;
@@ -1708,6 +1753,7 @@ function loop(now) {
 
     // Update animation time for all entities so movement reads like retro sprites.
     for (const entity of game.entities) {
+      if (!hasArrivedForCurrentPeriod(entity)) continue;
       const moveMagnitude = Math.abs(entity.vx) + Math.abs(entity.vy);
       entity.animPhase += dt * (0.006 + moveMagnitude * 0.01);
     }
