@@ -206,6 +206,14 @@ const urinals = [
   { x: 20, y: 98, label: 'East Urinal' },
 ];
 
+
+const collectableSpawnPoints = [
+  { x: 14, y: 8 }, { x: 28, y: 10 }, { x: 48, y: 9 }, { x: 74, y: 10 }, { x: 108, y: 10 },
+  { x: 140, y: 10 }, { x: 17, y: 43 }, { x: 53, y: 44 }, { x: 80, y: 44 }, { x: 112, y: 45 },
+  { x: 150, y: 45 }, { x: 12, y: 82 }, { x: 40, y: 90 }, { x: 66, y: 90 }, { x: 100, y: 92 },
+  { x: 132, y: 92 }, { x: 154, y: 92 }, { x: 16, y: 117 }, { x: 44, y: 117 }, { x: 100, y: 118 },
+];
+
 const weatherModes = {
   sunny: { icon: '☀️', label: 'Sunny' },
   rain: { icon: '🌧️', label: 'Rain' },
@@ -389,6 +397,27 @@ const TRADABLE_ITEMS = [
   'walkman stereo', 'cassette tape', 'letter', 'toy robot', 'paper airplane', 'trading cards',
 ];
 
+// Rare collectibles rotate around school and can be traded like pocket items.
+const COLLECTABLE_CATALOG = [
+  { name: 'golden prefect badge', icon: '🏅', tint: '#ffd166', value: 9 },
+  { name: 'signed football card', icon: '⚽', tint: '#bde0fe', value: 8 },
+  { name: 'limited mixtape', icon: '📼', tint: '#ffafcc', value: 7 },
+  { name: 'science fair ribbon', icon: '🎗', tint: '#caffbf', value: 8 },
+  { name: 'comic first issue', icon: '📕', tint: '#f4a261', value: 7 },
+  { name: 'silver whistle', icon: '📯', tint: '#d9d9d9', value: 6 },
+  { name: 'vintage keyring', icon: '🗝', tint: '#f1fa8c', value: 7 },
+  { name: 'neon yo-yo', icon: '🪀', tint: '#9bf6ff', value: 5 },
+  { name: 'secret map scrap', icon: '🗺', tint: '#fefae0', value: 8 },
+  { name: 'rare sticker pack', icon: '✨', tint: '#ffc6ff', value: 6 },
+  { name: 'chess medal', icon: '♟', tint: '#dad7cd', value: 9 },
+  { name: 'arcade token', icon: '🪙', tint: '#ffd6a5', value: 6 },
+];
+const COLLECTABLE_LIFETIME_MS = 60000;
+const COLLECTABLE_SPAWN_INTERVAL_MS = 4200;
+const MAX_ACTIVE_COLLECTABLES = 7;
+
+const NPC_POSTURES = ['upright', 'slouched', 'bouncy', 'swagger', 'careful', 'stiff', 'dramatic'];
+
 
 // Lightweight in-memory backend database for trait balancing and per-level tuning.
 const npcTraitBackendDb = window.TRAIT_BACKEND_DB || {
@@ -519,6 +548,138 @@ function relationshipLabel(score) {
   return 'neutral';
 }
 
+
+function styleSeedFromName(name = '') {
+  return Array.from(String(name)).reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
+}
+
+function pickForEntity(entity, items, salt = 0) {
+  if (!items?.length) return null;
+  const base = styleSeedFromName(entity?.name || 'npc') + Math.floor(salt * 17);
+  return items[Math.abs(base) % items.length];
+}
+
+function buildDialogueProfile(entity) {
+  const role = entity.role;
+  const quirks = [
+    'always taps a desk before speaking', 'drops dramatic pauses', 'keeps sentences clipped',
+    'talks like a sports commentator', 'narrates events like a mystery', 'leans into dry sarcasm',
+    'uses old-school formal phrases', 'whispers conspiratorially',
+  ];
+
+  const studentTopics = [
+    'canteen queues', 'detention rumours', 'dodgy homework excuses', 'playground rivalries',
+    'secret shortcuts between rooms', 'football bragging rights', 'who copied whose notes',
+    'who got called to Headmaster today', 'who shouted in assembly',
+  ];
+  const teacherTopics = [
+    'discipline standards', 'exam prep', 'attendance', 'corridor behaviour',
+    'lesson focus', 'staff room gossip', 'class participation', 'uniform rules',
+  ];
+
+  const posture = role === 'teacher'
+    ? pickForEntity(entity, ['upright', 'measured', 'stately', 'stern', 'composed'])
+    : pickForEntity(entity, NPC_POSTURES);
+
+  return {
+    posture,
+    styleQuirk: pickForEntity(entity, quirks, 2),
+    preferredTopic: pickForEntity(entity, role === 'teacher' ? teacherTopics : studentTopics, 3),
+  };
+}
+
+function createQuestionVariants(entity) {
+  const templates = entity.role === 'teacher'
+    ? [
+      'Why are we chatting about {topic} during lesson time?',
+      "Who can connect today's work to {topic}?",
+      'Explain this clearly, no waffle: {topic}.',
+      "Hands up: what have we learned from yesterday's {topic}?",
+      'How would you improve your effort after that {topic} incident?',
+    ]
+    : [
+      'Did you hear about {topic}?',
+      'What do you reckon about {topic}?',
+      'Can you believe the drama around {topic}?',
+      'Who started the chaos with {topic}?',
+      'Any idea what happens next after {topic}?',
+    ];
+  return Array.from({ length: 24 }, (_, idx) => {
+    const t = templates[idx % templates.length];
+    const emphasis = idx % 3 === 0 ? ' seriously' : idx % 3 === 1 ? ' honestly' : '';
+    return t.replace('{topic}', entity.dialogueProfile?.preferredTopic || 'that') + emphasis;
+  });
+}
+
+function createResponseVariants(entity) {
+  const trait = entity.traits || {};
+  const confidence = (trait.wit || 50) + (trait.intelligence || 50);
+  const warm = (trait.friendly || 50) + (trait.honor || 50);
+  const strict = (trait.discipline || 50) + (entity.profile?.strict || 0) * 70;
+
+  const templates = entity.role === 'teacher'
+    ? [
+      "Focus up. I'm noting this for later.",
+      'Interesting, but keep your feet still and your mind on task.',
+      'We covered this before; prove you remember it.',
+      'I expect better posture and better answers.',
+      'That answer has potential. Tighten it and try again.',
+      "You're testing my patience today.",
+    ]
+    : [
+      "I'm trying, just don't grass me up.",
+      "Fine, fine — I'll sit straight and do it properly.",
+      'That was wild. Still thinking about it.',
+      "No clue, but I'll guess with confidence.",
+      "I've got notes on this somewhere.",
+      "Ask me after break and I'll tell you everything.",
+    ];
+
+  return Array.from({ length: 28 }, (_, idx) => {
+    let line = templates[idx % templates.length];
+    if (confidence > 120 && idx % 2 === 0) line = `${line} I know this one.`;
+    if (warm > 122 && idx % 3 === 1) line = `${line} We're alright, yeah?`;
+    if (strict > 120 && idx % 4 === 0) line = `${line} Standards matter.`;
+    return line;
+  });
+}
+
+function ensureDialogueSetup(entity) {
+  if (entity.dialogueProfile && entity.dialogue && entity.dialogue.questions?.length) return;
+  entity.dialogueProfile = buildDialogueProfile(entity);
+  entity.dialogue = {
+    questions: createQuestionVariants(entity),
+    responses: createResponseVariants(entity),
+  };
+}
+
+function logSchoolHistory(text, source = null) {
+  const entry = {
+    text: String(text),
+    source: source?.name || null,
+    room: source ? entityRoom(source) : null,
+    at: game.timeMinutes,
+  };
+  game.schoolHistory.unshift(entry);
+  game.schoolHistory = game.schoolHistory.slice(0, 140);
+}
+
+function randomHistorySnippet() {
+  if (!game.schoolHistory.length) return null;
+  return game.schoolHistory[Math.floor(game.rng() * game.schoolHistory.length)];
+}
+
+function contextualResponseFor(entity, peer = null) {
+  ensureDialogueSetup(entity);
+  const relation = peer ? (entity.relationships?.[peer.name] ?? entity.relationships?.Eric ?? 0) : 0;
+  const relationTag = relation >= 35 ? 'friendly' : relation <= -35 ? 'hostile' : 'neutral';
+  const pool = entity.dialogue.responses || [];
+  const base = pool[Math.floor(game.rng() * pool.length)] || '...';
+  if (relationTag === 'friendly') return `${base} (${peer?.name || 'mate'}, you\'re sound.)`;
+  if (relationTag === 'hostile') return `${base} (${peer?.name || 'you'} better behave.)`;
+  return base;
+}
+
 const JANITOR_IDLE_ROOM = 'Janitor Room';
 const LITTER_CLEANUP_DELAY_MS = 20000;
 const TOILET_DIRT_PER_USE = 4;
@@ -585,6 +746,9 @@ const game = {
   medicalEmergency: null,
   headmasterDetentionUntil: 0,
   headmasterDismissAnnounced: false,
+  schoolHistory: [],
+  lastCollectableSpawnAt: 0,
+  collectables: [],
 };
 
 let seatCounter = 0;
@@ -670,6 +834,9 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     needsNurseUntil: 0,
     lastX: x,
     lastY: y,
+    posture: null,
+    dialogueProfile: null,
+    dialogue: null,
   };
 }
 
@@ -851,6 +1018,7 @@ function initialiseNpcRelationships() {
 }
 
 initialiseNpcRelationships();
+for (const entity of game.entities) ensureDialogueSetup(entity);
 
 function formatTime(mins) {
   const h = Math.floor(mins / 60) % 24;
@@ -1419,6 +1587,7 @@ function resetToSchoolMorning() {
   game.playerHeldItem = null;
   game.toiletDirt = Math.min(35, game.toiletDirt + 6);
   game.janitorTask = null;
+  game.collectables = [];
   game.medicalEmergency = null;
   game.toiletsBlocked = false;
   game.toiletFloodUntil = 0;
@@ -2148,6 +2317,7 @@ function meleeAttack(attacker) {
         target.emotion = Math.max(0, target.emotion - 10);
         think(target, '😤 Oi! That was my chair!', 2400);
         announce(`🪑💥 Eric punched ${target.name} off their chair!`, { source: attacker, range: 8 });
+        logSchoolHistory(`Eric punched ${target.name} off a chair in ${entityRoom(attacker)}.`, attacker);
 
         const teacherWitness = findWitnessingTeacher(attacker, 7.4);
         if (teacherWitness) {
@@ -2618,6 +2788,18 @@ function interact() {
     announce(`📋 Board: "${board.text}"`);
   }
 
+
+  // Pickup nearby timed collectables; these can later be traded for value.
+  const nearbyCollectableIndex = game.collectables.findIndex((item) => distance(player, item) < 1.3);
+  if (nearbyCollectableIndex >= 0) {
+    const item = game.collectables.splice(nearbyCollectableIndex, 1)[0];
+    player.inventory.push(item.name);
+    player.money += Math.max(1, Math.round((item.value || 4) * 0.5));
+    announce(`🧲 Eric found ${item.icon} ${item.name} and stashed it for trading.`);
+    logSchoolHistory(`Eric found ${item.name} near ${entityRoom(player)}.`, player);
+    return;
+  }
+
   // Grab shield letters. High shields can require a knocked-out pupil nearby.
   for (const shield of shields) {
     if (shield.found) continue;
@@ -2670,6 +2852,31 @@ function interact() {
     }
     game.quizActive = null;
   }
+}
+
+
+function spawnCollectables(now = performance.now()) {
+  if (now - game.lastCollectableSpawnAt < COLLECTABLE_SPAWN_INTERVAL_MS) return;
+  if (game.collectables.length >= MAX_ACTIVE_COLLECTABLES) return;
+  game.lastCollectableSpawnAt = now;
+
+  const point = collectableSpawnPoints[Math.floor(game.rng() * collectableSpawnPoints.length)];
+  if (!point) return;
+  if (game.collectables.some((item) => distance(item, point) < 1.2)) return;
+  const template = COLLECTABLE_CATALOG[Math.floor(game.rng() * COLLECTABLE_CATALOG.length)];
+  if (!template) return;
+
+  game.collectables.push({
+    x: point.x + ((game.rng() - 0.5) * 0.5),
+    y: point.y + ((game.rng() - 0.5) * 0.5),
+    ...template,
+    expiresAt: now + COLLECTABLE_LIFETIME_MS,
+  });
+}
+
+function updateCollectables(now = performance.now()) {
+  spawnCollectables(now);
+  game.collectables = game.collectables.filter((item) => item.expiresAt > now);
 }
 
 function updateMission() {
@@ -3095,8 +3302,9 @@ function updateAI(dt) {
     const witFactor = (entity.traits?.wit || 50) / 100;
     if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < (0.001 + (game.lessonNoiseLevel * (0.003 + (iqFactor * 0.004))))) {
       if (game.rng() < (0.45 + (iqFactor * 0.28) + (witFactor * 0.12))) {
-        const responses = ['I know this! 🙋🙂', 'Maybe 42? 😅', 'Can I try, please? 🤓', 'I think it is this... 🤔📘'];
-        say(entity, responses[Math.floor(game.rng() * responses.length)]);
+        ensureDialogueSetup(entity);
+        const responseLine = contextualResponseFor(entity, assignedTeacherEntityForPeriod(current));
+        say(entity, responseLine);
         announce(`📚 ${entity.name} attempted the class question.`, { source: entity, range: 7.5 });
         entity.emotion = Math.min(100, entity.emotion + 1.2);
       } else {
@@ -3181,7 +3389,12 @@ function updateAI(dt) {
 
     // Teacher occasionally hushes the class, then students slowly get noisy again.
     if (inLesson && entity.role === 'teacher' && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.lessonNoiseLevel > 0.34 && game.rng() < 0.004) {
-      const quietCalls = ['🤨 Settle down, class. Quiet voices now.', '🧑‍🏫 Eyes front please, less chatter.', '🔕 Volume down, or everyone gets lines.'];
+      ensureDialogueSetup(entity);
+      const quietCalls = [
+        `🤨 ${entity.name}: posture check — settle down.`,
+        `🧑‍🏫 ${entity.name}: eyes front, voices low.`,
+        `🔕 ${entity.name}: volume down, or everyone gets lines.`,
+      ];
       say(entity, quietCalls[Math.floor(game.rng() * quietCalls.length)], { durationMs: 3400 });
       game.lessonQuietUntil = now + 4200;
       game.lessonNoiseLevel = 0.04;
@@ -3210,6 +3423,7 @@ function updateAI(dt) {
         entity.y = 88;
         entity.target = roomCenter('P.E. Field');
         announce('😎 Angelface sneaked out and later strolled back in unnoticed.');
+        logSchoolHistory('Angelface slipped out of school gates and still got away with it.', entity);
       }
     }
 
@@ -3245,9 +3459,18 @@ function updateAI(dt) {
     }
 
     // Break-time social bubbles make playground time feel alive.
-    if (current.mode === 'break' && isStudent && game.rng() < 0.014) {
-      const chat = ['😄 Nice pass!', '🤝 Meet by the canteen.', '😲 Did you see that punch?', "🍟 I'm starving.", '🏃 Race you to the field!', '😂 That lesson was chaos!', '🙌 Bell finally rang!'];
-      say(entity, chat[Math.floor(game.rng() * chat.length)]);
+    if (current.mode === 'break' && isStudent && game.rng() < 0.016) {
+      ensureDialogueSetup(entity);
+      const recent = randomHistorySnippet();
+      if (recent && game.rng() < 0.52) {
+        say(entity, `🗞 ${recent.text}`);
+      } else if (game.rng() < 0.45) {
+        const question = entity.dialogue.questions[Math.floor(game.rng() * entity.dialogue.questions.length)];
+        say(entity, question);
+      } else {
+        const chat = ['😄 Nice pass!', '🤝 Meet by the canteen.', '😲 Did you see that punch?', "🍟 I'm starving.", '🏃 Race you to the field!', '😂 That lesson was chaos!', '🙌 Bell finally rang!'];
+        say(entity, chat[Math.floor(game.rng() * chat.length)]);
+      }
       entity.emotion = Math.min(100, entity.emotion + 1.8);
     }
 
@@ -4048,6 +4271,15 @@ function drawWorld() {
     ctx.fillText(prop.icon, p.sx - (2 + scale), p.sy + 2);
   }
 
+  // Timed collectible loot rotates in/out around the school for trading routes.
+  for (const item of game.collectables) {
+    const p = worldToScreen(item.x, item.y);
+    fillDitherRect(p.sx - 6, p.sy - 6, 12, 12, item.tint || '#ffe066', '#ffffff66', 2);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.font = '8px monospace';
+    ctx.fillText(item.icon || '✦', p.sx - 3, p.sy + 3);
+  }
+
   // Shield pickups now use a richer gem-like sprite with highlight.
   for (const shield of shields) {
     if (shield.found) continue;
@@ -4076,6 +4308,8 @@ function drawEntities() {
     const knocked = entity.knockedUntil > now;
     const isPunching = entity.punchUntil > now;
     const isWriting = entity.writingUntil > now;
+    ensureDialogueSetup(entity);
+    if (!entity.posture) entity.posture = entity.dialogueProfile?.posture || 'upright';
     const px = Math.floor((entity.x - CAMERA.x) * sx);
     const py = Math.floor((entity.y - CAMERA.y) * sy);
 
@@ -4265,7 +4499,8 @@ function drawEntities() {
       ctx.fillStyle = PALETTE.chalk;
       ctx.font = '10px monospace';
       const moodGlyph = entity.mood === 'angry' ? '!' : entity.mood === 'furious' ? '*' : '.';
-      ctx.fillText(moodGlyph, px - 2, py - 26);
+      const postureGlyph = entity.posture === 'swagger' ? '↗' : entity.posture === 'slouched' ? '↘' : entity.posture === 'stiff' ? '|' : '·';
+      ctx.fillText(`${moodGlyph}${postureGlyph}`, px - 4, py - 26);
     }
 
     const nowBubble = performance.now();
@@ -4548,6 +4783,7 @@ function loop(now) {
     }
 
     updateAI(dt);
+    updateCollectables(now);
     updateWeatherFx(dt);
     updateBoardWriting(dt);
     updatePellets(dt);
@@ -4633,6 +4869,7 @@ window.__skoolDazeDebug = {
     playerRoom: entityRoom(player),
     playerSeated: player.isSeated,
     lines: game.lines,
+    collectables: game.collectables.map((c) => ({ name: c.name, x: c.x, y: c.y })),
     // Teacher status is exposed for automated movement/seating validation.
     assignedTeacher: assignedTeacherForRoom(schedule[game.periodIndex].room),
     teachers: game.entities
