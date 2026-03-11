@@ -196,9 +196,20 @@ const roomTeacherMap = {
   'Science Lab': 'Dr Beaker',
   Maths: 'Mr Flash',
   English: 'Ms Take',
+  Geography: 'Mr Creak',
   History: 'Mr Creak',
+  'Art Room': 'Ms Take',
   'Computer Room': 'Mr Wacker',
   'Headmaster Office': 'Mr Wacker',
+};
+
+// Every teacher also has a personal classroom so staff do not clump at one doorway.
+const teacherHomeRoomMap = {
+  'Mr Wacker': 'Headmaster Office',
+  'Mr Flash': 'Maths',
+  'Ms Take': 'English',
+  'Dr Beaker': 'Science Lab',
+  'Mr Creak': 'History',
 };
 
 const lessonTasks = [
@@ -667,7 +678,8 @@ function updateAutoPilot(dt) {
   // Auto mode should feel readable and controlled, not faster than manual play.
   const hallwayBoost = 1.05;
   const lateRunBoost = lateForClass ? 1.15 : 1;
-  const speed = ((player.personality.speed * game.energy) / 100) * hallwayBoost * lateRunBoost;
+  const autoSlowdown = 0.5; // Explicitly halve Eric's auto movement speed.
+  const speed = ((player.personality.speed * game.energy) / 100) * hallwayBoost * lateRunBoost * autoSlowdown;
 
   const dx = waypoint.x - player.x;
   const dy = waypoint.y - player.y;
@@ -1215,6 +1227,10 @@ function assignedTeacherForRoom(roomName) {
   return roomTeacherMap[roomName] || null;
 }
 
+function teacherHomeRoom(teacherName) {
+  return teacherHomeRoomMap[teacherName] || 'Staff Room';
+}
+
 function chooseTarget(entity, currentPeriod) {
   // High bladder urgency overrides normal timetable targets.
   if (entity.bladder >= 80) {
@@ -1329,9 +1345,10 @@ function updateAI(dt) {
         || nearestFreeSeatInRoom(current.room, entity)
         || roomCenter(current.room);
     } else if (inLesson && entity.role === 'teacher') {
-      // Keep one dedicated teacher driving each lesson while other staff clear corridors.
+      // Dedicated teacher handles the active lesson; others return to their own classrooms.
       const isAssignedTeacher = !assignedTeacherName || entity.name === assignedTeacherName;
-      entity.target = isAssignedTeacher ? teacherBoardSpot(current.room) : roomCenter('Staff Room');
+      const destinationRoom = isAssignedTeacher ? current.room : teacherHomeRoom(entity.name);
+      entity.target = teacherBoardSpot(destinationRoom);
     } else if (!entity.target || game.rng() < 0.01) {
       entity.target = chooseTarget(entity, current);
     }
@@ -1465,15 +1482,15 @@ function updateAI(dt) {
     entity.isSeated = seatedTarget && len < 0.55;
     entity.seatedRoom = entity.isSeated ? current.room : null;
 
-    const expectedRoom = entity.role === 'teacher' && assignedTeacherName && entity.name !== assignedTeacherName
-      ? 'Staff Room'
+    const expectedRoom = entity.role === 'teacher'
+      ? (assignedTeacherName && entity.name === assignedTeacherName ? current.room : teacherHomeRoom(entity.name))
       : current.room;
     const lateForClass = supervised && teacherPresent && entityRoom(entity) !== expectedRoom;
     const canRun = entity.energy > 20;
     entity.running = lateForClass && canRun;
-    const runBoost = entity.running ? 1.66 : 1;
-    // Small pace increase keeps class flow closer to Eric while preserving role differences.
-    const hallwayBoost = entity.role !== 'teacher' ? 2.92 : 2.72;
+    const runBoost = entity.running ? 1.78 : 1;
+    // Faster movement so students visibly travel between rooms at bell changes.
+    const hallwayBoost = entity.role !== 'teacher' ? 3.35 : 3.1;
     // Staff get an extra catch-up boost so lessons do not appear to start without a teacher.
     const staffCatchupBoost = entity.role === 'teacher' && lateForClass ? 1.75 : 1;
     const speed = entity.personality.speed * (entity.energy / 100) * hallwayBoost * runBoost * staffCatchupBoost;
@@ -2292,7 +2309,8 @@ function loop(now) {
     for (const entity of game.entities) {
       if (!hasArrivedForCurrentPeriod(entity)) continue;
       const moveMagnitude = Math.abs(entity.vx) + Math.abs(entity.vy);
-      entity.animPhase += dt * (0.006 + moveMagnitude * 0.01);
+      // Keep walk cycle readable: slightly slower leg animation while movement speed is higher.
+      entity.animPhase += dt * (0.004 + moveMagnitude * 0.0065);
     }
 
     updateAI(dt);
