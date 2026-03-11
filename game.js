@@ -66,6 +66,7 @@ const rooms = [
   { name: 'Staff Room', x: 74, y: 38, w: 24, h: 12, floor: 'middle', type: 'classroom' },
   { name: 'Music Room', x: 104, y: 38, w: 24, h: 12, floor: 'middle', type: 'classroom' },
   { name: 'Gym', x: 134, y: 38, w: 26, h: 12, floor: 'middle', type: 'hall' },
+  { name: 'Headmaster Office', x: 161, y: 38, w: 7, h: 12, floor: 'middle', type: 'classroom' },
 
   // Ground level circulation and outside area.
   { name: 'Ground Corridor', x: 4, y: 76, w: 160, h: 4, floor: 'ground', type: 'corridor' },
@@ -99,6 +100,7 @@ const blackboards = [
   { room: 'Art Room', x: 46, y: 83, text: '' },
   { room: 'History', x: 74, y: 83, text: '' },
   { room: 'Assembly Hall', x: 65, y: 97, text: '' },
+  { room: 'Headmaster Office', x: 164, y: 40, text: 'DISCIPLINE' },
 ];
 
 const shields = [
@@ -130,6 +132,20 @@ const trashCans = [
 const waterFountains = [
   { x: 109, y: 86, label: 'Field Fountain' },
   { x: 151, y: 86, label: 'Gate Fountain' },
+];
+
+// Themed props provide flavour in rooms and can be used as throwables.
+const classroomProps = [
+  { room: 'Art Room', x: 38, y: 87, icon: 'A', color: '#ffd6a5', kind: 'artwork', throwable: true, hiddenUntil: 0 },
+  { room: 'Art Room', x: 42, y: 89, icon: 'P', color: '#ff9f1c', kind: 'paint set', throwable: true, hiddenUntil: 0 },
+  { room: 'Art Room', x: 50, y: 90, icon: 'B', color: '#2ec4b6', kind: 'paint brush', throwable: true, hiddenUntil: 0 },
+  { room: 'Science Lab', x: 14, y: 10, icon: 'S', color: '#80ed99', kind: 'beaker', throwable: true, hiddenUntil: 0 },
+  { room: 'Maths', x: 15, y: 46, icon: 'M', color: '#9bf6ff', kind: 'set square', throwable: true, hiddenUntil: 0 },
+  { room: 'English', x: 50, y: 46, icon: 'E', color: '#b8c0ff', kind: 'book', throwable: true, hiddenUntil: 0 },
+  { room: 'History', x: 66, y: 91, icon: 'H', color: '#caffbf', kind: 'globe', throwable: true, hiddenUntil: 0 },
+  { room: 'Computer Room', x: 134, y: 10, icon: 'C', color: '#bde0fe', kind: 'keyboard', throwable: true, hiddenUntil: 0 },
+  { room: 'Music Room', x: 112, y: 46, icon: 'D', color: '#f4978e', kind: 'drum stick', throwable: true, hiddenUntil: 0 },
+  { room: 'Headmaster Office', x: 164, y: 46, icon: 'R', color: '#e5989b', kind: 'rule book', throwable: true, hiddenUntil: 0 },
 ];
 
 // Bell schedule approximating school-day flow.
@@ -202,6 +218,7 @@ const game = {
   registrationTaken: false,
   litter: [],
   playerCarryingTrash: false,
+  playerHeldItem: null,
 };
 
 let seatCounter = 0;
@@ -314,6 +331,26 @@ function nearestPoint(origin, points) {
   return best;
 }
 
+
+function sendPlayerToHeadmaster(reason, extraLines = 45) {
+  const office = roomByName('Headmaster Office');
+  if (extraLines > 0) addLines(extraLines, reason);
+  if (office) {
+    player.x = office.x + office.w / 2;
+    player.y = office.y + office.h - 2;
+  }
+  announce(`🏫 Mr Wacker marched Eric to the Headmaster Office for ${reason}.`);
+}
+
+function nearestThrowableProp(entity) {
+  return classroomProps.find((prop) => (
+    prop.throwable
+    && performance.now() >= prop.hiddenUntil
+    && entityRoom(entity) === prop.room
+    && distance(entity, prop) < 1.8
+  ));
+}
+
 function entityRoom(entity) {
   return rooms.find((r) => entity.x > r.x && entity.x < r.x + r.w && entity.y > r.y && entity.y < r.y + r.h)?.name || 'Corridor';
 }
@@ -399,6 +436,7 @@ function resetToSchoolMorning() {
   game.bladder = 0;
   game.litter = [];
   game.playerCarryingTrash = false;
+  game.playerHeldItem = null;
 
   const gate = roomByName('School Gates');
   for (const entity of game.entities) {
@@ -630,7 +668,19 @@ function handleInput(dt) {
   }
 
   if (game.keys.v) {
-    throwRubbish(player);
+    if (game.playerHeldItem) {
+      throwRoomItem(player, game.playerHeldItem);
+    } else if (game.playerCarryingTrash) {
+      throwRubbish(player);
+    } else {
+      const prop = nearestThrowableProp(player);
+      if (prop) {
+        game.playerHeldItem = prop;
+        announce(`🧰 Eric picked up a ${prop.kind}. Press V again to throw it.`);
+      } else {
+        announce('🧰 No throwable classroom item nearby.');
+      }
+    }
     game.keys.v = false;
   }
 }
@@ -692,6 +742,26 @@ function throwRubbish(attacker) {
     attacker.carryingTrash = false;
     attacker.assignedWaste = null;
     announce(`🧻 ${attacker.name} hurled rubbish across the yard.`);
+  }
+}
+
+
+function throwRoomItem(attacker, prop) {
+  prop.hiddenUntil = performance.now() + 20000;
+  game.pellets.push({
+    x: attacker.x,
+    y: attacker.y - 0.6,
+    vx: attacker.facing * 0.22,
+    vy: -0.03,
+    owner: attacker,
+    kind: 'item',
+    itemName: prop.kind,
+    itemColor: prop.color,
+  });
+
+  if (attacker === player) {
+    game.playerHeldItem = null;
+    sendPlayerToHeadmaster(`throwing a ${prop.kind}`);
   }
 }
 
@@ -805,6 +875,11 @@ function chooseTarget(entity, currentPeriod) {
     return roomCenter('Toilets');
   }
 
+  // Teachers occasionally step out to the toilet and then return to class.
+  if (entity.role === 'teacher' && entity.bladder >= 72) {
+    return roomCenter('Toilets');
+  }
+
   const p = entity.personality;
   const shouldAttend = game.rng() < p.diligence;
 
@@ -871,6 +946,24 @@ function updateAI(dt) {
 
     if (!entity.target || game.rng() < 0.01) {
       entity.target = chooseTarget(entity, current);
+    }
+
+    // General student misbehaviour: pupils sometimes act up during lessons.
+    if (entity.role !== 'teacher' && supervised && game.rng() < 0.0016) {
+      entity.mood = 'angry';
+      entity.target = roomCenter(game.rng() < 0.5 ? 'P.E. Field' : 'Ground Corridor');
+      announce(`😈 ${entity.name} started misbehaving in ${current.period}.`);
+    }
+
+    // Angelface can slip out through the gates unnoticed and re-enter later.
+    if (entity.name === 'Angelface' && entityRoom(entity) === 'School Gates' && game.rng() < 0.003) {
+      entity.target = { x: schoolExit.x + 2.6, y: 92 };
+      if (entity.x > schoolExit.x + 1.8) {
+        entity.x = 92;
+        entity.y = 88;
+        entity.target = roomCenter('P.E. Field');
+        announce('😎 Angelface sneaked out and later strolled back in unnoticed.');
+      }
     }
 
     // Teacher discipline: if they catch player in wrong room, assign lines.
@@ -987,6 +1080,13 @@ function updateAI(dt) {
         announce(`🧑‍🏫 ${entity.name}: "Quiet! Copy the board."`);
       }
     }
+
+    // Teachers near boards animate as writing during lessons.
+    const boardHere = blackboards.find((b) => b.room === entityRoom(entity));
+    if (entity.role === 'teacher' && boardHere && distance(entity, boardHere) < 2.2 && supervised) {
+      entity.writingUntil = performance.now() + 450;
+      entity.facing = boardHere.x >= entity.x ? 1 : -1;
+    }
   }
 }
 
@@ -1014,8 +1114,11 @@ function updatePellets(dt) {
             }
           }
         } else {
-          entity.hp -= 60;
+          entity.hp -= pellet.kind === 'item' ? 85 : 60;
           entity.mood = 'furious';
+          if (pellet.kind === 'item' && pellet.owner === player) {
+            sendPlayerToHeadmaster(`throwing ${pellet.itemName || 'classroom items'}`, 20);
+          }
           if (entity.hp <= 0) knockout(entity, pellet.owner);
         }
         pellet.dead = true;
@@ -1330,6 +1433,17 @@ function drawWorld() {
     }
   }
 
+  // Themed classroom props visually communicate each room's speciality.
+  for (const prop of classroomProps) {
+    if (performance.now() < prop.hiddenUntil) continue;
+    const p = worldToScreen(prop.x, prop.y);
+    ctx.fillStyle = prop.color;
+    ctx.fillRect(p.sx - 5, p.sy - 4, 10, 8);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.font = 'bold 7px monospace';
+    ctx.fillText(prop.icon, p.sx - 3, p.sy + 2);
+  }
+
   // Shield pickups now use a richer gem-like sprite with highlight.
   for (const shield of shields) {
     if (shield.found) continue;
@@ -1353,6 +1467,7 @@ function drawEntities() {
     const now = performance.now();
     const knocked = entity.knockedUntil > now;
     const isPunching = entity.punchUntil > now;
+    const isWriting = entity.writingUntil > now;
     const px = Math.floor((entity.x - CAMERA.x) * sx);
     const py = Math.floor((entity.y - CAMERA.y) * sy);
 
@@ -1402,8 +1517,9 @@ function drawEntities() {
       // Punching uses a short forward-thrust frame and a recoil frame.
       const punchElapsed = Math.max(0, 220 - (entity.punchUntil - now));
       const punchFrame = isPunching ? (punchElapsed > 110 ? 1 : 0) : -1;
-      const punchReach = punchFrame === 0 ? 5 : punchFrame === 1 ? 2 : 0;
+      const punchReach = punchFrame === 0 ? 5 : punchFrame === 1 ? 2 : isWriting ? 4 : 0;
       const punchLift = punchFrame === 0 ? -2 : 0;
+      const writingFrame = isWriting ? Math.floor((now / 90) % 4) : 0;
 
       // Head
       ctx.fillStyle = '#ffd7b5';
@@ -1419,8 +1535,13 @@ function drawEntities() {
       const strikeDir = entity.facing >= 0 ? 1 : -1;
       const rightArmX = strikeDir > 0 ? px + 7 + punchReach : px + 7;
       const leftArmX = strikeDir < 0 ? px - 10 - punchReach : px - 10;
-      ctx.fillRect(leftArmX, py - 17 + armKick + (strikeDir < 0 ? punchLift : 0), 3, 8);
-      ctx.fillRect(rightArmX, py - 17 - armKick + (strikeDir > 0 ? punchLift : 0), 3, 8);
+      ctx.fillRect(leftArmX, py - 17 + armKick + (strikeDir < 0 ? punchLift : 0) - (isWriting ? writingFrame : 0), 3, 8);
+      ctx.fillRect(rightArmX, py - 17 - armKick + (strikeDir > 0 ? punchLift : 0) + (isWriting ? writingFrame : 0), 3, 8);
+      if (isWriting && entity.role === 'teacher') {
+        ctx.fillStyle = '#f8f9fa';
+        const chalkX = strikeDir > 0 ? px + 14 : px - 14;
+        ctx.fillRect(chalkX, py - 15, 3, 2);
+      }
       // Legs
       ctx.fillStyle = '#1f2a44';
       ctx.fillRect(px - 6, py - 6 + legKick, 5, 8);
@@ -1461,7 +1582,7 @@ function drawEntities() {
   }
 
   for (const pellet of game.pellets) {
-    ctx.fillStyle = '#f8f9fa';
+    ctx.fillStyle = pellet.kind === 'item' ? (pellet.itemColor || '#f28482') : '#f8f9fa';
     ctx.fillRect((pellet.x - CAMERA.x - 0.08) * sx, (pellet.y - CAMERA.y - 0.08) * sy, 3, 3);
   }
 }
