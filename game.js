@@ -168,7 +168,7 @@ const blackboards = [
 
 // Blackboard card metrics are shared so text wrapping and board size stay in sync.
 const BOARD_DRAW = {
-  width: 74,
+  width: 88,
   height: 32,
   lineHeight: 8,
   maxLines: 4,
@@ -219,7 +219,6 @@ const showers = [
   { x: 146, y: 42, label: 'Gym Shower B' },
   { x: 152, y: 42, label: 'Gym Shower C' },
 ];
-
 
 const collectableSpawnPoints = [
   { x: 14, y: 8 }, { x: 28, y: 10 }, { x: 48, y: 9 }, { x: 74, y: 10 }, { x: 108, y: 10 },
@@ -288,6 +287,12 @@ const classroomProps = [
   { room: 'Medical Bay', x: 102, y: 118, icon: '🩺', color: '#ffb3c6', kind: 'stethoscope', throwable: false, hiddenUntil: 0, size: 2 },
   { room: 'Medical Bay', x: 110, y: 118, icon: '💊', color: '#cddafd', kind: 'medical cabinet', throwable: false, hiddenUntil: 0, size: 2 },
   { room: 'Medical Bay', x: 118, y: 120, icon: '🛏', color: '#d8f3dc', kind: 'recovery bed', throwable: false, hiddenUntil: 0, size: 3 },
+  // Extra prop variety keeps classrooms feeling less repetitive across periods.
+  { room: 'Computer Room', x: 130, y: 10, icon: '🖱', color: '#c7d2fe', kind: 'mouse', throwable: true, hiddenUntil: 0 },
+  { room: 'English', x: 63, y: 44, icon: '✒', color: '#e9c46a', kind: 'ink pen set', throwable: true, hiddenUntil: 0 },
+  { room: 'Geography', x: 24, y: 90, icon: '🗺', color: '#9bf6ff', kind: 'map roll', throwable: true, hiddenUntil: 0 },
+  { room: 'History', x: 70, y: 90, icon: '🏺', color: '#e6ccb2', kind: 'history artifact', throwable: false, hiddenUntil: 0 },
+  { room: 'Music Room', x: 121, y: 45, icon: '🎷', color: '#ffadad', kind: 'saxophone', throwable: true, hiddenUntil: 0 },
 ];
 
 
@@ -985,6 +990,8 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     posture: null,
     dialogueProfile: null,
     dialogue: null,
+    // Wrong-room excuse throttle keeps corridor chatter readable.
+    lastWrongRoomExcuseAt: 0,
     // Facial animation timers keep eyes/mouth lively without expensive sprite swaps.
     blinkUntil: 0,
     nextBlinkAt: performance.now() + 2000 + Math.random() * 7000,
@@ -3777,12 +3784,29 @@ function updateAI(dt) {
       }
     }
 
-    // Corridor and room transitions are now lively with lots of pupil chatter.
-    if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home') && isStudent && game.rng() < 0.02) {
+    // Students keep chatting while walking corridors/transition routes,
+    // and only really settle once inside their assigned classroom.
+    const expectedRoomNow = entity.role === 'teacher'
+      ? (assignedTeacherName && entity.name === assignedTeacherName ? current.room : teacherHomeRoom(entity.name))
+      : (inLesson ? (entity.lessonRoom || current.room) : current.room);
+    const inAssignedClassroom = inLesson && isStudent && entityRoom(entity) === expectedRoomNow;
+    const walkingToClass = inLesson && isStudent && !inAssignedClassroom;
+    if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home' || walkingToClass) && isStudent && game.rng() < 0.018) {
       ensureDialogueSetup(entity);
       const hallwayChatter = entity.dialogue.hallwayChatter || ['😆 Wait up, I am coming too!'];
       const line = pickFreshLine(entity, hallwayChatter, 'speech');
       say(entity, line || hallwayChatter[0], { durationMs: 3600 });
+    }
+
+    // If a student wanders into the wrong classroom during lesson, they make an excuse and leave.
+    const inAnyClassroom = roomAtPosition(entity)?.type === 'classroom';
+    if (walkingToClass && inAnyClassroom && entityRoom(entity) !== expectedRoomNow && (now - (entity.lastWrongRoomExcuseAt || 0)) > 7000) {
+      entity.lastWrongRoomExcuseAt = now;
+      const excuses = ['😅 Sorry, wrong class — I need to get to my lesson.', '🙋 Oops, wrong room. I am heading to the right one now.', '📚 Excuse me, I should be in another class.'];
+      say(entity, excuses[Math.floor(game.rng() * excuses.length)], { durationMs: 2600 });
+      entity.target = getSeatPosition(expectedRoomNow, entity.seatIndex)
+        || roomCenter(expectedRoomNow)
+        || entity.target;
     }
 
     // Teacher occasionally hushes the class, then students slowly get noisy again.
@@ -3971,7 +3995,9 @@ function updateAI(dt) {
 
     // Lightweight separation avoids visual clumping, but we skip it for seated pupils
     // so classroom rows stay stable and students don't drift toward the blackboard.
-    const canPhaseThroughCrowd = entity.phaseThroughUntil > performance.now();
+    // Doorway/stair choke points allow temporary stacking so flows do not deadlock.
+    const crowdChokePoint = isNearDoorway(entity, 2.4) || isNearDoorway(routedTarget, 2.4) || nearStair;
+    const canPhaseThroughCrowd = entity.phaseThroughUntil > performance.now() || crowdChokePoint;
     if (!(inLesson && studentInCurrentClass) && !canPhaseThroughCrowd) {
       for (const other of game.entities) {
         if (other === entity || other.knockedUntil > performance.now()) continue;
@@ -4520,14 +4546,15 @@ function drawWorld() {
     const door = roomDoors.find((d) => d.room === room.name);
     if (door) {
       const doorPos = worldToScreen(door.x, door.y);
-      fillDitherRect(doorPos.sx - 8, doorPos.sy - 7, 16, 14, '#835637', '#6a432a', 2);
+      // Taller door sprites read better at zoom and improve interaction affordance.
+      fillDitherRect(doorPos.sx - 8, doorPos.sy - 10, 16, 20, '#835637', '#6a432a', 2);
       ctx.fillStyle = '#d3a15b';
-      ctx.fillRect(doorPos.sx - 3, doorPos.sy - 5, 6, 10);
+      ctx.fillRect(doorPos.sx - 3, doorPos.sy - 8, 6, 14);
       ctx.fillStyle = '#2a1b12';
-      ctx.fillRect(doorPos.sx + 1, doorPos.sy, 2, 2);
+      ctx.fillRect(doorPos.sx + 1, doorPos.sy + 1, 2, 2);
       ctx.fillStyle = '#fff1d0';
       ctx.font = 'bold 7px monospace';
-      ctx.fillText('E', doorPos.sx - 2, doorPos.sy + 16);
+      ctx.fillText('E', doorPos.sx - 2, doorPos.sy + 18);
     }
 
     ctx.strokeStyle = PALETTE.line;
@@ -4555,12 +4582,17 @@ function drawWorld() {
     const points = [stair.fromY, stair.toY];
     for (const y of points) {
       const pos = worldToScreen(stair.x, y);
+      const towardArrow = y === stair.fromY
+        ? (stair.toY > stair.fromY ? '↓' : '↑')
+        : (stair.fromY > stair.toY ? '↓' : '↑');
       fillDitherRect(pos.sx - 14, pos.sy - 10, 28, 20, '#f4d06f', '#ffbf3c', 4);
       ctx.fillStyle = '#8f5a00';
       for (let i = 0; i < 4; i += 1) ctx.fillRect(pos.sx - 12 + i * 6, pos.sy - 8, 2, 16);
       ctx.fillStyle = PALETTE.ink;
       ctx.font = 'bold 8px monospace';
       ctx.fillText('STAIR', pos.sx - 13, pos.sy - 12);
+      ctx.font = 'bold 9px monospace';
+      ctx.fillText(towardArrow, pos.sx - 3, pos.sy - 12);
       ctx.font = 'bold 7px monospace';
       ctx.fillText('E', pos.sx - 2, pos.sy + 15);
     }
