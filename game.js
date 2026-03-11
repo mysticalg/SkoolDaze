@@ -149,8 +149,12 @@ const classroomProps = [
 ];
 
 // Bell schedule approximating school-day flow.
+// Arrival is intentionally short in real-time so pupils quickly move from the
+// gate lineup into tutorial without getting stuck outside.
+const ARRIVAL_REAL_SECONDS = 10;
+const ARRIVAL_GAME_MINUTES = (ARRIVAL_REAL_SECONDS * 0.001) * 60;
 const schedule = [
-  { period: 'Arrival', room: 'School Gates', mins: 10, mode: 'transition' },
+  { period: 'Arrival', room: 'School Gates', mins: ARRIVAL_GAME_MINUTES, mode: 'transition' },
   { period: 'Tutorial', room: 'Science Lab', mins: 30, mode: 'lesson' },
   { period: 'Lesson 1', room: 'Maths', mins: 60, mode: 'lesson' },
   { period: 'Lesson 2', room: 'English', mins: 60, mode: 'lesson' },
@@ -406,6 +410,9 @@ function chooseAutoDestination() {
   // Toilets become top priority when bladder is urgent.
   if (game.bladder >= 75) return roomCenter('Toilets');
   const current = schedule[game.periodIndex];
+  // Keep Eric in the same gate lineup pattern as everyone else on arrival,
+  // instead of dragging him to the middle of the School Gates room.
+  if (current.period === 'Arrival') return gateQueuePosition(player);
   if (current.mode === 'home') return roomCenter('School Gates');
   return roomCenter(current.room);
 }
