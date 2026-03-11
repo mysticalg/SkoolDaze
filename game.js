@@ -82,12 +82,13 @@ const rooms = [
   // Ground level circulation and outside area.
   { name: 'Ground Corridor', x: 4, y: 76, w: 160, h: 4, floor: 'ground', type: 'corridor' },
   { name: 'Reception', x: 8, y: 66, w: 24, h: 10, floor: 'ground', type: 'hall' },
+  // Reception-adjacent support spaces now sit in one contiguous block for easier wayfinding.
+  { name: 'Toilets', x: 34, y: 66, w: 20, h: 10, floor: 'ground', type: 'hall' },
+  { name: 'Janitor Room', x: 56, y: 66, w: 12, h: 10, floor: 'ground', type: 'hall' },
+  { name: 'Assembly Hall', x: 70, y: 66, w: 40, h: 10, floor: 'ground', type: 'hall' },
   { name: 'Geography', x: 8, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
   { name: 'Art Room', x: 34, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
   { name: 'History', x: 60, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
-  { name: 'Toilets', x: 8, y: 94, w: 20, h: 14, floor: 'ground', type: 'hall' },
-  { name: 'Janitor Room', x: 30, y: 94, w: 12, h: 14, floor: 'ground', type: 'hall' },
-  { name: 'Assembly Hall', x: 44, y: 94, w: 40, h: 14, floor: 'ground', type: 'hall' },
   // Kitchen sits beside the lunch/assembly hall so lunchtime staff can prep food nearby.
   { name: 'Kitchen', x: 84, y: 94, w: 6, h: 14, floor: 'ground', type: 'hall' },
   { name: 'P.E. Field', x: 90, y: 80, w: 70, h: 28, floor: 'ground', type: 'outdoor' },
@@ -164,7 +165,7 @@ const blackboards = [
   { room: 'Geography', x: 18, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
   { room: 'Art Room', x: 46, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
   { room: 'History', x: 74, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
-  { room: 'Assembly Hall', x: 65, y: 97, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
+  { room: 'Assembly Hall', x: 91, y: 69, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
   { room: 'Headmaster Office', x: 164, y: 40, text: 'DISCIPLINE', revealChars: 10, revealSpeed: 36, lastSfxAt: 0 },
 ];
 
@@ -199,7 +200,7 @@ const trashCans = [
   { x: 62, y: 52, label: 'Middle Bin' },
   { x: 126, y: 17, label: 'Upper Bin' },
   { x: 98, y: 90, label: 'Field Bin' },
-  { x: 45, y: 97, label: 'Hall Bin' },
+  { x: 82, y: 74, label: 'Hall Bin' },
 ];
 
 // Outdoor drinking fountains let pupils hydrate without buying from vending machines.
@@ -210,9 +211,9 @@ const waterFountains = [
 
 // Urinals are separate, explicit interaction points in toilets.
 const urinals = [
-  { x: 12, y: 98, label: 'West Urinal' },
-  { x: 16, y: 98, label: 'Middle Urinal' },
-  { x: 20, y: 98, label: 'East Urinal' },
+  { x: 39, y: 69, label: 'West Urinal' },
+  { x: 43, y: 69, label: 'Middle Urinal' },
+  { x: 47, y: 69, label: 'East Urinal' },
 ];
 
 // Gym showers fully restore hygiene and provide a social confidence/charisma boost.
