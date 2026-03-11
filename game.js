@@ -192,7 +192,8 @@ const personalities = {
   hero: { speed: 1.2, aggression: 0.2, diligence: 0.75, focus: 0.7 },
   weird: { speed: 1.18, aggression: 0.35, diligence: 0.45, focus: 0.4 },
   teacher: { speed: 1.22, aggression: 0.55, diligence: 1.0, focus: 1.0 },
-  player: { speed: 1.05, aggression: 0, diligence: 0, focus: 0 },
+  // Eric now matches student speed tuning so he no longer outruns classmates unfairly.
+  player: { speed: 1.19, aggression: 0, diligence: 0, focus: 0 },
 };
 
 const game = {
@@ -212,6 +213,8 @@ const game = {
   announcements: [],
   rng: Math.random,
   quizActive: null,
+  // Prevents lessons stalling forever if no teacher reaches the board.
+  teacherWaitMins: 0,
   // Tracks one direct player question per lesson and NPC follow-up answers.
   classQuestionState: {
     key: '',
@@ -557,8 +560,19 @@ function resetToSchoolMorning() {
 }
 
 function updateAutoPilot(dt) {
-  const speed = (player.personality.speed * game.energy) / 100;
-  const destination = chooseAutoDestination();
+  const current = schedule[game.periodIndex];
+  const classroomRoom = roomByName(current.room);
+  const shouldSeatInLesson = current.mode === 'lesson' && classroomRoom?.type === 'classroom';
+
+  // Auto mode unseats Eric whenever he must travel to a new duty.
+  if (player.isSeated && !shouldSeatInLesson) {
+    player.isSeated = false;
+    player.seatedRoom = null;
+  }
+
+  const destination = shouldSeatInLesson
+    ? (getSeatPosition(current.room, player.seatIndex) || chooseAutoDestination())
+    : chooseAutoDestination();
   const destinationFloor = roomByName(entityRoom({ x: destination.x, y: destination.y }))?.floor || 'ground';
   const currentFloor = entityFloor(player);
 
@@ -569,15 +583,34 @@ function updateAutoPilot(dt) {
     waypoint = nearestStairTarget(currentFloor, nextFloor) || destination;
   }
 
+  const canRun = game.energy > 20 && entityRoom(player) !== current.room;
+  const hallwayBoost = 2.28;
+  const runBoost = canRun ? 1.62 : 1;
+  const speed = player.personality.speed * (game.energy / 100) * hallwayBoost * runBoost;
+
   const dx = waypoint.x - player.x;
   const dy = waypoint.y - player.y;
   const len = Math.hypot(dx, dy) || 1;
+
+  if (shouldSeatInLesson && entityRoom(player) === current.room) {
+    // In auto mode Eric commits to his desk as soon as he reaches the classroom.
+    player.x = destination.x;
+    player.y = destination.y;
+    player.vx = 0;
+    player.vy = 0;
+    player.isSeated = true;
+    player.seatedRoom = current.room;
+    return;
+  }
+
+  player.isSeated = false;
+  player.seatedRoom = null;
   player.vx = (dx / len) * speed;
   player.vy = (dy / len) * speed;
 
   // Auto mode uses stairs when Eric reaches them and occasionally reads boards.
   if (len < 1.1) interact();
-  spendEnergy(0.35 * (dt / 1000));
+  spendEnergy((canRun ? 1.45 : 0.45) * (dt / 1000));
 }
 
 function updateBladder(dt) {
@@ -669,6 +702,7 @@ function setPeriod(index) {
   game.boardInput.active = false;
   game.boardInput.armed = false;
   game.quizActive = null;
+  game.teacherWaitMins = 0;
 
   // Board content changes each bell to emulate lesson instructions.
   blackboards.forEach((board) => {
@@ -703,7 +737,9 @@ function handleInput(dt) {
   // Slower default walk pace; hold Shift to run and spend extra stamina.
   const baseSpeed = (player.personality.speed * game.energy) / 100;
   const running = Boolean(game.keys.Shift || game.keys.shift || game.keys.r);
-  const speed = baseSpeed * (running ? 1.65 : 0.76);
+  const hallwayBoost = 2.28;
+  const runBoost = running ? 1.62 : 1;
+  const speed = baseSpeed * hallwayBoost * runBoost;
   player.vx = 0;
   player.vy = 0;
 
@@ -1109,6 +1145,7 @@ function submitBoardAnswer() {
   game.boardInput.expectedAnswer = '';
   game.boardInput.typed = '';
   game.quizActive = null;
+  game.teacherWaitMins = 0;
 }
 
 function cancelBoardInput() {
@@ -1122,6 +1159,7 @@ function cancelBoardInput() {
   game.boardInput.expectedAnswer = '';
   game.boardInput.typed = '';
   game.quizActive = null;
+  game.teacherWaitMins = 0;
 }
 
 function updateMission() {
@@ -1355,6 +1393,11 @@ function updateAI(dt) {
     const seatedTarget = inLesson && entity.role !== 'teacher' && entityRoom(entity) === current.room;
     entity.isSeated = seatedTarget && len < 0.55;
     entity.seatedRoom = entity.isSeated ? current.room : null;
+    if (entity.isSeated) {
+      // Snap exactly to desk coordinates to avoid visual hovering near chairs.
+      entity.x = entity.target.x;
+      entity.y = entity.target.y;
+    }
 
     const lateForClass = supervised && teacherPresent && entityRoom(entity) !== current.room;
     const canRun = entity.energy > 20;
@@ -1445,11 +1488,23 @@ function updateSchedule(dt) {
   const teacherPresent = isTeacherPresentForPeriod(current);
   const periodWaiting = (current.mode === 'lesson' || current.period === 'Tutorial') && !teacherPresent;
 
-  // Lessons now wait for the teacher before period time can advance.
-  if (!periodWaiting) {
+  // Lessons wait briefly for a teacher, then continue to avoid hard-locking the day.
+  if (periodWaiting) {
+    game.teacherWaitMins += deltaMins;
+  } else {
+    game.teacherWaitMins = 0;
+  }
+
+  const waitTimeoutMins = 10;
+  const allowProgressWithoutTeacher = game.teacherWaitMins >= waitTimeoutMins;
+  if (!periodWaiting || allowProgressWithoutTeacher) {
     game.periodElapsed += deltaMins;
   }
   game.timeMinutes += deltaMins;
+
+  if (periodWaiting && allowProgressWithoutTeacher && game.rng() < 0.02) {
+    announce('⏱️ Lesson resumed automatically after an extended teacher delay.');
+  }
 
   if (current.period === 'Tutorial' && !game.registrationTaken && game.periodElapsed > 8) {
     game.registrationTaken = true;
@@ -1484,7 +1539,8 @@ function updateSchedule(dt) {
   }
 
   clockEl.textContent = `🕘 Time: ${formatTime(game.timeMinutes)}`;
-  periodEl.textContent = `🔔 Period: ${current.period}${periodWaiting ? ' (waiting for teacher)' : ''}`;
+  const waitingSuffix = periodWaiting && !allowProgressWithoutTeacher ? ' (waiting for teacher)' : '';
+  periodEl.textContent = `🔔 Period: ${current.period}${waitingSuffix}`;
   roomTargetEl.textContent = `📍 Target: ${current.room}`;
   updateFloorStatus();
 }
@@ -1838,7 +1894,7 @@ function drawEntities() {
       const walkBobOffsets = [-1.5, -0.5, 0.75, -0.5, -1.5];
       const legSwingOffsets = [-3, -1.5, 0, 1.5, 3];
       const armSwingOffsets = [3, 1.5, 0, -1.5, -3];
-      const bob = seated ? 1.6 : walkBobOffsets[walkFrame];
+      const bob = seated ? 3.1 : walkBobOffsets[walkFrame];
       const legKick = seated ? 0 : legSwingOffsets[walkFrame];
       const armKick = seated ? 0.6 : armSwingOffsets[walkFrame];
 
@@ -2108,8 +2164,8 @@ function loop(now) {
       updateTodo();
     }
 
-    player.x += player.vx * dt * 0.011;
-    player.y += player.vy * dt * 0.011;
+    player.x += player.vx * (dt / 1000);
+    player.y += player.vy * (dt / 1000);
     constrain(player);
 
     // Update animation time for all entities so movement reads like retro sprites.
