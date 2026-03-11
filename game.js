@@ -362,6 +362,122 @@ const personalities = {
   player: { speed: 1.19, aggression: 0, diligence: 0, focus: 0 },
 };
 
+
+// Lightweight in-memory backend database for trait balancing and per-level tuning.
+const npcTraitBackendDb = window.TRAIT_BACKEND_DB || {
+  version: 'v1.0',
+  traitKeys: [
+    'aggression', 'funny', 'friendly', 'mood', 'wit', 'intelligence', 'speed', 'skill', 'luck',
+    'bladderSize', 'boneStrength', 'immuneSystem', 'intelect', 'wisdom', 'honor', 'strength',
+    'sadism', 'masochism', 'discipline',
+  ],
+  weightClasses: ['overweight', 'slim', 'skinny', 'normal', 'chubby', 'obese'],
+  roleBias: {
+    bully: { aggression: 24, strength: 14, sadism: 18, friendly: -12, honor: -14, discipline: -16 },
+    swot: { intelligence: 20, wisdom: 15, funny: -4, aggression: -18, discipline: 20, honor: 12 },
+    hero: { friendly: 15, honor: 14, wit: 8, aggression: -4, strength: 8 },
+    weird: { funny: 16, luck: 10, mood: 12, discipline: -12, wit: 10 },
+    teacher: { intelligence: 22, wisdom: 20, discipline: 26, honor: 14, aggression: 8, skill: 10 },
+    janitor: { wisdom: 10, friendly: 8, discipline: 16, aggression: -8, bladderSize: 6 },
+    player: { funny: 10, wit: 8, luck: 10, discipline: -8 },
+  },
+  levels: Array.from({ length: 10 }, (_, index) => {
+    const level = index + 1;
+    const base = 28 + (level * 6);
+    return {
+      level,
+      aggression: base,
+      funny: base + 2,
+      friendly: base + 3,
+      mood: base + 1,
+      wit: base + 2,
+      intelligence: base + 4,
+      speed: base + 3,
+      skill: base + 2,
+      luck: base,
+      bladderSize: base + 1,
+      boneStrength: base + 2,
+      immuneSystem: base + 3,
+      intelect: base + 4,
+      wisdom: base + 4,
+      honor: base + 2,
+      strength: base + 2,
+      sadism: base - 4,
+      masochism: base - 5,
+      discipline: base + 2,
+    };
+  }),
+};
+
+function clampScore(value, min = 0, max = 100) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function traitLevelForEntity(role) {
+  if (role === 'teacher') return 8;
+  if (role === 'janitor') return 6;
+  if (role === 'player') return 5;
+  return 3 + Math.floor(Math.random() * 4);
+}
+
+function buildTraitProfile(role, overrides = {}) {
+  const level = clampScore(traitLevelForEntity(role), 1, 10);
+  const template = npcTraitBackendDb.levels[level - 1];
+  const bias = npcTraitBackendDb.roleBias[role] || {};
+  const profile = { level };
+  for (const key of npcTraitBackendDb.traitKeys) {
+    const jitter = (Math.random() * 22) - 11;
+    profile[key] = clampScore((template[key] || 50) + (bias[key] || 0) + jitter);
+  }
+
+  const bodyRoll = (profile.strength + profile.bladderSize + profile.boneStrength - profile.speed) / 4;
+  profile.weight = overrides.weight || (bodyRoll > 70
+    ? (profile.speed < 40 ? 'obese' : 'overweight')
+    : bodyRoll > 58
+      ? 'chubby'
+      : bodyRoll < 40
+        ? (profile.strength < 36 ? 'skinny' : 'slim')
+        : 'normal');
+
+  for (const [key, value] of Object.entries(overrides)) {
+    if (key in profile && typeof value === 'number') profile[key] = clampScore(value);
+    if (key === 'weight' && typeof value === 'string') profile.weight = value;
+  }
+
+  return profile;
+}
+
+function relationshipDeltaForEricInteraction(entity, interactionType) {
+  const t = entity?.traits;
+  if (!t) return 0;
+  if (interactionType === 'punch') {
+    if (t.masochism >= 66) return 6;
+    return -(8 + (t.sadism * 0.05));
+  }
+  if (interactionType === 'insult') {
+    if (t.masochism >= 62) return 4;
+    return -(6 + (t.sadism * 0.04));
+  }
+  if (interactionType === 'help') return 5 + (t.friendly * 0.03);
+  return 0;
+}
+
+function adjustEricRelationship(entity, delta, reason = 'interaction') {
+  if (!entity || entity.role === 'player') return;
+  const current = entity.relationships?.Eric ?? 0;
+  const next = clampScore(current + delta, -100, 100);
+  entity.relationships = entity.relationships || {};
+  entity.relationships.Eric = Math.round(next);
+  entity.ericRelationshipType = relationshipLabel(entity.relationships.Eric);
+  entity.lastEricRelationReason = reason;
+}
+
+function relationshipLabel(score) {
+  if (score >= 45) return 'friend';
+  if (score <= -45) return 'enemy';
+  return 'neutral';
+}
+
 const JANITOR_IDLE_ROOM = 'Janitor Room';
 const LITTER_CLEANUP_DELAY_MS = 20000;
 const TOILET_DIRT_PER_USE = 4;
@@ -431,6 +547,16 @@ let seatCounter = 0;
 const roomSeatCache = new Map();
 
 function mkEntity(name, role, x, y, color, traits = {}) {
+  const traitProfile = buildTraitProfile(role, traits.traitOverrides || {});
+  const basePersonality = personalities[role] || personalities.hero;
+  const personality = {
+    ...basePersonality,
+    speed: clampScore(basePersonality.speed * (0.78 + (traitProfile.speed / 140)), 0.85, 2.4),
+    aggression: clampScore(basePersonality.aggression + ((traitProfile.aggression - 50) / 100), 0, 1.2),
+    diligence: clampScore(basePersonality.diligence + ((traitProfile.discipline - 50) / 110), 0, 1.25),
+    focus: clampScore(basePersonality.focus + ((traitProfile.intelligence - 50) / 120), 0, 1.25),
+  };
+
   return {
     name,
     role,
@@ -441,11 +567,13 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     vy: 0,
     hp: 100,
     knockedUntil: 0,
-    personality: personalities[role] || personalities.hero,
+    personality,
     facing: 1,
     target: null,
     attention: 100,
     profile: traits,
+    traits: traitProfile,
+    relationships: role === 'player' ? {} : { Eric: Math.round(((traitProfile.friendly + traitProfile.honor) / 8) - (traitProfile.aggression / 7) + ((Math.random() * 16) - 8)) },
     mood: 'calm',
     emotion: 55,
     pride: 10,
@@ -501,48 +629,98 @@ game.entities.push(
   player,
   mkEntity('Mr Wacker', 'teacher', 22, 42, '#8eb2ff', {
     title: 'Headmaster', strict: 0.95, attire: 'headmaster', beard: true,
+    traitOverrides: { wit: 82, wisdom: 90, discipline: 92, intelligence: 88, honor: 86, aggression: 66, weight: 'normal' },
   }),
   mkEntity('Mr Flash', 'teacher', 70, 40, '#f4d35e', {
     title: 'Maths Teacher', strict: 0.75, attire: 'flash', chin: 'big',
+    traitOverrides: { intelligence: 84, skill: 81, wit: 70, discipline: 78 },
   }),
   mkEntity('Ms Take', 'teacher', 75, 42, '#82a4ff', {
     title: 'English Teacher', strict: 0.65, attire: 'plainBlueDress',
+    traitOverrides: { wisdom: 82, friendly: 70, wit: 79, discipline: 72 },
   }),
   mkEntity('Dr Beaker', 'teacher', 88, 41, '#e9ecef', {
     title: 'Science Teacher', strict: 0.8, attire: 'scienceCoat', bald: true, build: 'fat',
+    traitOverrides: { intelligence: 92, skill: 86, discipline: 84, funny: 45, weight: 'chubby' },
   }),
   mkEntity('Mr Creak', 'teacher', 56, 84, '#7e9aff', {
     title: 'History Teacher', strict: 0.85, attire: 'oldBrown', cane: true,
+    traitOverrides: { wisdom: 88, wit: 72, honor: 90, discipline: 86 },
   }),
   mkEntity('Ms Mirth', 'teacher', 52, 8, '#ff9ad5', {
     title: 'Drama Teacher', strict: 0.55, attire: 'plainBlueDress', quotes: ['Project your chaos!'],
+    traitOverrides: { funny: 90, friendly: 78, wit: 84, mood: 75 },
   }),
   mkEntity('Prof Volt', 'teacher', 78, 8, '#8de7ff', {
     title: 'Physics Teacher', strict: 0.78, attire: 'scienceCoat', quotes: ['Respect the equations!'],
+    traitOverrides: { intelligence: 90, skill: 85, discipline: 82, honor: 74 },
   }),
   mkEntity('Ms Fizz', 'teacher', 108, 8, '#ffc48e', {
     title: 'Chemistry Prep Lead', strict: 0.74, attire: 'scienceCoat', quotes: ['No explosions before break.'],
+    traitOverrides: { intelligence: 86, skill: 84, mood: 72, discipline: 76 },
   }),
   mkEntity('Mr Boom', 'teacher', 112, 42, '#f7a6ff', {
     title: 'Music Teacher', strict: 0.6, attire: 'oldBrown', quotes: ['In tune, in line, in silence!'],
+    traitOverrides: { funny: 75, friendly: 72, mood: 82, wit: 68 },
   }),
   mkEntity('Mr Mop', 'janitor', 36, 100, '#8ecae6', {
     title: 'Janitor', attire: 'janitorOveralls', moustache: true, hair: 'spiky',
+    traitOverrides: { friendly: 71, wisdom: 74, honor: 76, discipline: 83 },
   }),
-  mkEntity('Angelface', 'hero', 102, 88, '#ffd58e', { title: 'Handsome kid' }),
-  mkEntity('Einstein', 'swot', 108, 87, '#8effd3', { title: 'Teacher pet', tattles: true }),
-  mkEntity('Bully Boy', 'bully', 114, 89, '#ff5f88', { title: 'Playground terror' }),
-  mkEntity('Boy Wander', 'weird', 121, 88, '#c58eff', { title: 'Chaotic drifter' }),
-  mkEntity('Slugger', 'bully', 128, 89, '#ff7ca0', { title: 'Fighter' }),
-  mkEntity('Precious', 'hero', 136, 88, '#ffe6ae', { title: 'Narcissist' }),
-  mkEntity('Nerdy Ned', 'swot', 144, 89, '#78ffcf', { title: 'Homework machine', tattles: true }),
-  mkEntity('Drama Llama', 'weird', 116, 87, '#e5a0ff', { title: 'Monologues in corridors' }),
-  mkEntity('Sir Tripsalot', 'hero', 124, 87, '#f7d794', { title: 'Sports captain, zero balance' }),
-  mkEntity('Detention Dave', 'bully', 132, 87, '#ff7096', { title: 'Collects detentions like stickers' }),
-  mkEntity('Quizzy Lizzy', 'swot', 140, 87, '#72ffc8', { title: 'Raises hand before questions exist', tattles: true }),
-  mkEntity('Whisper Knight', 'hero', 148, 87, '#ffe7a8', { title: 'Secret helper of lost pupils' }),
-  mkEntity('Loopy Lou', 'weird', 152, 89, '#c39bff', { title: 'Invents conspiracy timetables' }),
 );
+
+const studentRoster = [
+  ['Angelface', 'hero', '#ffd58e', { title: 'Handsome kid', traitOverrides: { friendly: 66, funny: 58, luck: 62 } }],
+  ['Einstein', 'swot', '#8effd3', { title: 'Teacher pet', tattles: true, traitOverrides: { intelligence: 94, wisdom: 88, discipline: 86 } }],
+  ['Bully Boy', 'bully', '#ff5f88', { title: 'Playground terror', traitOverrides: { aggression: 86, sadism: 80, strength: 74 } }],
+  ['Boy Wander', 'weird', '#c58eff', { title: 'Chaotic drifter', traitOverrides: { funny: 78, mood: 80, luck: 64 } }],
+  ['Slugger', 'bully', '#ff7ca0', { title: 'Fighter', traitOverrides: { aggression: 84, strength: 82, honor: 28 } }],
+  ['Precious', 'hero', '#ffe6ae', { title: 'Narcissist', traitOverrides: { wit: 74, friendly: 52, honor: 38 } }],
+  ['Nerdy Ned', 'swot', '#78ffcf', { title: 'Homework machine', tattles: true, traitOverrides: { intelligence: 88, discipline: 82 } }],
+  ['Drama Llama', 'weird', '#e5a0ff', { title: 'Monologues in corridors', traitOverrides: { funny: 86, mood: 82, wit: 79 } }],
+  ['Sir Tripsalot', 'hero', '#f7d794', { title: 'Sports captain, zero balance', traitOverrides: { skill: 74, luck: 30, strength: 64 } }],
+  ['Detention Dave', 'bully', '#ff7096', { title: 'Collects detentions like stickers', traitOverrides: { aggression: 79, honor: 24, discipline: 18 } }],
+  ['Quizzy Lizzy', 'swot', '#72ffc8', { title: 'Raises hand before questions exist', tattles: true, traitOverrides: { wit: 80, intelligence: 90, friendly: 54 } }],
+  ['Whisper Knight', 'hero', '#ffe7a8', { title: 'Secret helper of lost pupils', traitOverrides: { friendly: 86, honor: 82, aggression: 22 } }],
+  ['Loopy Lou', 'weird', '#c39bff', { title: 'Invents conspiracy timetables', traitOverrides: { funny: 89, mood: 77, wisdom: 40 } }],
+  ['Turbo Toby', 'hero', '#ffce7a', { title: 'Runs everywhere, always late', traitOverrides: { speed: 88, discipline: 44, luck: 60 } }],
+  ['Captain Cackle', 'weird', '#d99cff', { title: 'Laughs at own jokes', traitOverrides: { funny: 94, wit: 71, friendly: 61 } }],
+  ['Mischief Mina', 'bully', '#ff7b7b', { title: 'Prank architect', traitOverrides: { aggression: 72, sadism: 69, wit: 74 } }],
+  ['Professor Pigeon', 'swot', '#8cf2d8', { title: 'Talks in footnotes', traitOverrides: { intelligence: 91, wisdom: 79, funny: 42 } }],
+  ['Snack Attack Sam', 'hero', '#ffe08f', { title: 'Always near canteen', traitOverrides: { friendly: 68, bladderSize: 78, speed: 52, weight: 'chubby' } }],
+  ['Ninja Noodle', 'weird', '#c4a2ff', { title: 'Silent until bell rings', traitOverrides: { skill: 81, mood: 62, funny: 58 } }],
+  ['Hexa Harriet', 'swot', '#85ffd5', { title: 'Math puzzle machine', tattles: true, traitOverrides: { intelligence: 92, wit: 86, discipline: 88 } }],
+  ['Brick Bruno', 'bully', '#ff6d8e', { title: 'Thinks with fists', traitOverrides: { strength: 88, aggression: 82, wisdom: 33, weight: 'overweight' } }],
+  ['Sunny Saffron', 'hero', '#ffeab5', { title: 'Makes peace in queues', traitOverrides: { friendly: 90, honor: 86, wit: 58 } }],
+  ['Glitch Greta', 'weird', '#d6a7ff', { title: 'Computer-room conspiracy theorist', traitOverrides: { funny: 76, intelect: 80, wisdom: 45 } }],
+  ['Rumble Ruby', 'bully', '#ff668c', { title: 'Laughs in detentions', traitOverrides: { aggression: 78, sadism: 72, masochism: 20 } }],
+  ['Doc Doodles', 'swot', '#7dffd1', { title: 'Writes notes on everything', traitOverrides: { intelligence: 86, skill: 80, discipline: 76 } }],
+  ['Biscuit Baz', 'hero', '#ffd48c', { title: 'Trades snacks for favours', traitOverrides: { friendly: 74, luck: 73, honor: 52 } }],
+  ['Chaos Chloe', 'weird', '#bb95ff', { title: 'Starts songs mid-lesson', traitOverrides: { funny: 88, discipline: 28, mood: 84 } }],
+  ['Mellow Mel', 'hero', '#ffe3a4', { title: 'Calm in every crisis', traitOverrides: { mood: 84, wisdom: 75, aggression: 18 } }],
+  ['Spike Sprite', 'bully', '#ff5a8a', { title: 'Tiny but terrifying', traitOverrides: { aggression: 83, speed: 81, strength: 58 } }],
+  ['Oracle Olive', 'swot', '#89f7cf', { title: 'Predicts quiz questions', traitOverrides: { intelligence: 90, wisdom: 83, funny: 52 } }],
+  ['Velvet Vex', 'weird', '#c7a1ff', { title: 'Poet of odd insults', traitOverrides: { wit: 87, funny: 80, friendly: 36 } }],
+  ['Jester Jet', 'hero', '#ffe59d', { title: 'Class clown with a heart', traitOverrides: { funny: 91, friendly: 79, honor: 64 } }],
+  ['Milo Maso', 'weird', '#c59bff', { title: 'Oddly likes roughhousing', traitOverrides: { masochism: 88, sadism: 26, funny: 71 } }],
+  ['Sarda Sadie', 'bully', '#ff618f', { title: 'Enjoys mean jokes', traitOverrides: { sadism: 90, aggression: 75, honor: 22 } }],
+];
+
+studentRoster.forEach(([name, role, color, profile], idx) => {
+  const column = idx % 10;
+  const row = Math.floor(idx / 10);
+  game.entities.push(mkEntity(name, role, 98 + (column * 5.2), 86.5 + (row * 2.2), color, profile));
+});
+
+function initialiseNpcRelationships() {
+  for (const entity of game.entities) {
+    if (entity.role === 'player') continue;
+    const score = entity.relationships?.Eric ?? 0;
+    entity.ericRelationshipType = relationshipLabel(score);
+  }
+}
+
+initialiseNpcRelationships();
 
 function formatTime(mins) {
   const h = Math.floor(mins / 60) % 24;
@@ -964,12 +1142,14 @@ function getRoomSeatLayout(roomName) {
   if (!room || room.type !== 'classroom') return null;
   if (roomSeatCache.has(roomName)) return roomSeatCache.get(roomName);
 
-  // Build enough seats for everyone so each classroom can seat the full student body.
-  const studentCount = game.entities.filter((entity) => entity.role !== 'teacher').length;
+  // Generate seat grids to target roughly 80% occupancy so classrooms feel busy, not sparse.
+  const studentCount = game.entities.filter((entity) => entity.role !== 'teacher' && entity.role !== 'janitor' && entity.role !== 'player').length;
   const usableW = Math.max(8, room.w - 8);
   const usableH = Math.max(5, room.h - 7);
-  const cols = Math.max(3, Math.floor(usableW / 3));
-  const rows = Math.max(2, Math.ceil(studentCount / cols));
+  const maxCols = Math.max(3, Math.floor(usableW / 2.8));
+  const targetSeatCount = Math.ceil(studentCount / 0.82);
+  const rows = Math.max(2, Math.ceil(targetSeatCount / maxCols));
+  const cols = Math.max(3, Math.min(maxCols, Math.ceil(targetSeatCount / rows)));
 
   const seats = [];
   const seatMinX = room.x + 1.1;
@@ -1657,6 +1837,10 @@ function meleeAttack(attacker) {
       attacker.hygiene = Math.max(0, attacker.hygiene - 1.8);
       target.hygiene = Math.max(0, target.hygiene - 3.2);
       if (target.hp <= 0) knockout(target, attacker);
+      if (attacker === player) {
+        const delta = relationshipDeltaForEricInteraction(target, 'punch');
+        adjustEricRelationship(target, delta, 'punched');
+      }
       if (attacker === player && target.role === 'teacher') addLines(120, 'striking a teacher');
       spendEntityEnergy(attacker, 7);
       if (target !== player) target.energy = Math.max(10, target.energy - 3.5);
@@ -1821,8 +2005,15 @@ function chooseLessonRoomForStudent(student, currentPeriod) {
   const availableRooms = candidates.filter((roomName) => roomHasOpenSeat(roomName, student));
   if (!availableRooms.length) return currentPeriod.room;
 
-  // Deterministic roster split keeps class populations evenly distributed
-  // across available classrooms instead of bunching to one destination.
+  // Keep the scheduled class lively: target ~80% occupancy in the active room first.
+  const activeLayout = getRoomSeatLayout(currentPeriod.room);
+  const activeCommitted = studentsCommittedToRoom(currentPeriod.room, student);
+  const activeCap = activeLayout ? Math.floor(activeLayout.seats.length * 0.8) : 0;
+  if (activeCap > 0 && activeCommitted < activeCap && roomHasOpenSeat(currentPeriod.room, student)) {
+    return currentPeriod.room;
+  }
+
+  // Overflow then spreads deterministically across other classrooms.
   const attendingStudents = game.entities
     .filter((entity) => entity.role !== 'teacher' && entity.knockedUntil < performance.now())
     .sort((a, b) => a.seatIndex - b.seatIndex);
@@ -2390,8 +2581,10 @@ function updateAI(dt) {
     }
 
     // In class students periodically attempt teacher prompts and can daydream.
-    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < (0.0012 + (game.lessonNoiseLevel * 0.007))) {
-      if (game.rng() < 0.74) {
+    const iqFactor = (entity.traits?.intelligence || 50) / 100;
+    const witFactor = (entity.traits?.wit || 50) / 100;
+    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < (0.001 + (game.lessonNoiseLevel * (0.003 + (iqFactor * 0.004))))) {
+      if (game.rng() < (0.45 + (iqFactor * 0.28) + (witFactor * 0.12))) {
         const responses = ['I know this! 🙋🙂', 'Maybe 42? 😅', 'Can I try, please? 🤓', 'I think it is this... 🤔📘'];
         say(entity, responses[Math.floor(game.rng() * responses.length)]);
         announce(`📚 ${entity.name} attempted the class question.`, { source: entity, range: 7.5 });
@@ -2427,6 +2620,40 @@ function updateAI(dt) {
         say(teacherInRoom, '🧑‍🏫 Back to work please — this is ICT, not arcade club.', { durationMs: 3000 });
         say(entity, '😬 Sorry, switching back now!', { durationMs: 2600 });
         entity.computerTask = game.rng() < 0.5 ? 'word' : 'spreadsheet';
+      }
+    }
+
+
+    // Relationship-driven social reactions with Eric: friendships and rivalries feel distinct.
+    if (isStudent && distance(entity, player) < 2.4 && game.rng() < 0.0022) {
+      const relation = entity.relationships?.Eric ?? 0;
+      if (relation >= 45) {
+        const friendlyLines = ['🤝 Need cover? I did not see anything.', '😄 Eric, that prank was bold!', '🫶 I will save you a seat.'];
+        say(entity, friendlyLines[Math.floor(game.rng() * friendlyLines.length)], { durationMs: 3000 });
+      } else if (relation <= -45) {
+        const hostileLines = ['😒 Keep away from me, Eric.', '📣 Sir, Eric is at it again!', '🙄 You are trouble, mate.'];
+        say(entity, hostileLines[Math.floor(game.rng() * hostileLines.length)], { durationMs: 3000 });
+      }
+    }
+
+    // Students form friendships and enemies from trait chemistry.
+    if (isStudent && game.rng() < 0.0014) {
+      const peer = game.entities.find((candidate) => (
+        candidate !== entity
+        && candidate.role !== 'teacher'
+        && candidate.role !== 'janitor'
+        && distance(candidate, entity) < 2.3
+      ));
+      if (peer) {
+        const sharedVibe = ((entity.traits.friendly + entity.traits.funny + entity.traits.honor) - (peer.traits.aggression + peer.traits.sadism)) / 120;
+        const chemistry = sharedVibe + ((entity.traits.wit - peer.traits.wit) / 300);
+        if (chemistry > 0.35 && game.rng() < 0.5) {
+          entity.friends = entity.friends || {};
+          entity.friends[peer.name] = clampScore((entity.friends[peer.name] || 35) + 9, 0, 100);
+        } else if (chemistry < -0.2 && game.rng() < 0.45) {
+          entity.enemies = entity.enemies || {};
+          entity.enemies[peer.name] = clampScore((entity.enemies[peer.name] || 20) + 8, 0, 100);
+        }
       }
     }
 
@@ -2482,7 +2709,7 @@ function updateAI(dt) {
     }
 
     // Swot tattles if player is misbehaving nearby.
-    if (entity.profile.tattles && distance(entity, player) < 2 && game.rng() < 0.0025 && game.lines > 0) {
+    if (entity.profile.tattles && distance(entity, player) < 2 && game.rng() < (0.0012 + ((entity.traits?.honor || 40) / 50000)) && game.lines > 0) {
       addLines(10, `${entity.name} tattled`);
       announce(`📣 ${entity.name}: "Sir! Eric is being bad!"`, { source: entity, range: 7.5 });
     }
@@ -2762,6 +2989,8 @@ function updatePellets(dt) {
           }
           game.litter.push({ x: entity.x, y: entity.y, offender: pellet.owner, warned: false, kind: 'rubbish', droppedAt: performance.now() });
           if (pellet.owner === player) {
+            const delta = relationshipDeltaForEricInteraction(entity, 'insult');
+            adjustEricRelationship(entity, delta, 'hit-by-rubbish');
             const witness = findWitnessingTeacher(player, 6.2);
             if (witness) {
               addLines(20, 'throwing rubbish where staff could see');
