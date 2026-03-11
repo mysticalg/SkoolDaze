@@ -5116,6 +5116,20 @@ function getEntityScreenPosition(entity) {
   };
 }
 
+function canvasPointerToInternal(event) {
+  const rect = canvas.getBoundingClientRect();
+  // Pointer coordinates are in CSS pixels; convert them to canvas buffer pixels.
+  // This keeps hover/click hitboxes accurate even when the canvas is scaled.
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    mouseX: (event.clientX - rect.left) * scaleX,
+    mouseY: (event.clientY - rect.top) * scaleY,
+    wrapX: event.clientX - rect.left,
+    wrapY: event.clientY - rect.top,
+  };
+}
+
 function findHoveredEntityAtScreen(mouseX, mouseY) {
   const current = schedule[game.periodIndex];
   // Reverse order makes overlapping hover match what is visually on top.
@@ -5143,10 +5157,8 @@ function tooltipBar(value, color) {
 }
 
 function updateEntityTooltip(event) {
-  const rect = canvas.getBoundingClientRect();
-  const mouseX = event.clientX - rect.left;
-  const mouseY = event.clientY - rect.top;
-  const hovered = findHoveredEntityAtScreen(mouseX, mouseY);
+  const pointer = canvasPointerToInternal(event);
+  const hovered = findHoveredEntityAtScreen(pointer.mouseX, pointer.mouseY);
 
   if (!hovered) {
     hideEntityTooltip();
@@ -5163,8 +5175,8 @@ function updateEntityTooltip(event) {
 
   // Keep tooltip inside the canvas-wrap bounds for legibility.
   const wrap = canvas.parentElement.getBoundingClientRect();
-  const left = Math.min(mouseX + 16, wrap.width - 260);
-  const top = Math.max(8, mouseY - 118);
+  const left = Math.min(pointer.wrapX + 16, wrap.width - 260);
+  const top = Math.max(8, pointer.wrapY - 118);
   entityTooltipEl.style.left = `${left}px`;
   entityTooltipEl.style.top = `${top}px`;
   entityTooltipEl.hidden = false;
@@ -5178,6 +5190,19 @@ const studentInteractions = [
   { id: 'tease', icon: '🙃', label: 'Light teasing', baseDelta: -2, lines: ['Bit slow in PE today, eh?', 'Still hiding from that pop quiz?', 'You call that stealth?'] },
   { id: 'insult', icon: '😬', label: 'Throw an insult', baseDelta: -8, lines: ['You are all bark and no bite.', 'Your chat is pure detention bait.', 'Even the timetable is more interesting.'] },
 ];
+
+const staffInteractions = [
+  { id: 'greet', icon: '👋', label: 'Give a polite greeting', baseDelta: 3, lines: ['Good day, sir.', 'Morning miss.', 'Ready for lesson, sir.'] },
+  { id: 'ask-help', icon: '🧭', label: 'Ask for directions', baseDelta: 2, lines: ['Which room should I head to?', 'Can you point me to my class?', 'I am lost between floors.'] },
+  { id: 'apologise', icon: '🙏', label: 'Apologise for behavior', baseDelta: 4, lines: ['Sorry for earlier, sir.', 'I will do better this lesson.', 'No trouble from me now.'] },
+  { id: 'challenge', icon: '😏', label: 'Challenge authority', baseDelta: -6, lines: ['Rules are a bit much, no?', 'You cannot watch every corridor.', 'I am not convinced by that line.'] },
+];
+
+function interactionOptionsFor(target) {
+  if (!target || target.role === 'player') return [];
+  if (target.role === 'teacher' || target.role === 'janitor' || target.role === 'nurse') return staffInteractions;
+  return studentInteractions;
+}
 
 function calculateStudentInteractionDelta(target, option) {
   const traits = target.traits || {};
@@ -5198,15 +5223,21 @@ function calculateStudentInteractionDelta(target, option) {
 }
 
 function openInteractionPanelFor(target) {
-  if (!target || target.role === 'player' || target.role === 'teacher' || target.role === 'janitor' || target.role === 'nurse') return;
+  if (!target || target.role === 'player') return;
   game.selectedInteractionTarget = target;
   interactionPanelEl.hidden = false;
   interactionTitleEl.textContent = `Talk to ${target.name}`;
   interactionMetaEl.textContent = `Relationship: ${relationshipLabel(target.relationships?.Eric || 0)} • Reputation: ${Math.round(target.ericReputation || 0)}`;
   interactionOptionsEl.innerHTML = '';
 
+  const options = interactionOptionsFor(target);
+  if (!options.length) {
+    interactionOptionsEl.innerHTML = '<p>⚠️ No interactions available right now.</p>';
+    return;
+  }
+
   // Button list is generated from a single data table for fast UI updates.
-  for (const option of studentInteractions) {
+  for (const option of options) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.title = `Try: ${option.label}. Outcome depends on ${target.name}'s traits and your charisma.`;
@@ -5227,17 +5258,15 @@ function openInteractionPanelFor(target) {
 }
 
 function onCanvasClick(event) {
-  const rect = canvas.getBoundingClientRect();
-  const mouseX = event.clientX - rect.left;
-  const mouseY = event.clientY - rect.top;
-  const clicked = findHoveredEntityAtScreen(mouseX, mouseY);
+  const pointer = canvasPointerToInternal(event);
+  const clicked = findHoveredEntityAtScreen(pointer.mouseX, pointer.mouseY);
   if (!clicked) {
     interactionPanelEl.hidden = true;
     game.selectedInteractionTarget = null;
     return;
   }
   if (distance(player, clicked) > 5.5) {
-    announce('💬 Move closer to chat with that student.');
+    announce('💬 Move closer to chat with that person.');
     return;
   }
   openInteractionPanelFor(clicked);
