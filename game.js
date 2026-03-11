@@ -607,6 +607,8 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     stuckSeconds: 0,
     // Congestion watchdog resets pathing when a doorway jam persists.
     jamSeconds: 0,
+    // Separate staircase watchdog: stair tiles are narrow and can deadlock at period changes.
+    stairJamSeconds: 0,
     // Short-lived pass-through mode allows overlap while clearing tight bottlenecks.
     phaseThroughUntil: 0,
     // During supervised periods, students cache which classroom they are trying to attend.
@@ -1100,6 +1102,47 @@ function isNearDoorway(pos, radius = 1.9) {
   return false;
 }
 
+function isNearStairStep(pos, radius = 1.7) {
+  if (!pos) return false;
+  return stairs.some((stair) => (
+    distance(pos, { x: stair.x, y: stair.fromY }) <= radius
+    || distance(pos, { x: stair.x, y: stair.toY }) <= radius
+  ));
+}
+
+function stairEscapeTargets(stair, floor) {
+  const offsets = [-2.1, -1.15, 1.15, 2.1];
+  const levelY = floor === stair.fromFloor ? stair.fromY : stair.toY;
+  return offsets.map((offset) => ({ x: stair.x + offset, y: levelY }));
+}
+
+function nearestStairEscapeTarget(entity, desiredFloor = null) {
+  const currentFloor = entityFloor(entity);
+  const intendedNextFloor = desiredFloor ? nextFloorToward(currentFloor, desiredFloor) : null;
+  let best = null;
+  let bestDist = Infinity;
+
+  for (const stair of stairs) {
+    const currentStep = stairPointForFloor(stair, currentFloor);
+    if (!currentStep || distance(entity, currentStep) > 2.1) continue;
+    const destinationFloor = stair.fromFloor === currentFloor ? stair.toFloor : stair.fromFloor;
+    if (intendedNextFloor && destinationFloor !== intendedNextFloor) continue;
+
+    const options = stairEscapeTargets(stair, currentFloor);
+    for (const option of options) {
+      const optionRoom = roomAtPosition(option);
+      if (optionRoom && optionRoom.floor !== currentFloor) continue;
+      const dist = distance(entity, option);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = option;
+      }
+    }
+  }
+
+  return best;
+}
+
 function resetEntityPathing(entity, destination) {
   const destinationRoom = roomAtPosition(destination);
   const entryDoor = destinationRoom ? roomDoorway(destinationRoom) : null;
@@ -1131,6 +1174,7 @@ function teleportEntityToTarget(entity, target, reason = 'stuck') {
   entity.vx = 0;
   entity.vy = 0;
   entity.jamSeconds = 0;
+  entity.stairJamSeconds = 0;
   entity.stuckSeconds = 0;
   entity.overlapSeconds = 0;
   entity.phaseThroughUntil = 0;
@@ -1188,7 +1232,8 @@ function routeWaypoint(entity, destination) {
   return destination;
 }
 
-function tryUseStairs(entity, desiredFloor = null) {
+function tryUseStairs(entity, desiredFloor = null, options = {}) {
+  const { repositionOnStairJam = false } = options;
   const currentFloor = entityFloor(entity);
   const intendedNextFloor = desiredFloor ? nextFloorToward(currentFloor, desiredFloor) : null;
   if (desiredFloor && desiredFloor === currentFloor) return false;
@@ -1200,6 +1245,18 @@ function tryUseStairs(entity, desiredFloor = null) {
     if (intendedNextFloor && destinationFloor !== intendedNextFloor) continue;
     const destinationStep = stairPointForFloor(stair, destinationFloor);
     if (!destinationStep) continue;
+
+    // If congestion keeps someone on stair entry points for too long, hop sideways
+    // on the same floor to a deterministic lane so others can still use the stairs.
+    if (repositionOnStairJam && entity.stairJamSeconds > 1.35 && game.rng() < 0.45) {
+      const escapeTarget = nearestStairEscapeTarget(entity, desiredFloor);
+      if (escapeTarget) {
+        teleportEntityToTarget(entity, escapeTarget, 'stair-jam');
+        entity.target = routeWaypoint(entity, entity.target || escapeTarget);
+        return true;
+      }
+    }
+
     entity.x = destinationStep.x;
     entity.y = destinationStep.y + (destinationFloor === 'upper' || destinationFloor === 'middle' ? 0.35 : -0.35);
     if (entity === player) playSfx('stair');
@@ -2965,7 +3022,13 @@ function updateAI(dt) {
     }
 
     const desiredFloor = roomAtPosition(entity.target)?.floor || entityFloor(entity);
-    if (tryUseStairs(entity, desiredFloor)) {
+    const nearStair = isNearStairStep(entity, 1.55) || isNearStairStep(entity.target, 1.95);
+    // Stair congestion gets its own timer so we can recover from periodic pile-ups.
+    entity.stairJamSeconds = nearStair
+      ? (entity.stairJamSeconds + dtSeconds)
+      : Math.max(0, entity.stairJamSeconds - (dtSeconds * 0.75));
+
+    if (tryUseStairs(entity, desiredFloor, { repositionOnStairJam: true })) {
       entity.vx = 0;
       entity.vy = 0;
       updateNpcVitals(entity, dt, false);
@@ -3087,6 +3150,21 @@ function updateAI(dt) {
       teleportEntityToTarget(entity, rescueTarget, 'stuck');
       entity.isSeated = inLesson;
       entity.seatedRoom = inLesson ? expectedRoom : null;
+    }
+
+    // Extra stair safety net: if someone lingers around stair trigger points for ages,
+    // skip the corridor jam and place them directly at their class destination.
+    if (entity.stairJamSeconds > 4.5) {
+      const classRescueTarget = entity.role === 'teacher'
+        ? (getTeacherSeatPosition(expectedRoom) || roomCenter(expectedRoom) || entity.target)
+        : (inLesson
+          ? (getSeatPosition(expectedRoom, entity.seatIndex) || roomCenter(expectedRoom) || entity.target)
+          : entity.target);
+      teleportEntityToTarget(entity, classRescueTarget, 'stair-stuck');
+      entity.target = classRescueTarget;
+      entity.stairJamSeconds = 0;
+      entity.isSeated = inLesson && Boolean(classRescueTarget);
+      entity.seatedRoom = entity.isSeated ? expectedRoom : null;
     }
 
     // Generic doorway jam recovery for all NPCs. If movement stalls in a choke-point,
