@@ -5,6 +5,8 @@ const clockEl = document.getElementById('clock');
 const periodEl = document.getElementById('period');
 const roomTargetEl = document.getElementById('roomTarget');
 const floorStatusEl = document.getElementById('floorStatus');
+const clockHandHourEl = document.getElementById('clockHandHour');
+const clockHandMinuteEl = document.getElementById('clockHandMinute');
 const troubleEl = document.getElementById('trouble');
 const energyEl = document.getElementById('energy');
 const charismaEl = document.getElementById('charisma');
@@ -101,6 +103,8 @@ const rooms = [
   { name: 'Storage', x: 38, y: 114, w: 24, h: 14, floor: 'lower', type: 'hall' },
   { name: 'Maintenance', x: 68, y: 114, w: 24, h: 14, floor: 'lower', type: 'hall' },
   { name: 'Medical Bay', x: 94, y: 114, w: 30, h: 14, floor: 'lower', type: 'hall' },
+  { name: 'Debate Room', x: 126, y: 114, w: 18, h: 14, floor: 'lower', type: 'classroom' },
+  { name: 'Design Studio', x: 146, y: 114, w: 18, h: 14, floor: 'lower', type: 'classroom' },
 ];
 
 const stairs = [
@@ -376,6 +380,8 @@ const roomTeacherMap = {
   'Computer Room': 'Mr Wacker',
   'Music Room': 'Mr Boom',
   'Headmaster Office': 'Mr Wacker',
+  'Debate Room': 'Ms Quill',
+  'Design Studio': 'Mr Forge',
 };
 
 // Every teacher also has a personal classroom so staff do not clump at one doorway.
@@ -389,6 +395,8 @@ const teacherHomeRoomMap = {
   'Prof Volt': 'Physics Lab',
   'Ms Fizz': 'Chem Prep',
   'Mr Boom': 'Music Room',
+  'Ms Quill': 'Debate Room',
+  'Mr Forge': 'Design Studio',
 };
 
 const lessonTasks = [
@@ -417,7 +425,7 @@ const personalities = {
 // Dialogue pacing keeps chatter readable and prevents instant back-to-back spam.
 const MIN_DIALOGUE_INTERVAL_MS = 5000;
 const CLASSROOM_DIALOGUE_INTERVAL_MS = 7600;
-const ERIC_RESERVED_SEAT_CHANCE = 0.9;
+const INTERACTION_COOLDOWN_HOURS = 3;
 
 // Everyday school items can move through student pockets via trading and bartering.
 const TRADABLE_ITEMS = [
@@ -720,21 +728,48 @@ function createHallwayChatterVariants(entity) {
   const openers = roleTag === 'teacher'
     ? ['Right then', 'Eyes up', 'Listen in', 'Class, focus', 'Quick reminder']
     : ['Oi', 'No way', 'Heads up', 'Wait for me', 'Guess what'];
-  const cores = roleTag === 'teacher'
-    ? [
+  let cores;
+  if (roleTag === 'teacher') {
+    cores = [
       `corridor behaviour still needs work`,
       `we are not turning this into a sprint track`,
       `I can still hear chatter about ${topic}`,
       `line up before we enter the room`,
       `save the gossip for break, not lesson changeover`,
-    ]
-    : [
+    ];
+  } else if (entity.role === 'bully') {
+    cores = [
+      `move or get steamrolled`,
+      `I run this corridor`,
+      `keep staring and catch trouble`,
+      `someone is getting shoved at break`,
+      `detention cannot stop me today`,
+    ];
+  } else if (entity.role === 'swot') {
+    cores = [
+      `my recursion notes are elite`,
+      `the algorithm is O of n log n`,
+      `I am calibrating my revision stack`,
+      `binary trees beat panic every time`,
+      `that theorem proof is almost elegant`,
+    ];
+  } else if (entity.role === 'hero') {
+    cores = [
+      `we have got this lesson together`,
+      `heads up, no one gets left behind`,
+      `do the right thing and keep moving`,
+      `I will help if you are stuck`,
+      `stay calm and own the day`,
+    ];
+  } else {
+    cores = [
       `I am racing to ${topic}`,
       `someone started more ${topic} drama`,
       `I forgot my notes again`,
       `canteen queue is chaos already`,
       `last one there owes chips`,
     ];
+  }
   const closers = moodTag === 'warm'
     ? ['yeah?', 'come on then!', 'you with me?', 'let us move!', 'this is mad!']
     : ['move.', 'keep up.', 'honestly.', 'typical.', 'seriously.'];
@@ -762,7 +797,7 @@ function createThoughtVariants(entity) {
     `${confidenceTag}... maybe ${topic} will come up.`,
     `Need to remember my planner this time.`,
     `If I finish quickly, break will feel longer.`,
-    `Do not get caught daydreaming again.`,
+    `Focus now, dream later.`,
     `One good answer and I am safe today.`,
     `Why is the bell always slower before lunch?`,
     `Stay calm, walk in, look prepared.`,
@@ -882,6 +917,8 @@ const game = {
   lastHygieneAuraAt: 0,
   smelledStudents: {},
   selectedInteractionTarget: null,
+  lastInteractionAtByTarget: {},
+  bellRingingUntil: 0,
   // Optional after-school free-play window for computer gaming.
   stayingAfterSchoolUntil: 0,
   choseToStayAfterSchool: false,
@@ -1094,6 +1131,14 @@ game.entities.push(
   mkEntity('Mr Boom', 'teacher', 112, 42, '#f7a6ff', {
     title: 'Music Teacher', strict: 0.6, attire: 'oldBrown', quotes: ['In tune, in line, in silence!'],
     traitOverrides: { funny: 75, friendly: 72, mood: 82, wit: 68 },
+  }),
+  mkEntity('Ms Quill', 'teacher', 132, 120, '#b8f2e6', {
+    title: 'Debate Teacher', strict: 0.73, attire: 'plainBlueDress', quotes: ['Make your point and back it up.'],
+    traitOverrides: { intelligence: 84, wisdom: 88, discipline: 80, friendly: 64 },
+  }),
+  mkEntity('Mr Forge', 'teacher', 152, 120, '#ffd6a5', {
+    title: 'Design Teacher', strict: 0.68, attire: 'scienceCoat', quotes: ['Precision first, flair second.'],
+    traitOverrides: { skill: 90, intelligence: 81, discipline: 78, wit: 66 },
   }),
   mkEntity('Mr Mop', 'janitor', 36, 100, '#8ecae6', {
     title: 'Janitor', attire: 'janitorOveralls', moustache: true, hair: 'spiky',
@@ -1804,7 +1849,7 @@ function resolvePersistentOverlap(entity, currentPeriod, dtSeconds) {
   // During lessons, overlap recovery respawns to a deterministic seat assignment.
   const roomName = entity.lessonRoom || currentPeriod.room;
   const seatTarget = currentPeriod.mode === 'lesson'
-    ? (getSeatPosition(roomName, entity.seatIndex) || entity.target)
+    ? (getSeatPosition(roomName, entity.seatIndex, entity) || entity.target)
     : entity.target;
   teleportEntityToTarget(entity, seatTarget || roomCenter(currentPeriod.room), 'overlap');
 }
@@ -1911,10 +1956,17 @@ function getRoomSeatLayout(roomName) {
   return layout;
 }
 
-function getSeatPosition(roomName, seatIndex) {
+function getSeatPosition(roomName, seatIndex, requester = null) {
   const layout = getRoomSeatLayout(roomName);
   if (!layout || !layout.seats.length) return null;
-  const slot = seatIndex % layout.seats.length;
+  const ericSlot = player.seatIndex % layout.seats.length;
+  let slot = seatIndex % layout.seats.length;
+
+  // Eric's assigned chair is permanently reserved in every classroom.
+  if (requester && requester !== player && slot === ericSlot) {
+    slot = (slot + 1) % layout.seats.length;
+  }
+
   return layout.seats[slot];
 }
 
@@ -1973,7 +2025,7 @@ function resetToSchoolMorning() {
   game.dialogueDayKey += 1;
   game.playerComputerPlayUntil = 0;
   game.playerComputerStationId = null;
-  game.ericSeatReservedToday = game.rng() < ERIC_RESERVED_SEAT_CHANCE;
+  game.ericSeatReservedToday = true;
 
   if (game.dayCount > 1 && game.dayCount % TOILET_BLOCK_INTERVAL_DAYS === 0) {
     game.toiletsBlocked = true;
@@ -2422,6 +2474,7 @@ function playSfx(kind) {
     chalk: { freq: 1450, endFreq: 980, duration: 0.03, type: 'triangle', gain: 0.012 },
     urinal: { freq: 680, endFreq: 420, duration: 0.11, type: 'sine', gain: 0.03 },
     weather: { freq: 260, endFreq: 330, duration: 0.08, type: 'triangle', gain: 0.02 },
+    bell: { freq: 980, endFreq: 740, duration: 0.26, type: 'triangle', gain: 0.05 },
   };
   const preset = presets[kind] || presets.interact;
 
@@ -2640,6 +2693,7 @@ function setPeriod(index) {
     announce('👨‍🏫 Teachers line the students up at the gates and lead them inside.');
   }
 
+  game.bellRingingUntil = performance.now() + 3000;
   announce(`🔔 Bell! ${current.period} in ${current.room}`);
   if (current.period === 'Home Time') {
     announce('🏠 Home time! Students may leave through the school gates.');
@@ -3649,7 +3703,7 @@ function chooseTarget(entity, currentPeriod) {
   if (currentPeriod.mode === 'lesson') {
     if (entity.role === 'teacher') return teacherBoardSpot(currentPeriod.room);
     // Students always aim for seats during lessons so classes look orderly.
-    return getSeatPosition(currentPeriod.room, entity.seatIndex) || roomCenter(currentPeriod.room);
+    return getSeatPosition(currentPeriod.room, entity.seatIndex, entity) || roomCenter(currentPeriod.room);
   }
 
   if (currentPeriod.mode === 'home') {
@@ -3925,7 +3979,7 @@ function updateAI(dt) {
 
     if (isStudent && entity.displacedFromSeatUntil && performance.now() >= entity.displacedFromSeatUntil) {
       const roomName = entity.displacedSeatRoom || entity.lessonRoom || current.room;
-      const seatPos = entity.displacedSeatPos || getSeatPosition(roomName, entity.seatIndex);
+      const seatPos = entity.displacedSeatPos || getSeatPosition(roomName, entity.seatIndex, entity);
       const playerTookSeat = seatPos && player.isSeated && player.seatedRoom === roomName && distance(player, seatPos) < 0.72;
       if (playerTookSeat) {
         if (entity.retaliateForSeatLoss) {
@@ -3951,7 +4005,7 @@ function updateAI(dt) {
       entity.lessonRoom = chooseLessonRoomForStudent(entity, current);
       // Registration keeps Eric's desk free most mornings; if not free, player can choose how to react.
       const reserveEricSeat = isRegistrationPeriod(current) && game.ericSeatReservedToday;
-      const assignedSeat = getSeatPosition(entity.lessonRoom, entity.seatIndex);
+      const assignedSeat = getSeatPosition(entity.lessonRoom, entity.seatIndex, entity);
       const usesEricSeat = isEricAssignedSeat(entity.lessonRoom, entity.seatIndex);
       if (reserveEricSeat && usesEricSeat && entity !== player) {
         entity.target = nearestFreeSeatInRoom(entity.lessonRoom, entity) || roomCenter(entity.lessonRoom);
@@ -4088,7 +4142,7 @@ function updateAI(dt) {
       entity.lastWrongRoomExcuseAt = now;
       const excuses = ['😅 Sorry, wrong class — I need to get to my lesson.', '🙋 Oops, wrong room. I am heading to the right one now.', '📚 Excuse me, I should be in another class.'];
       say(entity, excuses[Math.floor(game.rng() * excuses.length)], { durationMs: 2600 });
-      entity.target = getSeatPosition(expectedRoomNow, entity.seatIndex)
+      entity.target = getSeatPosition(expectedRoomNow, entity.seatIndex, entity)
         || roomCenter(expectedRoomNow)
         || entity.target;
     }
@@ -4360,6 +4414,15 @@ function updateAI(dt) {
       continue;
     }
 
+    // Eric always reclaims his reserved seat if someone is in it.
+    if (inLesson && entity === player) {
+      const ericSeat = getSeatPosition(expectedRoom, player.seatIndex, player);
+      const intruder = ericSeatOccupant(expectedRoom);
+      if (ericSeat && intruder && distance(player, ericSeat) < 1.45 && distance(player, intruder) < 1.55) {
+        meleeAttack(player);
+      }
+    }
+
     // During lessons all teachers should be seated in their designated classroom,
     // not just the currently assigned teacher in the active period room.
     const seatedTarget = inLesson && entityRoom(entity) === expectedRoom;
@@ -4368,7 +4431,7 @@ function updateAI(dt) {
     entity.isSeated = seatedTarget && (len < 0.4 || (wasSeated && len < 0.85));
     // Keep lessons visually correct: students sit once they are at their desk tile.
     if (seatedTarget && entity.role !== 'teacher') {
-      const seatTarget = getSeatPosition(expectedRoom, entity.seatIndex) || entity.target;
+      const seatTarget = getSeatPosition(expectedRoom, entity.seatIndex, entity) || entity.target;
       if (seatTarget && distance(entity, seatTarget) < 0.72) {
         entity.x = seatTarget.x;
         entity.y = seatTarget.y;
@@ -4411,7 +4474,7 @@ function updateAI(dt) {
       const rescueTarget = entity.role === 'teacher'
         ? (getTeacherSeatPosition(expectedRoom) || entity.target)
         : (inLesson
-          ? (getSeatPosition(expectedRoom, entity.seatIndex) || entity.target)
+          ? (getSeatPosition(expectedRoom, entity.seatIndex, entity) || entity.target)
           : entity.target);
       teleportEntityToTarget(entity, rescueTarget, 'stuck');
       entity.isSeated = inLesson;
@@ -4424,7 +4487,7 @@ function updateAI(dt) {
       const classRescueTarget = entity.role === 'teacher'
         ? (getTeacherSeatPosition(expectedRoom) || roomCenter(expectedRoom) || entity.target)
         : (inLesson
-          ? (getSeatPosition(expectedRoom, entity.seatIndex) || roomCenter(expectedRoom) || entity.target)
+          ? (getSeatPosition(expectedRoom, entity.seatIndex, entity) || roomCenter(expectedRoom) || entity.target)
           : entity.target);
       teleportEntityToTarget(entity, classRescueTarget, 'stair-stuck');
       entity.target = classRescueTarget;
@@ -5556,6 +5619,26 @@ function drawMiniMap() {
   ctx.fillText('● Class ■ Shield ● Toilet ○ You • Students ■ Teachers ■ Dinner Lady', mapX + 6, mapY + mapH - 6);
 }
 
+
+function drawAnalogClockWidget() {
+  if (!clockHandHourEl || !clockHandMinuteEl) return;
+  const totalMinutes = game.timeMinutes % (24 * 60);
+  const minute = totalMinutes % 60;
+  const hour = (Math.floor(totalMinutes / 60) % 12) + (minute / 60);
+  const minuteAngle = minute * 6;
+  const hourAngle = hour * 30;
+  clockHandMinuteEl.style.transform = `rotate(${minuteAngle}deg)`;
+  clockHandHourEl.style.transform = `rotate(${hourAngle}deg)`;
+}
+
+function updateBellRingSfx(now = performance.now()) {
+  if (now > (game.bellRingingUntil || 0)) return;
+  if (!game.lastBellToneAt || now - game.lastBellToneAt > 560) {
+    playSfx('bell');
+    game.lastBellToneAt = now;
+  }
+}
+
 function drawStatusOverlay() {
   if (!game.paused) return;
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
@@ -5735,12 +5818,12 @@ const studentInteractions = [
   { id: 'haggle', icon: '💬', label: 'Try to haggle a better deal', action: 'haggle', baseDelta: 1, lines: ['Come on, I can sweeten this deal.', 'Let me talk you into this swap.', 'Surely that is worth a better bargain?'] },
   { id: 'card-battle', icon: '🃏', label: 'Challenge to trump card battle', action: 'card-battle', baseDelta: 2, lines: ['Fancy a card duel?', 'Let us battle cards.', 'Trump card showdown?'] },
   { id: 'mug-cards', icon: '🕶️', label: 'Mug them for their cards', action: 'mug-cards', baseDelta: -20, lines: ['Hand over your cards.', 'Give me your deck. Now.', 'I am taking your cards.'] },
-  { id: 'compliment', icon: '✨', label: 'Compliment their style', baseDelta: 7, lines: ['Your trainers are elite today.', 'You handled class brilliantly.', 'You make this place less grim.'] },
-  { id: 'joke', icon: '😄', label: 'Crack a joke', baseDelta: 5, lines: ['Need a laugh before next lesson?', 'I have got a joke about detentions.', 'This corridor needs better comedy.'] },
-  { id: 'study', icon: '📚', label: 'Ask for study tips', baseDelta: 4, lines: ['Can you help me revise this topic?', 'What is your trick for remembering dates?', 'Any smart shortcut for homework?'] },
-  { id: 'gossip', icon: '🗣️', label: 'Share spicy gossip', baseDelta: 0, lines: ['Heard any wild rumours?', 'Want the latest staff room tea?', 'Someone is plotting chaos in maths.'] },
-  { id: 'tease', icon: '🙃', label: 'Light teasing', baseDelta: -2, lines: ['Bit slow in PE today, eh?', 'Still hiding from that pop quiz?', 'You call that stealth?'] },
-  { id: 'insult', icon: '😬', label: 'Throw an insult', baseDelta: -8, lines: ['You are all bark and no bite.', 'Your chat is pure detention bait.', 'Even the timetable is more interesting.'] },
+  { id: 'compliment', icon: '✨', label: 'Compliment their style', baseDelta: 7, lines: ['Sharp look today.', 'You owned that lesson.', 'Top form, genuinely.'] },
+  { id: 'joke', icon: '😄', label: 'Crack a joke', baseDelta: 5, lines: ['Quick one before the bell?', 'Detention would laugh at this.', 'Chaos needs better punchlines.'] },
+  { id: 'study', icon: '📚', label: 'Ask for study tips', baseDelta: 4, lines: ['Got a revision cheat code?', 'How do you lock this into memory?', 'Any fast method for this topic?'] },
+  { id: 'gossip', icon: '🗣️', label: 'Share spicy gossip', baseDelta: 0, lines: ['Fresh rumour drop?', 'Staff room tea update?', 'Heard who got roasted in maths?'] },
+  { id: 'tease', icon: '🙃', label: 'Light teasing', baseDelta: -2, lines: ['That sprint was in slow motion.', 'Pop quiz still chasing you?', 'Stealth level: cafeteria tray.'] },
+  { id: 'insult', icon: '😬', label: 'Throw an insult', baseDelta: -8, lines: ['You peak at average.', 'Your chat needs patch notes.', 'Even homework has more spark.'] },
 ];
 
 const staffInteractions = [
@@ -5828,6 +5911,17 @@ function calculateStudentInteractionDelta(target, option) {
   return Math.round(delta + variance);
 }
 
+
+function interactionCooldownRemainingHours(target, optionId) {
+  if (!target || !optionId) return 0;
+  const targetKey = target.name || 'npc';
+  const memory = game.lastInteractionAtByTarget[targetKey] || {};
+  const lastAt = memory[optionId];
+  if (typeof lastAt !== 'number') return 0;
+  const elapsed = game.timeMinutes - lastAt;
+  return Math.max(0, INTERACTION_COOLDOWN_HOURS - elapsed);
+}
+
 function openInteractionPanelFor(target) {
   if (!target || target.role === 'player') return;
   game.selectedInteractionTarget = target;
@@ -5853,9 +5947,22 @@ function openInteractionPanelFor(target) {
     btn.type = 'button';
     btn.title = `Try: ${option.label}. Outcome depends on ${target.name}'s traits and your charisma.`;
     btn.textContent = `${option.icon} ${option.label}`;
+    const remainingHours = interactionCooldownRemainingHours(target, option.id);
+    if (remainingHours > 0) {
+      btn.disabled = true;
+      btn.title = `${option.label} available again in ${remainingHours.toFixed(1)} in-game hours.`;
+      btn.textContent = `${option.icon} ${option.label} (cooldown ${remainingHours.toFixed(1)}h)`;
+    }
     btn.onclick = () => {
+      const cooldownLeft = interactionCooldownRemainingHours(target, option.id);
+      if (cooldownLeft > 0) {
+        announce(`⏳ ${target.name} shrugs: "Not yet. Try again in ${cooldownLeft.toFixed(1)} in-game hours."`);
+        return;
+      }
       const line = option.lines[Math.floor(game.rng() * option.lines.length)];
       announce(`🗨️ Eric to ${target.name}: "${line}"`);
+      game.lastInteractionAtByTarget[target.name] = game.lastInteractionAtByTarget[target.name] || {};
+      game.lastInteractionAtByTarget[target.name][option.id] = game.timeMinutes;
 
       if (option.action === 'trade') {
         attemptInteractionTrade(target, { haggle: false });
@@ -5904,6 +6011,7 @@ function loop(now) {
   last = now;
 
   if (!game.paused) {
+    updateBellRingSfx(now);
     handleInput(dt);
 
     if (!game.autoMode) game.idleMs += dt;
