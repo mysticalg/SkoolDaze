@@ -219,9 +219,24 @@ const classroomProps = [
   { room: 'Art Room', x: 42, y: 89, icon: 'P', color: '#ff9f1c', kind: 'paint set', throwable: true, hiddenUntil: 0 },
   { room: 'Art Room', x: 50, y: 90, icon: 'B', color: '#2ec4b6', kind: 'paint brush', throwable: true, hiddenUntil: 0 },
   { room: 'Science Lab', x: 14, y: 10, icon: 'S', color: '#80ed99', kind: 'beaker', throwable: true, hiddenUntil: 0 },
+  { room: 'Science Lab', x: 11, y: 6, icon: '⚗', color: '#b7efc5', kind: 'chemical flask', throwable: true, hiddenUntil: 0 },
+  { room: 'Science Lab', x: 17, y: 6, icon: '🧪', color: '#95d5b2', kind: 'lab vial', throwable: true, hiddenUntil: 0 },
+  { room: 'Science Lab', x: 24, y: 6, icon: '🧫', color: '#74c69d', kind: 'specimen tray', throwable: true, hiddenUntil: 0 },
+  { room: 'Science Lab', x: 28, y: 6, icon: '☣', color: '#52b788', kind: 'chemical display cabinet', throwable: false, hiddenUntil: 0 },
+  { room: 'Science Lab', x: 26, y: 12, icon: '🫀', color: '#caf0f8', kind: 'anatomy poster', throwable: false, hiddenUntil: 0 },
+  { room: 'Science Lab', x: 10, y: 12, icon: '🧠', color: '#ade8f4', kind: 'anatomy poster', throwable: false, hiddenUntil: 0 },
   { room: 'Maths', x: 15, y: 46, icon: 'M', color: '#9bf6ff', kind: 'set square', throwable: true, hiddenUntil: 0 },
+  { room: 'Maths', x: 10, y: 40, icon: '📚', color: '#d9ed92', kind: 'book shelf', throwable: false, hiddenUntil: 0 },
+  { room: 'Maths', x: 35, y: 40, icon: '🗄', color: '#ccd5ae', kind: 'filing cabinet', throwable: false, hiddenUntil: 0 },
+  { room: 'Maths', x: 34, y: 47, icon: '📐', color: '#9bf6ff', kind: 'geometry ruler', throwable: true, hiddenUntil: 0 },
   { room: 'English', x: 50, y: 46, icon: 'E', color: '#b8c0ff', kind: 'book', throwable: true, hiddenUntil: 0 },
+  { room: 'English', x: 46, y: 40, icon: '📚', color: '#e9edc9', kind: 'book shelf', throwable: false, hiddenUntil: 0 },
+  { room: 'English', x: 66, y: 40, icon: '🗄', color: '#d4d4d4', kind: 'filing cabinet', throwable: false, hiddenUntil: 0 },
+  { room: 'English', x: 60, y: 46, icon: '📖', color: '#cdb4db', kind: 'hardback novel', throwable: true, hiddenUntil: 0 },
   { room: 'History', x: 66, y: 91, icon: 'H', color: '#caffbf', kind: 'globe', throwable: true, hiddenUntil: 0 },
+  { room: 'History', x: 62, y: 82, icon: '🗺', color: '#f4d35e', kind: 'atlas', throwable: true, hiddenUntil: 0 },
+  { room: 'History', x: 82, y: 82, icon: '📚', color: '#f6bd60', kind: 'history book shelf', throwable: false, hiddenUntil: 0 },
+  { room: 'History', x: 80, y: 90, icon: '📜', color: '#f7ede2', kind: 'archive scroll', throwable: true, hiddenUntil: 0 },
   { room: 'Computer Room', x: 134, y: 10, icon: 'C', color: '#bde0fe', kind: 'keyboard', throwable: true, hiddenUntil: 0 },
   { room: 'Music Room', x: 112, y: 46, icon: 'D', color: '#f4978e', kind: 'drum stick', throwable: true, hiddenUntil: 0 },
   { room: 'Headmaster Office', x: 164, y: 46, icon: 'R', color: '#e5989b', kind: 'rule book', throwable: true, hiddenUntil: 0 },
@@ -378,6 +393,9 @@ const game = {
   lastHygieneShameAt: 0,
   weeklySickScheduledDay: WEEKLY_SICK_DAY_INTERVAL,
   janitorTask: null,
+  // Lesson chatter rhythm: teachers hush classes briefly, then noise returns gradually.
+  lessonQuietUntil: 0,
+  lessonNoiseLevel: 0,
 };
 
 let seatCounter = 0;
@@ -1137,6 +1155,66 @@ function say(entity, text, opts = {}) {
 function think(entity, text, durationMs = 3200) {
   if (!entity || !text) return;
   entity.thought = { text: String(text), until: performance.now() + durationMs };
+}
+
+function wrapBubbleText(text, maxWidth) {
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let currentLine = '';
+  for (const word of words) {
+    const candidate = currentLine ? `${currentLine} ${word}` : word;
+    if (ctx.measureText(candidate).width <= maxWidth || !currentLine) {
+      currentLine = candidate;
+    } else {
+      lines.push(currentLine);
+      currentLine = word;
+    }
+  }
+  if (currentLine) lines.push(currentLine);
+  return lines.slice(0, 4);
+}
+
+function drawRoundedBubble(x, y, lines, style) {
+  const {
+    paddingX, paddingY, lineHeight, radius,
+    fillColor, strokeColor, shadowColor, shadowBlur,
+    textColor, font, tailOffsetX = 10,
+  } = style;
+
+  ctx.font = font;
+  const bubbleWidth = Math.max(...lines.map((line) => ctx.measureText(line).width), 28) + (paddingX * 2);
+  const bubbleHeight = (lines.length * lineHeight) + (paddingY * 2);
+  const left = Math.round(x - bubbleWidth / 2);
+  const top = Math.round(y - bubbleHeight);
+
+  ctx.save();
+  ctx.shadowColor = shadowColor;
+  ctx.shadowBlur = shadowBlur;
+  ctx.fillStyle = fillColor;
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.roundRect(left, top, bubbleWidth, bubbleHeight, radius);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+
+  // Tail keeps speech/thought ownership clear while preserving the rounded card style.
+  ctx.fillStyle = fillColor;
+  ctx.strokeStyle = strokeColor;
+  ctx.beginPath();
+  ctx.moveTo(left + tailOffsetX, top + bubbleHeight);
+  ctx.lineTo(left + tailOffsetX + 8, top + bubbleHeight);
+  ctx.lineTo(left + tailOffsetX + 4, top + bubbleHeight + 8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = textColor;
+  ctx.font = font;
+  lines.forEach((line, index) => {
+    ctx.fillText(line, left + paddingX, top + paddingY + ((index + 1) * lineHeight) - 2);
+  });
 }
 
 function announce(message, options = {}) {
@@ -2172,6 +2250,18 @@ function updateAI(dt) {
   const supervised = isSupervisedPeriod(current);
   const teacherPresent = isTeacherPresentForPeriod(current);
   const assignedTeacherName = assignedTeacherForRoom(current.room);
+  const now = performance.now();
+
+  if (supervised) {
+    if (now > game.lessonQuietUntil) {
+      // Noise ramps back in after a teacher warning, so class hush feels temporary.
+      game.lessonNoiseLevel = Math.min(1, game.lessonNoiseLevel + dt * 0.00016);
+    } else {
+      game.lessonNoiseLevel = Math.max(0, game.lessonNoiseLevel - dt * 0.0018);
+    }
+  } else {
+    game.lessonNoiseLevel = Math.min(1, game.lessonNoiseLevel + dt * 0.0005);
+  }
 
   for (const entity of game.entities) {
     if (entity === player) continue;
@@ -2220,15 +2310,50 @@ function updateAI(dt) {
     }
 
     // In class students periodically attempt teacher prompts and can daydream.
-    if (inLesson && isStudent && entityRoom(entity) === current.room && game.rng() < 0.0036) {
+    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < (0.0012 + (game.lessonNoiseLevel * 0.007))) {
       if (game.rng() < 0.74) {
-        const responses = ['I know this! 🙋', 'Maybe 42?', 'Can I try? 🙂', 'I think it is this... 🤔'];
+        const responses = ['I know this! 🙋🙂', 'Maybe 42? 😅', 'Can I try, please? 🤓', 'I think it is this... 🤔📘'];
         say(entity, responses[Math.floor(game.rng() * responses.length)]);
         announce(`📚 ${entity.name} attempted the class question.`, { source: entity, range: 7.5 });
         entity.emotion = Math.min(100, entity.emotion + 1.2);
       } else {
-        const daydreams = ['🍕 Lunch soon?', '⚽ After school match...', '🎮 New game later!', '☁️ Looking out the window...'];
+        const daydreams = ['🍕 Lunch soon?', '⚽ After school match... 😎', '🎮 New game later! 🕹️', '☁️ Looking out the window...'];
         think(entity, daydreams[Math.floor(game.rng() * daydreams.length)], 3400);
+      }
+    }
+
+    // Corridor and room transitions are now lively with lots of pupil chatter.
+    if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home') && isStudent && game.rng() < 0.02) {
+      const hallwayChatter = [
+        '😆 Wait up, I am coming too!',
+        '📚 I forgot my book again, oh no!',
+        '🍟 Canteen queue is huge today!',
+        '🏃 Last one there buys snacks!',
+        '🤫 Did you hear what happened in maths?',
+      ];
+      say(entity, hallwayChatter[Math.floor(game.rng() * hallwayChatter.length)], { durationMs: 3600 });
+    }
+
+    // Teacher occasionally hushes the class, then students slowly get noisy again.
+    if (inLesson && entity.role === 'teacher' && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.lessonNoiseLevel > 0.34 && game.rng() < 0.004) {
+      const quietCalls = ['🤨 Settle down, class. Quiet voices now.', '🧑‍🏫 Eyes front please, less chatter.', '🔕 Volume down, or everyone gets lines.'];
+      say(entity, quietCalls[Math.floor(game.rng() * quietCalls.length)], { durationMs: 3400 });
+      game.lessonQuietUntil = now + 4200;
+      game.lessonNoiseLevel = 0.04;
+    }
+
+    // Witty teacher comeback when a student asks a silly question.
+    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < 0.0014) {
+      const sillyQuestions = ['🙃 Sir, can we do homework in our dreams?', '😅 Miss, is zero afraid of minus numbers?', '🤔 If I eat my notes, do I absorb the lesson?'];
+      say(entity, sillyQuestions[Math.floor(game.rng() * sillyQuestions.length)], { durationMs: 3600 });
+      const classTeacher = game.entities.find((candidate) => (
+        candidate.role === 'teacher'
+        && entityRoom(candidate) === current.room
+        && candidate.knockedUntil < now
+      ));
+      if (classTeacher) {
+        classTeacher.speech = null;
+        say(classTeacher, ['😏 Nice try. If that worked, I would eat the exam keys.', '🧠 Creative, but knowledge still needs actual study.', '😂 Brilliant joke. Now give me the real answer.'][Math.floor(game.rng() * 3)], { durationMs: 3900 });
       }
     }
 
@@ -2275,8 +2400,8 @@ function updateAI(dt) {
     }
 
     // Break-time social bubbles make playground time feel alive.
-    if (current.mode === 'break' && isStudent && game.rng() < 0.007) {
-      const chat = ['😄 Nice pass!', '🤝 Meet by the canteen.', '😲 Did you see that punch?', "🍟 I'm starving.", '🏃 Race you to the field!'];
+    if (current.mode === 'break' && isStudent && game.rng() < 0.014) {
+      const chat = ['😄 Nice pass!', '🤝 Meet by the canteen.', '😲 Did you see that punch?', "🍟 I'm starving.", '🏃 Race you to the field!', '😂 That lesson was chaos!', '🙌 Bell finally rang!'];
       say(entity, chat[Math.floor(game.rng() * chat.length)]);
       entity.emotion = Math.min(100, entity.emotion + 1.8);
     }
@@ -3226,22 +3351,35 @@ function drawEntities() {
 
     const nowBubble = performance.now();
     if (entity.speech && entity.speech.until > nowBubble) {
-      ctx.fillStyle = 'rgba(255,255,255,0.95)';
-      ctx.strokeStyle = '#1f2937';
-      ctx.fillRect(px - 42, py - 58, 84, 14);
-      ctx.strokeRect(px - 42, py - 58, 84, 14);
-      ctx.fillStyle = '#0f1426';
-      ctx.font = '8px monospace';
-      ctx.fillText(entity.speech.text.slice(0, 16), px - 39, py - 48);
+      const lines = wrapBubbleText(entity.speech.text, 180);
+      drawRoundedBubble(px, py - 42, lines, {
+        paddingX: 8,
+        paddingY: 5,
+        lineHeight: 11,
+        radius: 8,
+        fillColor: 'rgba(255,255,255,0.97)',
+        strokeColor: '#1f2937',
+        shadowColor: 'rgba(10,12,28,0.35)',
+        shadowBlur: 6,
+        textColor: '#0f1426',
+        font: '9px monospace',
+      });
     }
     if (entity.thought && entity.thought.until > nowBubble) {
-      ctx.fillStyle = 'rgba(232,244,255,0.95)';
-      ctx.strokeStyle = '#3a86ff';
-      ctx.fillRect(px - 36, py - 74, 72, 12);
-      ctx.strokeRect(px - 36, py - 74, 72, 12);
-      ctx.fillStyle = '#1d3557';
-      ctx.font = '7px monospace';
-      ctx.fillText(entity.thought.text.slice(0, 18), px - 33, py - 65);
+      const lines = wrapBubbleText(entity.thought.text, 160);
+      drawRoundedBubble(px, py - 60, lines, {
+        paddingX: 8,
+        paddingY: 4,
+        lineHeight: 10,
+        radius: 9,
+        fillColor: 'rgba(232,244,255,0.97)',
+        strokeColor: '#3a86ff',
+        shadowColor: 'rgba(30,80,130,0.25)',
+        shadowBlur: 5,
+        textColor: '#1d3557',
+        font: '8px monospace',
+        tailOffsetX: 12,
+      });
     }
 
     if (entity.carryingTrash) {
