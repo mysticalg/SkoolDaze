@@ -7,6 +7,7 @@ const roomTargetEl = document.getElementById('roomTarget');
 const floorStatusEl = document.getElementById('floorStatus');
 const troubleEl = document.getElementById('trouble');
 const energyEl = document.getElementById('energy');
+const charismaEl = document.getElementById('charisma');
 const bladderEl = document.getElementById('bladder');
 const hygieneEl = document.getElementById('hygiene');
 const autoStatusEl = document.getElementById('autoStatus');
@@ -21,6 +22,11 @@ const helpBtn = document.getElementById('helpBtn');
 const pauseBtn = document.getElementById('pauseBtn');
 const toggleNamesBtn = document.getElementById('toggleNamesBtn');
 const entityTooltipEl = document.getElementById('entityTooltip');
+const interactionPanelEl = document.getElementById('interactionPanel');
+const interactionTitleEl = document.getElementById('interactionTitle');
+const interactionMetaEl = document.getElementById('interactionMeta');
+const interactionOptionsEl = document.getElementById('interactionOptions');
+const closeInteractionPanelBtn = document.getElementById('closeInteractionPanel');
 document.getElementById('closeHelp').onclick = () => helpDialog.close();
 helpBtn.onclick = () => helpDialog.showModal();
 
@@ -205,6 +211,13 @@ const urinals = [
   { x: 12, y: 98, label: 'West Urinal' },
   { x: 16, y: 98, label: 'Middle Urinal' },
   { x: 20, y: 98, label: 'East Urinal' },
+];
+
+// Gym showers fully restore hygiene and provide a social confidence/charisma boost.
+const showers = [
+  { x: 140, y: 42, label: 'Gym Shower A' },
+  { x: 146, y: 42, label: 'Gym Shower B' },
+  { x: 152, y: 42, label: 'Gym Shower C' },
 ];
 
 
@@ -546,9 +559,11 @@ function adjustEricRelationship(entity, delta, reason = 'interaction') {
 }
 
 function relationshipLabel(score) {
+  if (score >= 80) return 'best friend';
   if (score >= 45) return 'friend';
+  if (score >= 10) return 'acquaintance';
   if (score <= -45) return 'enemy';
-  return 'neutral';
+  return 'stranger';
 }
 
 
@@ -772,6 +787,7 @@ const game = {
   paused: false,
   lines: 0,
   energy: 100,
+  charisma: 50,
   missionComplete: false,
   safeCombo: '',
   entities: [],
@@ -816,6 +832,9 @@ const game = {
   toiletsBlocked: false,
   toiletFloodUntil: 0,
   lastHygieneShameAt: 0,
+  lastHygieneAuraAt: 0,
+  smelledStudents: {},
+  selectedInteractionTarget: null,
   weeklySickScheduledDay: WEEKLY_SICK_DAY_INTERVAL,
   janitorTask: null,
   // Lesson chatter rhythm: teachers hush classes briefly, then noise returns gradually.
@@ -1245,6 +1264,11 @@ function updateAutoStatus() {
   autoStatusEl.textContent = `🤖 Auto: ${game.autoMode ? 'ON' : 'OFF'}`;
 }
 
+function updateCharismaHud() {
+  charismaEl.textContent = `🗣️ Charisma: ${Math.round(game.charisma)}`;
+  charismaEl.title = 'Higher charisma improves social outcomes when talking with students.';
+}
+
 function updateWeatherHud() {
   const meta = weatherModes[game.weather] || weatherModes.sunny;
   weatherEl.textContent = `${meta.icon} Weather: ${meta.label}`;
@@ -1299,6 +1323,10 @@ function maybeShameEric(now = performance.now()) {
     `${nearby.name}: "Even the gym socks smell better."`,
   ];
 
+  if (nearby.role !== 'teacher') {
+    game.smelledStudents[nearby.name] = true;
+  }
+
   if (nearby.role === 'teacher') {
     announce(`🧑‍🏫 ${nearby.name}: "Eric, sort your hygiene out at once."`, { source: nearby, range: 8, force: true });
   } else {
@@ -1306,6 +1334,20 @@ function maybeShameEric(now = performance.now()) {
     announce(`😖 ${pick}`, { source: nearby, range: 8, force: true });
   }
   game.lastHygieneShameAt = now;
+}
+
+function updateHygieneSocialAura(now = performance.now()) {
+  if (game.hygiene < 70) return;
+  if (!game.lastHygieneAuraAt || now - game.lastHygieneAuraAt > 4200) {
+    for (const student of game.entities) {
+      if (student.role === 'player' || student.role === 'teacher') continue;
+      if (student.knockedUntil > now || distance(student, player) > 3.2) continue;
+      // Good hygiene passively improves one-to-one student reputation over time.
+      adjustEricRelationship(student, 0.6 + (game.charisma * 0.006), 'fresh aura');
+      student.ericReputation = Math.min(100, (student.ericReputation || 0) + 0.8);
+    }
+    game.lastHygieneAuraAt = now;
+  }
 }
 
 function getStairLink(fromFloor, toFloor) {
@@ -1695,6 +1737,8 @@ function resetToSchoolMorning() {
   game.toiletsBlocked = false;
   game.toiletFloodUntil = 0;
   game.lastHygieneShameAt = 0;
+  game.lastHygieneAuraAt = 0;
+  game.smelledStudents = {};
   game.hygiene = Math.max(55, game.hygiene - 3);
   pickWeeklyWeather();
   game.dialogueDayKey += 1;
@@ -2906,6 +2950,42 @@ function interact() {
     energyEl.textContent = `⚡ Energy: ${Math.round(game.energy)}`;
     playSfx('interact');
     announce(`🚰 Eric drinks from ${nearbyFountain.label}. Refreshed and ready.`);
+    return;
+  }
+
+  // Gym showers reset hygiene to max and can improve charisma with students.
+  const nearbyShower = showers.find((shower) => distance(player, shower) < 1.9);
+  if (nearbyShower && entityRoom(player) === 'Gym') {
+    const hadLowHygiene = game.hygiene < 40;
+    game.hygiene = 100;
+    game.charisma = Math.min(100, game.charisma + 10);
+    updateHygieneHud();
+    updateCharismaHud();
+    playSfx('interact');
+    announce(`🚿 Eric used ${nearbyShower.label}. Hygiene maxed and charisma boosted.`);
+
+    // Students that previously noticed Eric smelling now react to the fresh comeback.
+    const nearbyStudents = game.entities.filter((entity) => (
+      entity.role !== 'player'
+      && entity.role !== 'teacher'
+      && game.smelledStudents[entity.name]
+      && entity.knockedUntil < performance.now()
+      && distance(entity, player) < 6.4
+    ));
+    if (hadLowHygiene && nearbyStudents.length) {
+      const clapbacks = [
+        'glad you took a shower, stinker',
+        'Welcome back from the bog of stench!',
+        'fresh at last — took you long enough',
+      ];
+      for (const student of nearbyStudents.slice(0, 3)) {
+        const line = clapbacks[Math.floor(game.rng() * clapbacks.length)];
+        announce(`😅 ${student.name}: "${line}"`, { source: student, range: 8, force: true });
+        adjustEricRelationship(student, 4 + (game.charisma * 0.02), 'clean comeback');
+        student.ericReputation = Math.min(100, (student.ericReputation || 0) + 4);
+        game.smelledStudents[student.name] = false;
+      }
+    }
     return;
   }
 
@@ -4430,6 +4510,16 @@ function drawWorld() {
     ctx.fillText('U', p.sx - 2, p.sy);
   }
 
+  for (const shower of showers) {
+    const p = worldToScreen(shower.x, shower.y);
+    fillDitherRect(p.sx - 8, p.sy - 10, 16, 18, '#8ecae6', '#5da9d6', 3);
+    ctx.fillStyle = '#e3f6ff';
+    ctx.fillRect(p.sx - 2, p.sy - 7, 4, 10);
+    ctx.fillStyle = '#1d3557';
+    ctx.font = 'bold 7px monospace';
+    ctx.fillText('🚿', p.sx - 5, p.sy - 12);
+  }
+
   for (const waste of game.litter) {
     const p = worldToScreen(waste.x, waste.y);
     ctx.fillStyle = waste.kind === 'sick' ? '#8ac926' : '#f4a261';
@@ -4945,6 +5035,11 @@ function hideEntityTooltip() {
   entityTooltipEl.hidden = true;
 }
 
+function tooltipBar(value, color) {
+  const clamped = Math.max(0, Math.min(100, Math.round(value || 0)));
+  return `<span class="tooltip-meter"><span style="width:${clamped}%;background:${color};"></span></span>${clamped}%`;
+}
+
 function updateEntityTooltip(event) {
   const rect = canvas.getBoundingClientRect();
   const mouseX = event.clientX - rect.left;
@@ -4961,15 +5056,89 @@ function updateEntityTooltip(event) {
   const room = entityRoom(hovered);
   const pocketItems = (hovered.inventory || []).slice(0, 3).join(', ');
   const moreItems = (hovered.inventory || []).length > 3 ? ` +${hovered.inventory.length - 3}` : '';
-  entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>❤️ HP: ${Math.round(hovered.hp)} | ⚡ EN: ${Math.round(hovered.energy)}<br>🙂 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>🚻 Bladder: ${Math.round(hovered.bladder)}% | 🧼 Hyg: ${Math.round(hovered.hygiene || 0)}%<br>💷 £${Math.round(hovered.money || 0)} | 🤝 Trade ${Math.round(hovered.traits?.trading || 0)} | 🗣️ Barter ${Math.round(hovered.traits?.barter || 0)}<br>🎒 ${pocketItems || 'nothing useful'}${moreItems}<br>📍 ${room}`;
+  const relationText = hovered.role === 'player' ? 'self' : relationshipLabel(hovered.relationships?.Eric || 0);
+  entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>📍 ${room} | 🤝 ${relationText}<br>⚡ Energy ${tooltipBar(hovered.energy, '#ffd166')}<br>🚻 Bladder ${tooltipBar(hovered.bladder, '#ff9f1c')}<br>🧼 Hygiene ${tooltipBar(hovered.hygiene || 0, '#72efdd')}<br>❤️ HP ${tooltipBar(hovered.hp, '#ef476f')}<br>🧠 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>💷 £${Math.round(hovered.money || 0)} | 🤝 Trade ${Math.round(hovered.traits?.trading || 0)} | 🗣️ Barter ${Math.round(hovered.traits?.barter || 0)}<br>📝 Notes: ${hovered.title || hovered.profile?.title || 'No public notes yet'}<br>🎒 ${pocketItems || 'nothing useful'}${moreItems}`;
 
   // Keep tooltip inside the canvas-wrap bounds for legibility.
   const wrap = canvas.parentElement.getBoundingClientRect();
-  const left = Math.min(mouseX + 16, wrap.width - 190);
-  const top = Math.max(8, mouseY - 92);
+  const left = Math.min(mouseX + 16, wrap.width - 260);
+  const top = Math.max(8, mouseY - 118);
   entityTooltipEl.style.left = `${left}px`;
   entityTooltipEl.style.top = `${top}px`;
   entityTooltipEl.hidden = false;
+}
+
+const studentInteractions = [
+  { id: 'compliment', icon: '✨', label: 'Compliment their style', baseDelta: 7, lines: ['Your trainers are elite today.', 'You handled class brilliantly.', 'You make this place less grim.'] },
+  { id: 'joke', icon: '😄', label: 'Crack a joke', baseDelta: 5, lines: ['Need a laugh before next lesson?', 'I have got a joke about detentions.', 'This corridor needs better comedy.'] },
+  { id: 'study', icon: '📚', label: 'Ask for study tips', baseDelta: 4, lines: ['Can you help me revise this topic?', 'What is your trick for remembering dates?', 'Any smart shortcut for homework?'] },
+  { id: 'gossip', icon: '🗣️', label: 'Share spicy gossip', baseDelta: 0, lines: ['Heard any wild rumours?', 'Want the latest staff room tea?', 'Someone is plotting chaos in maths.'] },
+  { id: 'tease', icon: '🙃', label: 'Light teasing', baseDelta: -2, lines: ['Bit slow in PE today, eh?', 'Still hiding from that pop quiz?', 'You call that stealth?'] },
+  { id: 'insult', icon: '😬', label: 'Throw an insult', baseDelta: -8, lines: ['You are all bark and no bite.', 'Your chat is pure detention bait.', 'Even the timetable is more interesting.'] },
+];
+
+function calculateStudentInteractionDelta(target, option) {
+  const traits = target.traits || {};
+  const warmth = ((traits.friendly || 50) - 50) / 10;
+  const humor = ((traits.funny || 50) - 50) / 14;
+  const temper = ((traits.aggression || 50) - 50) / 11;
+  const honor = ((traits.honor || 50) - 50) / 16;
+  const charismaBonus = (game.charisma - 50) / 7;
+  let delta = option.baseDelta + charismaBonus + warmth + honor;
+
+  if (option.id === 'joke') delta += humor - (traits.wisdom || 50) / 36;
+  if (option.id === 'gossip') delta += (traits.wit || 50) / 30 - honor - temper;
+  if (option.id === 'tease') delta += humor - temper * 2;
+  if (option.id === 'insult') delta -= temper + warmth;
+
+  const variance = (game.rng() * 5) - 2.5;
+  return Math.round(delta + variance);
+}
+
+function openInteractionPanelFor(target) {
+  if (!target || target.role === 'player' || target.role === 'teacher' || target.role === 'janitor' || target.role === 'nurse') return;
+  game.selectedInteractionTarget = target;
+  interactionPanelEl.hidden = false;
+  interactionTitleEl.textContent = `Talk to ${target.name}`;
+  interactionMetaEl.textContent = `Relationship: ${relationshipLabel(target.relationships?.Eric || 0)} • Reputation: ${Math.round(target.ericReputation || 0)}`;
+  interactionOptionsEl.innerHTML = '';
+
+  // Button list is generated from a single data table for fast UI updates.
+  for (const option of studentInteractions) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.title = `Try: ${option.label}. Outcome depends on ${target.name}'s traits and your charisma.`;
+    btn.textContent = `${option.icon} ${option.label}`;
+    btn.onclick = () => {
+      const line = option.lines[Math.floor(game.rng() * option.lines.length)];
+      const delta = calculateStudentInteractionDelta(target, option);
+      adjustEricRelationship(target, delta, `social:${option.id}`);
+      target.ericReputation = Math.max(-100, Math.min(100, (target.ericReputation || 0) + delta));
+      announce(`🗨️ Eric to ${target.name}: "${line}"`);
+      if (delta >= 4) announce(`🙂 ${target.name}: "Fair play, Eric."`, { source: target, range: 8, force: true });
+      else if (delta <= -4) announce(`😠 ${target.name}: "Not cool, Eric."`, { source: target, range: 8, force: true });
+      else announce(`😐 ${target.name}: "Hmm... maybe."`, { source: target, range: 8, force: true });
+      interactionMetaEl.textContent = `Relationship: ${relationshipLabel(target.relationships?.Eric || 0)} • Reputation: ${Math.round(target.ericReputation || 0)}`;
+    };
+    interactionOptionsEl.appendChild(btn);
+  }
+}
+
+function onCanvasClick(event) {
+  const rect = canvas.getBoundingClientRect();
+  const mouseX = event.clientX - rect.left;
+  const mouseY = event.clientY - rect.top;
+  const clicked = findHoveredEntityAtScreen(mouseX, mouseY);
+  if (!clicked) {
+    interactionPanelEl.hidden = true;
+    game.selectedInteractionTarget = null;
+    return;
+  }
+  if (distance(player, clicked) > 5.5) {
+    announce('💬 Move closer to chat with that student.');
+    return;
+  }
+  openInteractionPanelFor(clicked);
 }
 
 // -----------------------------------------------------------------------------
@@ -5014,6 +5183,7 @@ function loop(now) {
     checkSchoolExit();
     updateBladder(dt);
     maybeShameEric(now);
+    updateHygieneSocialAura(now);
     if (game.headmasterDetentionUntil > 0 && now >= game.headmasterDetentionUntil && !game.headmasterDismissAnnounced) {
       game.headmasterDismissAnnounced = true;
       game.headmasterDetentionUntil = 0;
@@ -5065,6 +5235,11 @@ toggleNamesBtn.onclick = () => {
 
 canvas.addEventListener('mousemove', updateEntityTooltip);
 canvas.addEventListener('mouseleave', hideEntityTooltip);
+canvas.addEventListener('click', onCanvasClick);
+closeInteractionPanelBtn.onclick = () => {
+  interactionPanelEl.hidden = true;
+  game.selectedInteractionTarget = null;
+};
 
 assignDailyDutyTeacher();
 announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
@@ -5073,6 +5248,7 @@ if (game.dutyTeacherName) {
 }
 updateMission();
 updateAutoStatus();
+updateCharismaHud();
 updateBladderHud();
 updateHygieneHud();
 updateWeatherHud();

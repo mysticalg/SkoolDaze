@@ -16,6 +16,7 @@
       <span id="floorStatus" title="Shows your current floor and its color cue.">🧭 Floor: Ground (Blue)</span>
       <span id="trouble">📝 Lines: 0</span>
       <span id="energy">⚡ Energy: 100</span>
+      <span id="charisma" title="Higher charisma helps social interactions land better.">🗣️ Charisma: 50</span>
       <span id="bladder" title="If this reaches full, Eric must reach the toilet quickly.">🚻 Bladder: 0%</span>
       <span id="hygiene" title="Low hygiene causes social shaming from students and staff.">🧼 Hygiene: 100%</span>
       <span id="autoStatus" title="Auto mode can be toggled with U or engages after idle time.">🤖 Auto: OFF</span>
@@ -35,6 +36,15 @@
     <section class="canvas-wrap">
       <canvas id="game" width="1280" height="700" aria-label="School game area"></canvas>
       <div id="entityTooltip" class="entity-tooltip" role="status" aria-live="polite" hidden></div>
+      <section id="interactionPanel" class="interaction-panel" hidden aria-live="polite">
+        <header>
+          <h3 id="interactionTitle">Student interaction</h3>
+          <button id="closeInteractionPanel" type="button" title="Close social interaction panel">✖</button>
+        </header>
+        <p id="interactionMeta"></p>
+        <div id="interactionOptions" class="interaction-options"></div>
+        <p id="interactionHint">💡 Click a nearby student to talk, joke, ask for help, or stir drama.</p>
+      </section>
     </section>
 
     <aside class="panel">
