@@ -77,6 +77,7 @@ const rooms = [
   { name: 'Art Room', x: 34, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
   { name: 'History', x: 60, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
   { name: 'Toilets', x: 8, y: 94, w: 20, h: 14, floor: 'ground', type: 'hall' },
+  { name: 'Janitor Room', x: 30, y: 94, w: 12, h: 14, floor: 'ground', type: 'hall' },
   { name: 'Assembly Hall', x: 44, y: 94, w: 40, h: 14, floor: 'ground', type: 'hall' },
   { name: 'P.E. Field', x: 90, y: 80, w: 70, h: 28, floor: 'ground', type: 'outdoor' },
   { name: 'Bike Sheds', x: 92, y: 94, w: 22, h: 12, floor: 'ground', type: 'outdoor' },
@@ -279,8 +280,15 @@ const personalities = {
   hero: { speed: 1.2, aggression: 0.2, diligence: 0.75, focus: 0.7 },
   weird: { speed: 1.18, aggression: 0.35, diligence: 0.45, focus: 0.4 },
   teacher: { speed: 1.22, aggression: 0.55, diligence: 1.0, focus: 1.0 },
+  janitor: { speed: 1.28, aggression: 0.05, diligence: 1.0, focus: 1.0 },
   player: { speed: 1.19, aggression: 0, diligence: 0, focus: 0 },
 };
+
+const JANITOR_IDLE_ROOM = 'Janitor Room';
+const LITTER_CLEANUP_DELAY_MS = 20000;
+const TOILET_DIRT_PER_USE = 4;
+const TOILET_MAX_DIRT = 100;
+const WEEKLY_SICK_DAY_INTERVAL = 5;
 
 const game = {
   timeMinutes: 8 * 60 + 20,
@@ -320,6 +328,10 @@ const game = {
   // Track anti-spam timings for board barks and late lines.
   lastBoardCalloutAt: 0,
   latePenaltyGiven: false,
+  dayCount: 1,
+  toiletDirt: 12,
+  weeklySickScheduledDay: WEEKLY_SICK_DAY_INTERVAL,
+  janitorTask: null,
 };
 
 let seatCounter = 0;
@@ -411,6 +423,9 @@ game.entities.push(
   }),
   mkEntity('Mr Boom', 'teacher', 112, 42, '#f7a6ff', {
     title: 'Music Teacher', strict: 0.6, attire: 'oldBrown', quotes: ['In tune, in line, in silence!'],
+  }),
+  mkEntity('Mr Mop', 'janitor', 36, 100, '#8ecae6', {
+    title: 'Janitor', attire: 'janitorOveralls', moustache: true, hair: 'spiky',
   }),
   mkEntity('Angelface', 'hero', 102, 88, '#ffd58e', { title: 'Handsome kid' }),
   mkEntity('Einstein', 'swot', 108, 87, '#8effd3', { title: 'Teacher pet', tattles: true }),
@@ -534,7 +549,8 @@ function entityFloor(entity) {
 
 function updateFloorStatus() {
   const meta = floorMeta[entityFloor(player)] || floorMeta.ground;
-  floorStatusEl.textContent = `🧭 Floor: ${meta.label} (${meta.color})`;
+  floorStatusEl.textContent = `🧭 Floor: ${meta.label} (${meta.color}) | 🚽 Dirt: ${Math.round(game.toiletDirt)}%`;
+  floorStatusEl.title = 'Toilets get dirtier as people use them. Mr Mop cleans them when they are grubby.';
 }
 
 function updateAutoStatus() {
@@ -839,6 +855,8 @@ function resetToSchoolMorning() {
   game.litter = [];
   game.playerCarryingTrash = false;
   game.playerHeldItem = null;
+  game.toiletDirt = Math.min(35, game.toiletDirt + 6);
+  game.janitorTask = null;
 
   const gate = roomByName('School Gates');
   let teacherIndex = 0;
@@ -855,6 +873,13 @@ function resetToSchoolMorning() {
       entity.arrivedForDay = true;
       entity.arrivalJoinMins = 0;
       entity.target = { ...pos };
+    } else if (entity.role === 'janitor') {
+      const room = roomCenter(JANITOR_IDLE_ROOM);
+      entity.x = room.x;
+      entity.y = room.y;
+      entity.arrivedForDay = true;
+      entity.arrivalJoinMins = 0;
+      entity.target = { ...room };
     } else {
       // Students appear at random moments during the 30-second arrival phase.
       entity.x = schoolExit.x + 2.2 + game.rng() * 2.2;
@@ -935,6 +960,7 @@ function updateBladder(dt) {
   if (entityRoom(player) === 'Toilets' && game.bladder >= 20) {
     game.bladder = 0;
     game.dailyToiletVisits += 1;
+    game.toiletDirt = Math.min(TOILET_MAX_DIRT, game.toiletDirt + TOILET_DIRT_PER_USE);
     game.warnedNeedToilet = false;
     announce('✅ Eric used the toilet in time.');
   }
@@ -1094,6 +1120,7 @@ function updateTodo() {
     `Use vending machines for snacks/drinks, then bin packaging`,
     `Use outside fountains (H2O) to lower bladder pressure`,
     `Throwing rubbish (V) can KO pupils but teachers punish witnesses`,
+    `Mr Mop cleans old litter after 20s and scrubs dirty toilets`,
     `Avoid teachers while bunking`,
   ];
   todoEl.innerHTML = todoItems.map((t) => `<li>${t}</li>`).join('');
@@ -1374,6 +1401,7 @@ function throwRubbish(attacker) {
     vy: -0.02,
     owner: attacker,
     kind: 'rubbish',
+    createdAt: performance.now(),
   });
 
   if (isPlayer) {
@@ -1705,6 +1733,12 @@ function teacherHomeRoom(teacherName) {
 }
 
 function chooseTarget(entity, currentPeriod) {
+  // Janitor idles in his room unless there is a cleanup callout.
+  if (entity.role === 'janitor') {
+    if (game.janitorTask) return { x: game.janitorTask.x, y: game.janitorTask.y };
+    return roomCenter(JANITOR_IDLE_ROOM);
+  }
+
   // High bladder urgency overrides normal timetable targets.
   if (entity.bladder >= 80) {
     return roomCenter('Toilets');
@@ -1772,6 +1806,7 @@ function updateNpcVitals(entity, dt, isRunning) {
 
   if (entityRoom(entity) === 'Toilets' && entity.bladder >= 15) {
     entity.bladder = 0;
+    game.toiletDirt = Math.min(TOILET_MAX_DIRT, game.toiletDirt + TOILET_DIRT_PER_USE * 0.55);
   }
 
   // School-day tuned stamina: normal walking causes light drain so pupils tire by lunch.
@@ -1790,6 +1825,73 @@ function updateNpcVitals(entity, dt, isRunning) {
 
   const drainRate = baseDrainPerSecond + (isRunning ? runningExtraDrainPerSecond : 0);
   entity.energy = Math.max(16, entity.energy - dtSeconds * drainRate);
+}
+
+
+function queueJanitorTask(task) {
+  // Single active janitor task keeps routing deterministic and cheap.
+  if (game.janitorTask) return;
+  game.janitorTask = {
+    type: task.type,
+    x: task.x,
+    y: task.y,
+    createdAt: performance.now(),
+    room: task.room || roomAtPosition(task)?.name || 'Corridor',
+  };
+  if (task.type === 'sick') {
+    announce('🤢 A student was sick on the floor. Mr Mop is hurrying over to clean it.');
+  }
+}
+
+function scheduleWeeklySickEvent() {
+  if (game.dayCount !== game.weeklySickScheduledDay) return;
+  const student = game.entities.find((entity) => entity.role !== 'teacher' && entity.role !== 'janitor' && entity !== player);
+  if (!student) return;
+  if (game.litter.some((item) => item.kind === 'sick')) return;
+
+  const mess = {
+    x: student.x,
+    y: student.y,
+    offender: student,
+    warned: true,
+    kind: 'sick',
+    droppedAt: performance.now(),
+  };
+  game.litter.push(mess);
+  queueJanitorTask({ type: 'sick', x: mess.x, y: mess.y, room: entityRoom(student) });
+  game.weeklySickScheduledDay += WEEKLY_SICK_DAY_INTERVAL;
+}
+
+function updateJanitorSystems(dt) {
+  const now = performance.now();
+
+  // Any litter older than 20 seconds gets escalated to the janitor.
+  const staleLitter = game.litter.find((item) => now - (item.droppedAt || now) >= LITTER_CLEANUP_DELAY_MS);
+  if (staleLitter) {
+    queueJanitorTask({ type: staleLitter.kind === 'sick' ? 'sick' : 'litter', x: staleLitter.x, y: staleLitter.y });
+  }
+
+  // Toilets grow dirtier with use and get cleaned by the janitor.
+  if (game.toiletDirt >= 45) {
+    const toilets = roomByName('Toilets');
+    queueJanitorTask({ type: 'toilet', x: toilets.x + toilets.w / 2, y: toilets.y + toilets.h / 2, room: 'Toilets' });
+  }
+
+  const janitor = game.entities.find((entity) => entity.role === 'janitor');
+  if (!janitor || !game.janitorTask) return;
+
+  // Let him "brush" when close and resolve the current cleanup target.
+  if (distance(janitor, game.janitorTask) < 1.5) {
+    janitor.writingUntil = now + 520;
+    if (game.janitorTask.type === 'toilet') {
+      game.toiletDirt = Math.max(0, game.toiletDirt - 70);
+      announce('🧼 Mr Mop scrubbed the toilets clean.');
+    } else {
+      game.litter = game.litter.filter((item) => distance(item, game.janitorTask) > 1.8);
+      announce(game.janitorTask.type === 'sick' ? '🧽 Mr Mop cleaned the sick mess.' : '🧹 Mr Mop brushed up old litter.');
+    }
+    game.janitorTask = null;
+  }
 }
 
 function pushStudentAsideForTeacher(teacher, student, dtSeconds) {
@@ -1827,7 +1929,7 @@ function updateAI(dt) {
     const dtSeconds = dt / 1000;
 
     // Keep students in supervised, staffed classrooms instead of empty rooms.
-    if (inLesson && entity.role !== 'teacher') {
+    if (inLesson && entity.role !== 'teacher' && entity.role !== 'janitor') {
       entity.lessonRoom = chooseLessonRoomForStudent(entity, current);
       entity.target = nearestFreeSeatInRoom(entity.lessonRoom, entity)
         || getSeatPosition(entity.lessonRoom, entity.seatIndex)
@@ -1844,7 +1946,7 @@ function updateAI(dt) {
     }
 
     // General student misbehaviour: keep rare and mostly outside lessons.
-    if (entity.role !== 'teacher' && !inLesson && supervised && game.rng() < 0.0016) {
+    if (entity.role !== 'teacher' && entity.role !== 'janitor' && !inLesson && supervised && game.rng() < 0.0016) {
       entity.mood = 'angry';
       entity.target = roomCenter(game.rng() < 0.5 ? 'P.E. Field' : 'Ground Corridor');
       announce(`😈 ${entity.name} started misbehaving in ${current.period}.`);
@@ -1893,18 +1995,18 @@ function updateAI(dt) {
     }
 
     // Students can buy food/drink at vending machines and then carry packaging.
-    if (entity.role !== 'teacher' && !entity.carryingTrash && current.mode === 'break' && game.rng() < 0.0018) {
+    if (entity.role !== 'teacher' && entity.role !== 'janitor' && !entity.carryingTrash && current.mode === 'break' && game.rng() < 0.0018) {
       entity.carryingTrash = true;
       entity.target = nearestPoint(entity, vendingMachines);
     }
 
     // Most students bin litter; some occasionally drop it and get told off.
-    if (entity.role !== 'teacher' && entity.carryingTrash && !inLesson) {
+    if (entity.role !== 'teacher' && entity.role !== 'janitor' && entity.carryingTrash && !inLesson) {
       const nearestBin = nearestPoint(entity, trashCans);
       const littering = game.rng() < 0.001;
       if (littering) {
         entity.carryingTrash = false;
-        entity.assignedWaste = { x: entity.x, y: entity.y, offender: entity, warned: false };
+        entity.assignedWaste = { x: entity.x, y: entity.y, offender: entity, warned: false, kind: 'rubbish', droppedAt: performance.now() };
         game.litter.push(entity.assignedWaste);
       } else if (nearestBin && distance(entity, nearestBin) < 1.5) {
         entity.carryingTrash = false;
@@ -1915,7 +2017,7 @@ function updateAI(dt) {
     }
 
     if (entity.role === 'teacher') {
-      const seenLitter = game.litter.find((item) => !item.warned && distance(entity, item) < 2.1 && item.offender);
+      const seenLitter = game.litter.find((item) => item.kind !== 'sick' && !item.warned && distance(entity, item) < 2.1 && item.offender);
       if (seenLitter) {
         seenLitter.warned = true;
         seenLitter.offender.carryingTrash = true;
@@ -2115,7 +2217,7 @@ function updatePellets(dt) {
             knockout(entity, pellet.owner);
             entity.mood = 'furious';
           }
-          game.litter.push({ x: entity.x, y: entity.y, offender: pellet.owner, warned: false });
+          game.litter.push({ x: entity.x, y: entity.y, offender: pellet.owner, warned: false, kind: 'rubbish', droppedAt: performance.now() });
           if (pellet.owner === player) {
             const witness = findWitnessingTeacher(player, 6.2);
             if (witness) {
@@ -2137,7 +2239,7 @@ function updatePellets(dt) {
 
     if (pellet.x < 0 || pellet.x > WORLD.w || pellet.y > WORLD.h) {
       if (pellet.kind === 'rubbish') {
-        game.litter.push({ x: Math.max(0, Math.min(WORLD.w, pellet.x)), y: Math.max(0, Math.min(WORLD.h, pellet.y)), offender: pellet.owner, warned: false });
+        game.litter.push({ x: Math.max(0, Math.min(WORLD.w, pellet.x)), y: Math.max(0, Math.min(WORLD.h, pellet.y)), offender: pellet.owner, warned: false, kind: 'rubbish', droppedAt: performance.now() });
       }
       pellet.dead = true;
     }
@@ -2227,6 +2329,7 @@ function checkSchoolExit() {
   if (player.x >= schoolExit.x && player.y >= schoolExit.yMin && player.y <= schoolExit.yMax) {
     if (current.mode === 'home') {
       announce('✅ Eric leaves at home time. School day complete.');
+      game.dayCount += 1;
       resetToSchoolMorning();
       return;
     }
@@ -2499,7 +2602,7 @@ function drawWorld() {
 
   for (const waste of game.litter) {
     const p = worldToScreen(waste.x, waste.y);
-    ctx.fillStyle = '#f4a261';
+    ctx.fillStyle = waste.kind === 'sick' ? '#8ac926' : '#f4a261';
     ctx.fillRect(p.sx - 3, p.sy - 2, 6, 4);
   }
 
@@ -2564,6 +2667,7 @@ function drawEntities() {
     const body =
       entity.role === 'player' ? '#ffca3a'
       : entity.role === 'teacher' ? '#4cc9f0'
+      : entity.role === 'janitor' ? '#f8f9fa'
       : entity.role === 'bully' ? '#f94144'
       : entity.role === 'swot' ? '#43aa8b'
       : entity.role === 'weird' ? '#9d4edd'
@@ -2703,6 +2807,29 @@ function drawEntities() {
           const caneReach = isPunching ? 6 : 0;
           const stickX = entity.facing >= 0 ? px + 11 + caneReach : px - 13 - caneReach;
           ctx.fillRect(stickX, py - 16 + bob, 2, 14);
+        }
+      }
+
+
+      if (entity.role === 'janitor') {
+        // Janitor outfit: white overalls + blue jeans + spiky hair + moustache.
+        ctx.fillStyle = '#f8f9fa';
+        ctx.fillRect(px - 9, py - 21 + bob, 18, 10);
+        ctx.fillStyle = '#3a86ff';
+        ctx.fillRect(px - 8, py - 11 + bob, 16, 5);
+        ctx.fillStyle = '#2f1b12';
+        ctx.fillRect(px - 4, py - 17 + bob, 8, 1);
+        ctx.fillRect(px - 7, py - 26 + bob, 2, 3);
+        ctx.fillRect(px - 3, py - 27 + bob, 2, 4);
+        ctx.fillRect(px + 1, py - 27 + bob, 2, 4);
+        ctx.fillRect(px + 5, py - 26 + bob, 2, 3);
+
+        if (game.janitorTask) {
+          const brushX = entity.facing >= 0 ? px + 11 : px - 13;
+          ctx.fillStyle = '#8d6e63';
+          ctx.fillRect(brushX, py - 16 + bob, 2, 11);
+          ctx.fillStyle = '#f2cc8f';
+          ctx.fillRect(brushX - 2, py - 6 + bob, 6, 2);
         }
       }
     }
@@ -2962,6 +3089,8 @@ function loop(now) {
     updateAI(dt);
     updateBoardWriting(dt);
     updatePellets(dt);
+    scheduleWeeklySickEvent();
+    updateJanitorSystems(dt);
     updateSchedule(dt);
     checkSchoolExit();
     updateBladder(dt);
