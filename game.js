@@ -402,6 +402,8 @@ const personalities = {
   hero: { speed: 1.2, aggression: 0.2, diligence: 0.75, focus: 0.7 },
   weird: { speed: 1.18, aggression: 0.35, diligence: 0.45, focus: 0.4 },
   teacher: { speed: 1.22, aggression: 0.55, diligence: 1.0, focus: 1.0 },
+  // Lunchtime-only supervisor who keeps the playground calm.
+  dinnerLady: { speed: 1.2, aggression: 0.45, diligence: 1.0, focus: 0.95 },
   janitor: { speed: 1.28, aggression: 0.05, diligence: 1.0, focus: 1.0 },
   nurse: { speed: 1.24, aggression: 0.06, diligence: 1.0, focus: 1.0 },
   player: { speed: 1.19, aggression: 0, diligence: 0, focus: 0 },
@@ -859,6 +861,8 @@ const game = {
   dutyTeacherName: null,
   dutyPatrolIndex: -1,
   lastDutyPatrolAt: 0,
+  // Dinner lady lunchtime behaviour state for field supervision + interventions.
+  dinnerLadyLastWhistleAt: 0,
   weather: 'sunny',
   weatherWeek: 1,
   weatherFx: [],
@@ -1089,6 +1093,11 @@ game.entities.push(
   mkEntity('Mr Mop', 'janitor', 36, 100, '#8ecae6', {
     title: 'Janitor', attire: 'janitorOveralls', moustache: true, hair: 'spiky',
     traitOverrides: { friendly: 71, wisdom: 74, honor: 76, discipline: 83 },
+  }),
+  mkEntity('Dinner Lady Dot', 'dinnerLady', 116, 88, '#ffcad4', {
+    title: 'Dinner Supervisor', attire: 'dinnerLady', whistle: true,
+    quotes: ['No rough play on my watch.', 'Spread out and calm down.'],
+    traitOverrides: { discipline: 92, wisdom: 79, friendly: 66, honor: 84, aggression: 42 },
   }),
 );
 
@@ -3503,6 +3512,43 @@ function assignDailyDutyTeacher() {
   game.lastDutyPatrolAt = 0;
 }
 
+function dinnerLadyEntity() {
+  return game.entities.find((entity) => entity.role === 'dinnerLady') || null;
+}
+
+function isLunchtimePeriod(period = schedule[game.periodIndex]) {
+  return period?.period === 'Lunch Break';
+}
+
+function dinnerLadyCanObserve(dinnerLady) {
+  if (!dinnerLady || dinnerLady.knockedUntil > performance.now()) return false;
+  if (!isLunchtimePeriod()) return false;
+  return entityRoom(dinnerLady) === 'P.E. Field' && !isTeacherBackTurned(dinnerLady);
+}
+
+function calmNearbyStudents(observer, radius = 8.5, movementScale = 0.32) {
+  for (const student of game.entities) {
+    if (!isStudentCharacter(student) || student === player) continue;
+    if (distance(observer, student) > radius) continue;
+    student.mood = 'calm';
+    student.vx *= movementScale;
+    student.vy *= movementScale;
+  }
+}
+
+function dragStudentOffFieldToHeadmaster(dinnerLady, student) {
+  const draggedOffFieldX = 88.7;
+  const draggedOffFieldY = 86.4;
+  student.x = draggedOffFieldX;
+  student.y = draggedOffFieldY;
+  student.vx = 0;
+  student.vy = 0;
+  student.target = roomCenter('Headmaster Office');
+  announce(`🚨 ${dinnerLady.name} dragged ${student.name} off the field to the Headmaster.`);
+  sendEntityToHeadmaster(student, 'dragged from field by dinner lady');
+  if (student === player) addLines(25, 'dragged to Headmaster by dinner lady');
+}
+
 function dutyTeacherBreakTarget(now = performance.now()) {
   // Duty teacher alternates between field and classrooms to keep break-time supervised.
   const patrolRooms = ['P.E. Field', 'Maths', 'English', 'Science Lab', 'Geography', 'Art Room'];
@@ -3544,7 +3590,7 @@ function syncComputerStations() {
   }
 
   for (const entity of game.entities) {
-    if (entity.role === 'teacher' || entity.role === 'janitor' || entity.role === 'nurse') continue;
+    if (entity.role === 'teacher' || entity.role === 'janitor' || entity.role === 'nurse' || entity.role === 'dinnerLady') continue;
     if (entityRoom(entity) !== 'Computer Room') continue;
     const station = nearestComputerStation(entity);
     if (!station || distance(entity, station) > 2.2) continue;
@@ -3567,6 +3613,12 @@ function chooseTarget(entity, currentPeriod) {
       ? game.entities.find((candidate) => candidate.name === emergencyName)
       : null;
     return patient ? { x: patient.x, y: patient.y } : roomCenter('Medical Bay');
+  }
+
+  if (entity.role === 'dinnerLady') {
+    // Dinner lady is a lunchtime-only field supervisor; otherwise she waits inside.
+    if (isLunchtimePeriod(currentPeriod)) return roomCenter('P.E. Field');
+    return roomCenter('Staff Room');
   }
 
   // High bladder urgency overrides normal timetable targets.
@@ -3849,8 +3901,10 @@ function updateAI(dt) {
 
     const inLesson = isSupervisedPeriod(current);
     const dtSeconds = dt / 1000;
-    const isStudent = entity.role !== 'teacher' && entity.role !== 'janitor' && entity.role !== 'nurse';
+    const isStudent = entity.role !== 'teacher' && entity.role !== 'janitor' && entity.role !== 'nurse' && entity.role !== 'dinnerLady';
     const isOutside = ['P.E. Field', 'School Gates', 'Bike Sheds'].includes(entityRoom(entity));
+    const lunchDutyLady = dinnerLadyEntity();
+    const dinnerLadyWatchingField = dinnerLadyCanObserve(lunchDutyLady);
 
     if (isStudent && entity.displacedFromSeatUntil && performance.now() < entity.displacedFromSeatUntil) {
       entity.target = entity.displacedSeatPos || { x: entity.x, y: entity.y };
@@ -3905,7 +3959,7 @@ function updateAI(dt) {
       const isAssignedTeacher = !assignedTeacherName || entity.name === assignedTeacherName;
       const destinationRoom = isAssignedTeacher ? current.room : teacherHomeRoom(entity.name);
       entity.target = teacherBoardSpot(destinationRoom);
-    } else if (entity.role === 'nurse') {
+    } else if (entity.role === 'nurse' || entity.role === 'dinnerLady') {
       entity.lessonRoom = null;
       entity.target = chooseTarget(entity, current);
     } else if (current.mode === 'break' && entity.role === 'teacher') {
@@ -4083,8 +4137,11 @@ function updateAI(dt) {
     }
 
     // Bully behaviour is period-aware so mornings stay mostly calm.
-    if (entity.role === 'bully' && game.rng() < bullyFightChance(current)) {
-      meleeAttack(entity);
+    if (entity.role === 'bully') {
+      const supervisionSuppression = dinnerLadyWatchingField && entityRoom(entity) === 'P.E. Field' ? 0.22 : 1;
+      if (game.rng() < bullyFightChance(current) * supervisionSuppression) {
+        meleeAttack(entity);
+      }
     }
 
     const teacherWatchingBully = findWitnessingTeacher(entity, 6.2);
@@ -4103,7 +4160,7 @@ function updateAI(dt) {
     }
 
     // Break-time social bubbles make playground time feel alive.
-    if (current.mode === 'break' && isStudent && game.rng() < 0.016) {
+    if (current.mode === 'break' && isStudent && (!dinnerLadyWatchingField || entityRoom(entity) !== 'P.E. Field') && game.rng() < 0.016) {
       ensureDialogueSetup(entity);
       const recent = randomHistorySnippet();
       if (recent && game.rng() < 0.52) {
@@ -4146,13 +4203,13 @@ function updateAI(dt) {
     }
 
     // Students can buy food/drink at vending machines and then carry packaging.
-    if (entity.role !== 'teacher' && entity.role !== 'janitor' && !entity.carryingTrash && current.mode === 'break' && game.rng() < 0.0018) {
+    if (entity.role !== 'teacher' && entity.role !== 'janitor' && entity.role !== 'dinnerLady' && !entity.carryingTrash && current.mode === 'break' && game.rng() < 0.0018) {
       entity.carryingTrash = true;
       entity.target = nearestPoint(entity, vendingMachines);
     }
 
     // Most students bin litter; some occasionally drop it and get told off.
-    if (entity.role !== 'teacher' && entity.role !== 'janitor' && entity.carryingTrash && !inLesson) {
+    if (entity.role !== 'teacher' && entity.role !== 'janitor' && entity.role !== 'dinnerLady' && entity.carryingTrash && !inLesson) {
       const nearestBin = nearestPoint(entity, trashCans);
       const littering = game.rng() < 0.001;
       if (littering) {
@@ -4164,6 +4221,43 @@ function updateAI(dt) {
         entity.assignedWaste = null;
       } else {
         entity.target = nearestBin;
+      }
+    }
+
+    if (entity.role === 'dinnerLady') {
+      // Dinner lady whistle calms chatter/movement spikes on the lunchtime field.
+      if (isLunchtimePeriod(current) && entityRoom(entity) === 'P.E. Field') {
+        // Briefly looking away creates small windows where fights can flare back up.
+        if (entity.writingUntil < performance.now() && game.rng() < 0.0012) {
+          entity.writingUntil = performance.now() + 1400;
+        }
+
+        if (performance.now() - game.dinnerLadyLastWhistleAt > 11000 && game.rng() < 0.0052) {
+          game.dinnerLadyLastWhistleAt = performance.now();
+          say(entity, '📯 Calm down, you lot — spread out and no fighting!', { durationMs: 3200 });
+          calmNearbyStudents(entity, 10.5, 0.2);
+          game.lessonQuietUntil = performance.now() + 3600;
+          game.lessonNoiseLevel = Math.max(0, game.lessonNoiseLevel - 0.35);
+        }
+
+        // Close-range intervention: drag one rowdy pupil to the Headmaster Office.
+        const rowdy = game.entities.find((candidate) => (
+          candidate !== entity
+          && isStudentCharacter(candidate)
+          && entityRoom(candidate) === 'P.E. Field'
+          && candidate.knockedUntil < performance.now()
+          && (candidate.role === 'bully' || candidate.mood === 'angry' || Math.abs(candidate.vx) + Math.abs(candidate.vy) > 0.42)
+          && distance(entity, candidate) < 1.7
+        ));
+
+        if (rowdy && game.rng() < 0.02) {
+          dragStudentOffFieldToHeadmaster(entity, rowdy);
+          continue;
+        }
+
+        if (dinnerLadyWatchingField) {
+          calmNearbyStudents(entity, 7.8, 0.42);
+        }
       }
     }
 
@@ -5006,6 +5100,7 @@ function drawEntities() {
       : entity.role === 'teacher' ? '#4cc9f0'
       : entity.role === 'janitor' ? '#f8f9fa'
       : entity.role === 'nurse' ? '#ff8fab'
+      : entity.role === 'dinnerLady' ? '#ffcad4'
       : entity.role === 'bully' ? '#f94144'
       : entity.role === 'swot' ? '#43aa8b'
       : entity.role === 'weird' ? '#9d4edd'
@@ -5225,6 +5320,16 @@ function drawEntities() {
       }
 
 
+      if (entity.role === 'dinnerLady') {
+        // Dinner lady: apron silhouette + whistle so role reads instantly.
+        ctx.fillStyle = '#f8bbd0';
+        ctx.fillRect(px - 9, py - 21 + bob, 18, 15);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(px - 6, py - 17 + bob, 12, 10);
+        ctx.fillStyle = '#7b2cbf';
+        ctx.fillRect(px - 1, py - 14 + bob, 2, 2);
+      }
+
       if (entity.role === 'janitor') {
         // Janitor outfit: white overalls + blue jeans + spiky hair + moustache.
         ctx.fillStyle = '#f8f9fa';
@@ -5417,6 +5522,11 @@ function drawMiniMap() {
       ctx.fillRect(mapX + npc.x * scaleX - 1.8, mapY + npc.y * scaleY - 1.8, 3.6, 3.6);
       continue;
     }
+    if (npc.role === 'dinnerLady') {
+      ctx.fillStyle = '#ffcad4';
+      ctx.fillRect(mapX + npc.x * scaleX - 1.8, mapY + npc.y * scaleY - 1.8, 3.6, 3.6);
+      continue;
+    }
     ctx.fillStyle = npc.seated ? '#9ae6b4' : '#ffd166';
     ctx.beginPath();
     ctx.arc(mapX + npc.x * scaleX, mapY + npc.y * scaleY, 1.8, 0, Math.PI * 2);
@@ -5427,7 +5537,7 @@ function drawMiniMap() {
   ctx.font = 'bold 9px monospace';
   ctx.fillText('MINI MAP', mapX + 6, mapY + 12);
   ctx.font = '8px monospace';
-  ctx.fillText('● Class ■ Shield ● Toilet ○ You • Students ■ Teachers', mapX + 6, mapY + mapH - 6);
+  ctx.fillText('● Class ■ Shield ● Toilet ○ You • Students ■ Teachers ■ Dinner Lady', mapX + 6, mapY + mapH - 6);
 }
 
 function drawStatusOverlay() {
@@ -5508,7 +5618,7 @@ function updateEntityTooltip(event) {
   }
 
   game.hoveredEntity = hovered;
-  const role = hovered.role === 'player' ? 'You' : hovered.role;
+  const role = hovered.role === 'player' ? 'You' : hovered.role === 'dinnerLady' ? 'Dinner lady' : hovered.role;
   const room = entityRoom(hovered);
   const pocketItems = (hovered.inventory || []).slice(0, 3).join(', ');
   const moreItems = (hovered.inventory || []).length > 3 ? ` +${hovered.inventory.length - 3}` : '';
@@ -5546,7 +5656,7 @@ const staffInteractions = [
 
 function interactionOptionsFor(target) {
   if (!target || target.role === 'player') return [];
-  if (target.role === 'teacher' || target.role === 'janitor' || target.role === 'nurse') return staffInteractions;
+  if (target.role === 'teacher' || target.role === 'janitor' || target.role === 'nurse' || target.role === 'dinnerLady') return staffInteractions;
   return studentInteractions;
 }
 
