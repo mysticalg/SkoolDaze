@@ -234,7 +234,8 @@ const personalities = {
 const game = {
   timeMinutes: 8 * 60 + 20,
   // Minutes advanced per real-time second; tuned so lesson travel windows are fair.
-  timeScale: 0.06,
+  // Slightly faster school clock so periods progress at a snappier pace.
+  timeScale: 0.09,
   periodIndex: 0,
   periodElapsed: 0,
   periodHoldMinutes: 0,
@@ -304,6 +305,10 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     // Arrival staging: students appear over the first 10 seconds, teachers are ready immediately.
     arrivedForDay: true,
     arrivalJoinMins: 0,
+    // Movement watchdog helps recover teachers from rare wall-edge stalls.
+    stuckSeconds: 0,
+    lastX: x,
+    lastY: y,
   };
 }
 
@@ -430,7 +435,13 @@ function nearestThrowableProp(entity) {
 }
 
 function entityRoom(entity) {
-  return rooms.find((r) => entity.x > r.x && entity.x < r.x + r.w && entity.y > r.y && entity.y < r.y + r.h)?.name || 'Corridor';
+  const eps = 0.12;
+  return rooms.find((r) => (
+    entity.x >= r.x + eps
+    && entity.x <= r.x + r.w - eps
+    && entity.y >= r.y + eps
+    && entity.y <= r.y + r.h - eps
+  ))?.name || 'Corridor';
 }
 
 function entityFloor(entity) {
@@ -507,7 +518,13 @@ function chooseAutoDestination() {
 }
 
 function roomAtPosition(pos) {
-  return rooms.find((r) => pos.x > r.x && pos.x < r.x + r.w && pos.y > r.y && pos.y < r.y + r.h) || null;
+  const eps = 0.12;
+  return rooms.find((r) => (
+    pos.x >= r.x + eps
+    && pos.x <= r.x + r.w - eps
+    && pos.y >= r.y + eps
+    && pos.y <= r.y + r.h - eps
+  )) || null;
 }
 
 function roomDoorway(room) {
@@ -518,7 +535,8 @@ function roomDoorway(room) {
   const useTop = topDist <= bottomDist;
   return {
     x: room.x + room.w / 2,
-    y: useTop ? room.y + 0.45 : room.y + room.h - 0.45,
+    // Keep doorway waypoints deeper inside the room so NPCs do not jitter on wall edges.
+    y: useTop ? room.y + 1.1 : room.y + room.h - 1.1,
   };
 }
 
@@ -609,6 +627,9 @@ function getRoomSeatLayout(roomName) {
     seats,
     boardX: room.x + room.w / 2,
     boardY: room.y + 2.2,
+    // Each classroom gets a dedicated teacher station at the front.
+    teacherDesk: { x: room.x + room.w / 2, y: room.y + 3.4 },
+    teacherSeat: { x: room.x + room.w / 2, y: room.y + 4.4 },
   };
   roomSeatCache.set(roomName, layout);
   return layout;
@@ -619,6 +640,11 @@ function getSeatPosition(roomName, seatIndex) {
   if (!layout || !layout.seats.length) return null;
   const slot = seatIndex % layout.seats.length;
   return layout.seats[slot];
+}
+
+function getTeacherSeatPosition(roomName) {
+  const layout = getRoomSeatLayout(roomName);
+  return layout?.teacherSeat || roomCenter(roomName);
 }
 
 function resetToSchoolMorning() {
@@ -1180,6 +1206,7 @@ function interact() {
   if (
     teacherNearby
     && entityRoom(player) === current.room
+    && isAssignedTeacherSeatedForPeriod(current)
     && !game.quizActive
     // Slower questioning cadence so lessons feel less spammy.
     && now - teacherNearby.lastQuizAt > 45000
@@ -1215,12 +1242,21 @@ function updateMission() {
 // AI systems
 // -----------------------------------------------------------------------------
 function teacherBoardSpot(periodRoom) {
-  const board = blackboards.find((candidate) => candidate.room === periodRoom);
-  if (board) {
-    return { x: board.x - 1.1, y: board.y + 0.2, room: periodRoom };
-  }
-  const fallback = roomCenter(periodRoom);
-  return { ...fallback, room: periodRoom };
+  // Teachers now run lessons from their own desk/chair station.
+  const teacherSeat = getTeacherSeatPosition(periodRoom);
+  return { ...teacherSeat, room: periodRoom };
+}
+
+function isAssignedTeacherSeatedForPeriod(currentPeriod = schedule[game.periodIndex]) {
+  if (currentPeriod.mode !== 'lesson' && currentPeriod.period !== 'Tutorial') return true;
+  const assignedTeacherName = assignedTeacherForRoom(currentPeriod.room);
+  return game.entities.some((entity) => (
+    entity.role === 'teacher'
+    && (!assignedTeacherName || entity.name === assignedTeacherName)
+    && entity.isSeated
+    && entity.seatedRoom === currentPeriod.room
+    && entity.knockedUntil < performance.now()
+  ));
 }
 
 function assignedTeacherForRoom(roomName) {
@@ -1471,6 +1507,15 @@ function updateAI(dt) {
         const gapX = entity.x - other.x;
         const gapY = entity.y - other.y;
         const gap = Math.hypot(gapX, gapY) || 0.001;
+
+        // Teachers get deterministic pathing: they move through crowds while students
+        // are displaced, instead of staff being deflected into walls/doorway loops.
+        if (entity.role === 'teacher') {
+          // Staff can phase through crowds/chairs so they reliably reach desks.
+          if (other.role !== 'teacher') pushStudentAsideForTeacher(entity, other, dt / 1000);
+          continue;
+        }
+
         if (gap < 1.45) {
           // Teachers keep priority: students yield more, teachers yield less.
           let push = ((1.45 - gap) / 1.45) * 0.46;
@@ -1478,11 +1523,6 @@ function updateAI(dt) {
           if (entity.role === 'teacher' && other.role !== 'teacher') push *= 0.28;
           dx += (gapX / gap) * push;
           dy += (gapY / gap) * push;
-        }
-
-        // Teachers can physically clear students blocking their path.
-        if (entity.role === 'teacher' && other.role !== 'teacher') {
-          pushStudentAsideForTeacher(entity, other, dt / 1000);
         }
       }
     }
@@ -1499,21 +1539,25 @@ function updateAI(dt) {
       continue;
     }
 
-    const seatedTarget = inLesson && entity.role !== 'teacher' && entityRoom(entity) === current.room;
-    entity.isSeated = seatedTarget && len < 0.55;
-    entity.seatedRoom = entity.isSeated ? current.room : null;
-
     const expectedRoom = entity.role === 'teacher'
       ? (assignedTeacherName && entity.name === assignedTeacherName ? current.room : teacherHomeRoom(entity.name))
       : current.room;
-    const lateForClass = supervised && teacherPresent && entityRoom(entity) !== expectedRoom;
+
+    // During lessons all teachers should be seated in their designated classroom,
+    // not just the currently assigned teacher in the active period room.
+    const seatedTarget = inLesson && entityRoom(entity) === expectedRoom;
+    entity.isSeated = seatedTarget && len < 0.55;
+    entity.seatedRoom = entity.isSeated ? expectedRoom : null;
+    const lateForClass = entity.role === 'teacher'
+      ? (inLesson && entityRoom(entity) !== expectedRoom)
+      : (supervised && teacherPresent && entityRoom(entity) !== expectedRoom);
     const canRun = entity.energy > 20;
     entity.running = lateForClass && canRun;
-    const runBoost = entity.running ? 1.72 : 1;
+    const runBoost = entity.running ? 1.45 : 1;
     // Teachers are intentionally quicker than students to keep lessons moving.
-    const hallwayBoost = entity.role === 'teacher' ? 3.95 : 3.3;
+    const hallwayBoost = entity.role === 'teacher' ? 3.1 : 3.3;
     // Staff get an extra catch-up boost so lessons do not appear to start without a teacher.
-    const staffCatchupBoost = entity.role === 'teacher' && lateForClass ? 1.75 : 1;
+    const staffCatchupBoost = entity.role === 'teacher' && lateForClass ? 1.35 : 1;
     const speed = entity.personality.speed * (entity.energy / 100) * hallwayBoost * runBoost * staffCatchupBoost;
 
     entity.vx = entity.isSeated ? 0 : (dx / len) * speed;
@@ -1521,6 +1565,29 @@ function updateAI(dt) {
 
     entity.x += entity.vx * (dt / 1000);
     entity.y += entity.vy * (dt / 1000);
+
+    constrain(entity);
+
+    // Anti-stuck recovery: if a teacher is late and barely moving for several
+    // seconds, snap to a clean waypoint toward their expected room.
+    const moved = Math.hypot(entity.x - entity.lastX, entity.y - entity.lastY);
+    entity.lastX = entity.x;
+    entity.lastY = entity.y;
+    if (entity.role === 'teacher' && lateForClass && distance(entity, entity.target) > 2.1) {
+      entity.stuckSeconds = moved < 0.06 ? (entity.stuckSeconds + (dt / 1000)) : 0;
+      if (entity.stuckSeconds > 2.4) {
+        const rescueRoom = roomByName(expectedRoom);
+        const rescueDoor = roomDoorway(rescueRoom);
+        if (rescueDoor) {
+          entity.x = rescueDoor.x;
+          entity.y = rescueDoor.y;
+          entity.target = teacherBoardSpot(expectedRoom);
+        }
+        entity.stuckSeconds = 0;
+      }
+    } else {
+      entity.stuckSeconds = 0;
+    }
 
     constrain(entity);
     updateNpcVitals(entity, dt, entity.running);
@@ -1596,9 +1663,11 @@ function updateSchedule(dt) {
   const current = schedule[game.periodIndex];
   const deltaMins = (dt / 1000) * game.timeScale;
   const teacherPresent = isTeacherPresentForPeriod(current);
-  const periodWaiting = (current.mode === 'lesson' || current.period === 'Tutorial') && !teacherPresent;
+  const teacherSeatedForLesson = isAssignedTeacherSeatedForPeriod(current);
+  const periodWaiting = (current.mode === 'lesson' || current.period === 'Tutorial')
+    && (!teacherPresent || !teacherSeatedForLesson);
 
-  // Lessons wait briefly for the teacher, then continue so the school day never soft-locks.
+  // Lessons wait briefly for the teacher to arrive and sit, then continue to avoid soft-locks.
   if (periodWaiting) {
     game.periodHoldMinutes += deltaMins;
   } else {
@@ -1611,7 +1680,7 @@ function updateSchedule(dt) {
     game.periodElapsed += deltaMins;
   }
   if (forceContinue && game.periodHoldMinutes - deltaMins < maxTeacherWaitMins) {
-    announce(`⏱️ ${current.period} resumed after waiting for staff to arrive.`);
+    announce(`⏱️ ${current.period} resumed after waiting for teacher to get seated.`);
   }
   game.timeMinutes += deltaMins;
 
@@ -1648,7 +1717,7 @@ function updateSchedule(dt) {
   }
 
   clockEl.textContent = `🕘 Time: ${formatTime(game.timeMinutes)}`;
-  periodEl.textContent = `🔔 Period: ${current.period}${periodWaiting ? ' (waiting for teacher)' : ''}`;
+  periodEl.textContent = `🔔 Period: ${current.period}${periodWaiting ? ' (waiting for teacher to sit)' : ''}`;
   roomTargetEl.textContent = `📍 Target: ${current.room}`;
   updateFloorStatus();
 }
@@ -1817,6 +1886,21 @@ function drawWorld() {
           ctx.fillRect(seatPos.sx - 3, seatPos.sy, 2, 2);
           ctx.fillRect(seatPos.sx + 1, seatPos.sy, 2, 2);
         }
+
+        // Teacher furniture is always present so every room can run lessons.
+        const teacherDesk = worldToScreen(layout.teacherDesk.x, layout.teacherDesk.y);
+        const teacherChair = worldToScreen(layout.teacherSeat.x, layout.teacherSeat.y);
+        // Wider teacher desk stands out visually from pupil desks.
+        ctx.fillStyle = '#7a4a2a';
+        ctx.fillRect(teacherDesk.sx - 8, teacherDesk.sy - 5, 16, 5);
+        ctx.fillStyle = '#4f2f1c';
+        ctx.fillRect(teacherDesk.sx - 8, teacherDesk.sy, 2, 3);
+        ctx.fillRect(teacherDesk.sx + 6, teacherDesk.sy, 2, 3);
+        // Teacher chair tucked behind desk for seated lesson state.
+        ctx.fillStyle = '#2f4868';
+        ctx.fillRect(teacherChair.sx - 4, teacherChair.sy + 1, 8, 2);
+        ctx.fillRect(teacherChair.sx - 4, teacherChair.sy - 1, 2, 2);
+        ctx.fillRect(teacherChair.sx + 2, teacherChair.sy - 1, 2, 2);
       }
     }
 
@@ -2403,6 +2487,21 @@ window.__skoolDazeDebug = {
     playerRoom: entityRoom(player),
     playerSeated: player.isSeated,
     lines: game.lines,
+    // Teacher status is exposed for automated movement/seating validation.
+    assignedTeacher: assignedTeacherForRoom(schedule[game.periodIndex].room),
+    teachers: game.entities
+      .filter((entity) => entity.role === 'teacher')
+      .map((entity) => ({
+        name: entity.name,
+        room: entityRoom(entity),
+        seated: entity.isSeated,
+        seatedRoom: entity.seatedRoom,
+        targetRoom: entity.target ? (roomAtPosition(entity.target)?.name || null) : null,
+        targetX: entity.target ? Number(entity.target.x.toFixed(2)) : null,
+        targetY: entity.target ? Number(entity.target.y.toFixed(2)) : null,
+        x: Number(entity.x.toFixed(2)),
+        y: Number(entity.y.toFixed(2)),
+      })),
   }),
   setTimeScale: (value) => {
     if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
