@@ -63,6 +63,7 @@ const rooms = [
   { name: 'Middle Corridor', x: 4, y: 50, w: 160, h: 4, floor: 'middle', type: 'corridor' },
   { name: 'Maths', x: 8, y: 38, w: 30, h: 12, floor: 'middle', type: 'classroom' },
   { name: 'English', x: 44, y: 38, w: 24, h: 12, floor: 'middle', type: 'classroom' },
+  { name: 'Headmaster Office', x: 74, y: 33, w: 24, h: 5, floor: 'middle', type: 'office' },
   { name: 'Staff Room', x: 74, y: 38, w: 24, h: 12, floor: 'middle', type: 'classroom' },
   { name: 'Music Room', x: 104, y: 38, w: 24, h: 12, floor: 'middle', type: 'classroom' },
   { name: 'Gym', x: 134, y: 38, w: 26, h: 12, floor: 'middle', type: 'hall' },
@@ -99,6 +100,21 @@ const blackboards = [
   { room: 'Art Room', x: 46, y: 83, text: '' },
   { room: 'History', x: 74, y: 83, text: '' },
   { room: 'Assembly Hall', x: 65, y: 97, text: '' },
+  { room: 'Headmaster Office', x: 86, y: 35, text: 'DETENTION REGISTER' },
+];
+
+// Themed classroom props that can be picked up and thrown in classic prank style.
+const classroomItems = [
+  { room: 'Art Room', x: 39, y: 87, kind: 'paint pot', color: '#ef476f', throwable: true },
+  { room: 'Art Room', x: 44, y: 88, kind: 'paint brush', color: '#ffd166', throwable: true },
+  { room: 'Art Room', x: 50, y: 88, kind: 'palette', color: '#f4a261', throwable: true },
+  { room: 'Science Lab', x: 16, y: 9, kind: 'beaker', color: '#8ecae6', throwable: true },
+  { room: 'Science Lab', x: 24, y: 10, kind: 'test tube rack', color: '#bde0fe', throwable: true },
+  { room: 'Maths', x: 17, y: 44, kind: 'geometry set', color: '#90be6d', throwable: true },
+  { room: 'English', x: 50, y: 44, kind: 'book pile', color: '#cdb4db', throwable: true },
+  { room: 'History', x: 70, y: 86, kind: 'globe', color: '#2a9d8f', throwable: true },
+  { room: 'Computer Room', x: 130, y: 9, kind: 'keyboard', color: '#adb5bd', throwable: true },
+  { room: 'Music Room', x: 110, y: 44, kind: 'tambourine', color: '#f7b801', throwable: true },
 ];
 
 const shields = [
@@ -202,6 +218,8 @@ const game = {
   registrationTaken: false,
   litter: [],
   playerCarryingTrash: false,
+  playerItem: null,
+  sentToHeadmasterUntil: 0,
 };
 
 let seatCounter = 0;
@@ -232,6 +250,10 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     energy: 100,
     bladder: Math.random() * 8,
     running: false,
+    leftLessonForToilet: false,
+    returningFromToilet: false,
+    carryingItem: null,
+    escaped: false,
   };
 }
 
@@ -246,7 +268,7 @@ game.entities.push(
   mkEntity('Mr Wacker', 'teacher', 22, 42, '#8eb2ff', { title: 'Headmaster', strict: 0.9 }),
   mkEntity('Ms Take', 'teacher', 75, 42, '#82a4ff', { title: 'Science Teacher', strict: 0.8 }),
   mkEntity('Mr Creak', 'teacher', 56, 84, '#7e9aff', { title: 'History Teacher', strict: 0.7 }),
-  mkEntity('Angelface', 'hero', 102, 88, '#ffd58e', { title: 'Handsome kid' }),
+  mkEntity('Face', 'hero', 102, 88, '#ffd58e', { title: 'Slippery escape artist' }),
   mkEntity('Einstein', 'swot', 108, 87, '#8effd3', { title: 'Teacher pet', tattles: true }),
   mkEntity('Bully Boy', 'bully', 114, 89, '#ff5f88', { title: 'Playground terror' }),
   mkEntity('Boy Wander', 'weird', 121, 88, '#c58eff', { title: 'Chaotic drifter' }),
@@ -308,6 +330,18 @@ function nearestPoint(origin, points) {
     }
   }
   return best;
+}
+
+
+
+function nearestThrowableItem(entity) {
+  return classroomItems
+    .filter((item) => !item.heldBy && item.throwable)
+    .sort((a, b) => distance(entity, a) - distance(entity, b))[0];
+}
+
+function prettyItemName(item) {
+  return item ? item.kind : 'item';
 }
 
 function entityRoom(entity) {
@@ -395,6 +429,8 @@ function resetToSchoolMorning() {
   game.bladder = 0;
   game.litter = [];
   game.playerCarryingTrash = false;
+  game.playerItem = null;
+  game.sentToHeadmasterUntil = 0;
 
   const gate = roomByName('School Gates');
   for (const entity of game.entities) {
@@ -407,6 +443,10 @@ function resetToSchoolMorning() {
     entity.carryingTrash = false;
     entity.litterWarnUntil = 0;
     entity.assignedWaste = null;
+    entity.carryingItem = null;
+    entity.leftLessonForToilet = false;
+    entity.returningFromToilet = false;
+    entity.escaped = false;
   }
 
   setPeriod(0);
@@ -489,7 +529,7 @@ function updateTodo() {
     `Energy should stay above 25`,
     `Use vending machines for snacks/drinks, then bin packaging`,
     `Use outside fountains (H2O) to lower bladder pressure`,
-    `Throwing rubbish (V) can KO pupils but teachers punish witnesses`,
+    `Throwing items (V) can KO pupils but teachers punish witnesses`,
     `Avoid teachers while bunking`,
   ];
   todoEl.innerHTML = todoItems.map((t) => `<li>${t}</li>`).join('');
@@ -661,32 +701,52 @@ function fireCatapult(attacker) {
 
 function throwRubbish(attacker) {
   const isPlayer = attacker === player;
-  if (!attacker.carryingTrash && !(isPlayer && game.playerCarryingTrash)) {
-    if (isPlayer) announce('🧻 Eric has no rubbish to throw. Buy from VM or pick up litter first.');
+  const heldItem = isPlayer ? game.playerItem : attacker.carryingItem;
+  const hasRubbish = attacker.carryingTrash || (isPlayer && game.playerCarryingTrash);
+  if (!hasRubbish && !heldItem) {
+    if (isPlayer) announce('🧻 Eric has nothing throwable. Pick up themed classroom items or carry rubbish first.');
     return;
   }
 
+  const kind = heldItem ? 'item' : 'rubbish';
   game.pellets.push({
     x: attacker.x,
     y: attacker.y - 0.4,
     vx: attacker.facing * 0.2,
     vy: -0.02,
     owner: attacker,
-    kind: 'rubbish',
+    kind,
+    itemKind: heldItem?.kind,
+    itemColor: heldItem?.color,
   });
+
+  if (heldItem) {
+    heldItem.heldBy = null;
+    heldItem.x = attacker.x;
+    heldItem.y = attacker.y;
+  }
 
   if (isPlayer) {
     game.playerCarryingTrash = false;
-    announce('🧻 Eric threw rubbish. If a teacher sees it, detention lines are coming.');
+    game.playerItem = null;
+    announce(heldItem
+      ? `🪣 Eric threw a ${prettyItemName(heldItem)}. That can definitely get him in trouble.`
+      : '🧻 Eric threw rubbish. If a teacher sees it, detention lines are coming.');
+
     const teacherWitness = findWitnessingTeacher(attacker);
     if (teacherWitness) {
-      addLines(35, 'throwing rubbish at pupils');
-      announce(`🧑‍🏫 ${teacherWitness.name}: "Eric! Stop throwing rubbish right now!"`);
+      addLines(35, heldItem ? `throwing ${prettyItemName(heldItem)} in class` : 'throwing rubbish at pupils');
+      announce(`🧑‍🏫 ${teacherWitness.name}: "Eric! Report to the headmaster's office immediately!"`);
+      game.sentToHeadmasterUntil = performance.now() + 7000;
+      const office = roomCenter('Headmaster Office');
+      player.x = office.x;
+      player.y = office.y;
     }
   } else {
     attacker.carryingTrash = false;
     attacker.assignedWaste = null;
-    announce(`🧻 ${attacker.name} hurled rubbish across the yard.`);
+    attacker.carryingItem = null;
+    announce(`🧻 ${attacker.name} hurled ${heldItem ? prettyItemName(heldItem) : 'rubbish'} across the room.`);
   }
 }
 
@@ -732,6 +792,17 @@ function interact() {
     energyEl.textContent = `⚡ Energy: ${Math.round(game.energy)}`;
     announce(`🚰 Eric drinks from ${nearbyFountain.label}. Refreshed and ready.`);
     return;
+  }
+
+  // Pick up themed room props (paint pots, books, science gear) to throw later.
+  if (!game.playerItem) {
+    const nearbyItem = nearestThrowableItem(player);
+    if (nearbyItem && distance(player, nearbyItem) < 1.35) {
+      game.playerItem = nearbyItem;
+      nearbyItem.heldBy = player;
+      announce(`🧰 Eric picked up a ${prettyItemName(nearbyItem)}. Press V to throw it.`);
+      return;
+    }
   }
 
   // Read blackboard instructions.
@@ -794,7 +865,13 @@ function updateMission() {
 function chooseTarget(entity, currentPeriod) {
   // High bladder urgency overrides normal timetable targets.
   if (entity.bladder >= 80) {
+    entity.leftLessonForToilet = true;
+    entity.returningFromToilet = false;
     return roomCenter('Toilets');
+  }
+
+  if (entity.returningFromToilet) {
+    return roomCenter(currentPeriod.room);
   }
 
   const p = entity.personality;
@@ -809,6 +886,11 @@ function chooseTarget(entity, currentPeriod) {
   }
 
   if (currentPeriod.mode === 'home') {
+    return roomCenter('School Gates');
+  }
+
+  // Face is notorious for attempting stealth escapes during normal school time.
+  if (entity.name === 'Face' && currentPeriod.mode !== 'home' && game.rng() < 0.25) {
     return roomCenter('School Gates');
   }
 
@@ -865,6 +947,25 @@ function updateAI(dt) {
       entity.target = chooseTarget(entity, current);
     }
 
+    // Teachers sometimes leave lessons for a quick toilet break and then return.
+    if (entity.role === 'teacher' && entity.bladder >= 82 && !entity.returningFromToilet) {
+      entity.leftLessonForToilet = true;
+      entity.target = roomCenter('Toilets');
+      announce(`🚻 ${entity.name} rushes out to the toilet and leaves the class unsupervised.`);
+    }
+
+    if (entity.role === 'teacher' && entity.leftLessonForToilet && entityRoom(entity) === 'Toilets') {
+      entity.bladder = 0;
+      entity.leftLessonForToilet = false;
+      entity.returningFromToilet = true;
+      entity.target = roomCenter(current.room);
+      announce(`📚 ${entity.name} returns from the toilet and resumes the lesson.`);
+    }
+
+    if (entity.role === 'teacher' && entity.returningFromToilet && entityRoom(entity) === current.room) {
+      entity.returningFromToilet = false;
+    }
+
     // Teacher discipline: if they catch player in wrong room, assign lines.
     if (entity.role === 'teacher' && distance(entity, player) < 1.8 && entityRoom(player) !== current.room && supervised && teacherPresent) {
       addLines(40, `${entity.name} caught you bunking ${current.period}`);
@@ -879,6 +980,24 @@ function updateAI(dt) {
     // Bully behaviour is period-aware so mornings stay mostly calm.
     if (entity.role === 'bully' && game.rng() < bullyFightChance(current)) {
       meleeAttack(entity);
+    }
+
+
+    // Students occasionally misbehave in lessons when supervision lapses.
+    if (entity.role !== 'teacher' && supervised && game.rng() < 0.0016) {
+      entity.mood = 'angry';
+      const item = nearestThrowableItem(entity);
+      if (item && distance(entity, item) < 2.8 && !entity.carryingItem) {
+        item.heldBy = entity;
+        entity.carryingItem = item;
+      }
+      if (entity.carryingItem && !findWitnessingTeacher(entity, 5.6) && game.rng() < 0.012) {
+        const victim = game.entities.find((candidate) => candidate !== entity && candidate.role !== 'teacher' && distance(candidate, entity) < 4);
+        if (victim) {
+          entity.facing = victim.x >= entity.x ? 1 : -1;
+          throwRubbish(entity);
+        }
+      }
     }
 
     const teacherWatchingBully = findWitnessingTeacher(entity, 6.2);
@@ -969,6 +1088,14 @@ function updateAI(dt) {
     constrain(entity);
     updateNpcVitals(entity, dt, entity.running);
 
+    if (entity.name === 'Face' && !entity.escaped && entity.x >= schoolExit.x && entity.y >= schoolExit.yMin && entity.y <= schoolExit.yMax && current.mode !== 'home') {
+      entity.escaped = true;
+      entity.x = -100;
+      entity.y = -100;
+      announce('😎 Face slipped out through the gates unnoticed.');
+      continue;
+    }
+
     if (len < 0.9) entity.target = null;
 
     // Teachers occasionally issue live board tasks.
@@ -991,13 +1118,13 @@ function updatePellets(dt) {
     for (const entity of game.entities) {
       if (entity === pellet.owner || entity.knockedUntil > performance.now()) continue;
       if (distance(pellet, entity) < 0.75) {
-        if (pellet.kind === 'rubbish') {
+        if (pellet.kind === 'rubbish' || pellet.kind === 'item') {
           // Rubbish throws are prank weapons: they instantly topple students.
           if (entity.role !== 'teacher') {
             knockout(entity, pellet.owner);
             entity.mood = 'furious';
           }
-          game.litter.push({ x: entity.x, y: entity.y, offender: pellet.owner, warned: false });
+          game.litter.push({ x: entity.x, y: entity.y, offender: pellet.owner, warned: false, color: pellet.itemColor });
           if (pellet.owner === player) {
             const witness = findWitnessingTeacher(player, 6.2);
             if (witness) {
@@ -1015,8 +1142,8 @@ function updatePellets(dt) {
     }
 
     if (pellet.x < 0 || pellet.x > WORLD.w || pellet.y > WORLD.h) {
-      if (pellet.kind === 'rubbish') {
-        game.litter.push({ x: Math.max(0, Math.min(WORLD.w, pellet.x)), y: Math.max(0, Math.min(WORLD.h, pellet.y)), offender: pellet.owner, warned: false });
+      if (pellet.kind === 'rubbish' || pellet.kind === 'item') {
+        game.litter.push({ x: Math.max(0, Math.min(WORLD.w, pellet.x)), y: Math.max(0, Math.min(WORLD.h, pellet.y)), offender: pellet.owner, warned: false, color: pellet.itemColor });
       }
       pellet.dead = true;
     }
@@ -1073,6 +1200,18 @@ function updateSchedule(dt) {
   periodEl.textContent = `🔔 Period: ${current.period}${periodWaiting ? ' (waiting for teacher)' : ''}`;
   roomTargetEl.textContent = `📍 Target: ${current.room}`;
   updateFloorStatus();
+}
+
+
+function enforceHeadmasterDetention() {
+  if (performance.now() > game.sentToHeadmasterUntil) return;
+  if (entityRoom(player) !== 'Headmaster Office') {
+    const office = roomCenter('Headmaster Office');
+    player.x = office.x;
+    player.y = office.y;
+    addLines(10, 'walking out of the headmaster office during punishment');
+    announce('🚫 Mr Wacker drags Eric back into the office to finish detention.');
+  }
 }
 
 function checkSchoolExit() {
@@ -1148,6 +1287,10 @@ function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
         ctx.fillRect(x, y, 2, 2);
       }
     }
+  } else if (room.type === 'office') {
+    fillDitherRect(drawX, drawY, drawW, drawH, '#d9c7aa', '#c8b594', 4);
+    ctx.fillStyle = '#6b4f3a';
+    ctx.fillRect(drawX + 6, drawY + 6, drawW - 12, 6);
   } else {
     // Classroom/hall checker flooring with per-floor tint for orientation.
     const baseA = room.floor === 'upper' ? '#c8b7f4' : room.floor === 'middle' ? '#bcd2f1' : '#cbe9ce';
@@ -1304,17 +1447,44 @@ function drawWorld() {
     ctx.fillText('H2O', p.sx - 7, p.sy - 13);
   }
 
+  // Themed classroom props decorate rooms and can become throwable objects.
+  for (const item of classroomItems) {
+    if (item.heldBy) {
+      item.x = item.heldBy.x + item.heldBy.facing * 0.55;
+      item.y = item.heldBy.y - 0.2;
+    }
+    const p = worldToScreen(item.x, item.y);
+    ctx.fillStyle = item.color;
+    if (item.kind.includes('brush')) {
+      ctx.fillRect(p.sx - 5, p.sy - 1, 10, 2);
+      ctx.fillStyle = '#ffe8a1';
+      ctx.fillRect(p.sx + 4, p.sy - 2, 3, 4);
+    } else if (item.kind.includes('book')) {
+      ctx.fillRect(p.sx - 6, p.sy - 4, 12, 8);
+    } else {
+      ctx.fillRect(p.sx - 4, p.sy - 4, 8, 8);
+    }
+  }
+
   for (const waste of game.litter) {
     const p = worldToScreen(waste.x, waste.y);
-    ctx.fillStyle = '#f4a261';
+    ctx.fillStyle = waste.color || '#f4a261';
     ctx.fillRect(p.sx - 3, p.sy - 2, 6, 4);
   }
 
+  const writingFrame = Math.floor(performance.now() / 220) % 4;
   for (const board of blackboards) {
     const p = worldToScreen(board.x, board.y);
     fillDitherRect(p.sx - 23, p.sy - 11, 46, 16, '#194b31', '#23633f', 3);
     ctx.strokeStyle = '#93d5a9';
     ctx.strokeRect(p.sx - 23, p.sy - 11, 46, 16);
+    // Teacher-writing animation frame layered on each chalkboard.
+    const armOffset = [0, 3, 1, 4][writingFrame];
+    ctx.fillStyle = '#82a4ff';
+    ctx.fillRect(p.sx + 17, p.sy - 8, 4, 9);
+    ctx.fillStyle = '#ffd7b5';
+    ctx.fillRect(p.sx + 18 + armOffset, p.sy - 6, 3, 3);
+
     if (board.text) {
       ctx.fillStyle = PALETTE.chalk;
       ctx.font = '8px monospace';
@@ -1395,6 +1565,11 @@ function drawEntities() {
       ctx.fillText(moodGlyph, px - 2, py - 26);
     }
 
+    if (entity === player && game.playerItem) {
+      ctx.fillStyle = game.playerItem.color;
+      ctx.fillRect(px + 8, py - 16, 5, 5);
+    }
+
     if (entity.carryingTrash) {
       ctx.fillStyle = '#f4a261';
       ctx.fillRect(px + 8, py - 14, 4, 4);
@@ -1417,7 +1592,7 @@ function drawEntities() {
   }
 
   for (const pellet of game.pellets) {
-    ctx.fillStyle = '#f8f9fa';
+    ctx.fillStyle = pellet.itemColor || '#f8f9fa';
     ctx.fillRect((pellet.x - CAMERA.x - 0.08) * sx, (pellet.y - CAMERA.y - 0.08) * sy, 3, 3);
   }
 }
@@ -1543,6 +1718,7 @@ function loop(now) {
     updateAI(dt);
     updatePellets(dt);
     updateSchedule(dt);
+    enforceHeadmasterDetention();
     checkSchoolExit();
     updateBladder(dt);
     recoverEnergy(dt / 1000);
