@@ -307,6 +307,10 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     arrivalJoinMins: 0,
     // Movement watchdog helps recover teachers from rare wall-edge stalls.
     stuckSeconds: 0,
+    // Congestion watchdog resets pathing when a doorway jam persists.
+    jamSeconds: 0,
+    // Short-lived pass-through mode allows overlap while clearing tight bottlenecks.
+    phaseThroughUntil: 0,
     lastX: x,
     lastY: y,
   };
@@ -551,6 +555,37 @@ function doorwayStagingPoint(entity, doorway, room) {
     x: Math.max(minX, Math.min(maxX, doorway.x + laneOffsetX)),
     y: doorway.y,
   };
+}
+
+function isNearDoorway(pos, radius = 1.9) {
+  // Doorway proximity is used as a choke-point hint for congestion handling.
+  for (const room of rooms) {
+    const door = roomDoorway(room);
+    if (door && distance(pos, door) <= radius) return true;
+  }
+  return false;
+}
+
+function resetEntityPathing(entity, destination) {
+  const destinationRoom = roomAtPosition(destination);
+  const entryDoor = destinationRoom ? roomDoorway(destinationRoom) : null;
+  const stagedDoor = destinationRoom ? doorwayStagingPoint(entity, entryDoor, destinationRoom) : null;
+
+  // Temporary no-separation movement lets jammed pupils/teachers overlap long enough
+  // to pass through tight door bottlenecks instead of deadlocking.
+  entity.phaseThroughUntil = performance.now() + 1450;
+  entity.jamSeconds = 0;
+
+  if (stagedDoor) {
+    const nudgeSign = entity.seatIndex % 2 ? 1 : -1;
+    entity.x += nudgeSign * 0.32;
+    entity.y += (entity.seatIndex % 3 - 1) * 0.12;
+    constrain(entity);
+    entity.target = stagedDoor;
+    return;
+  }
+
+  entity.target = destination;
 }
 
 function routeWaypoint(entity, destination) {
@@ -1501,7 +1536,8 @@ function updateAI(dt) {
 
     // Lightweight separation avoids visual clumping, but we skip it for seated pupils
     // so classroom rows stay stable and students don't drift toward the blackboard.
-    if (!(inLesson && studentInCurrentClass)) {
+    const canPhaseThroughCrowd = entity.phaseThroughUntil > performance.now();
+    if (!(inLesson && studentInCurrentClass) && !canPhaseThroughCrowd) {
       for (const other of game.entities) {
         if (other === entity || other.knockedUntil > performance.now()) continue;
         const gapX = entity.x - other.x;
@@ -1589,10 +1625,25 @@ function updateAI(dt) {
       entity.stuckSeconds = 0;
     }
 
+    // Generic doorway jam recovery for all NPCs. If movement stalls in a choke-point,
+    // refresh pathing and briefly allow overlap so queues can flow through one-tile doors.
+    const farFromGoal = distance(entity, entity.target) > 1.6;
+    const doorwayChoke = isNearDoorway(entity) || isNearDoorway(routedTarget, 2.2);
+    if (farFromGoal && doorwayChoke) {
+      entity.jamSeconds = moved < 0.05 ? (entity.jamSeconds + (dt / 1000)) : Math.max(0, entity.jamSeconds - (dt / 1400));
+      if (entity.jamSeconds > 1.15) resetEntityPathing(entity, entity.target);
+    } else {
+      entity.jamSeconds = 0;
+    }
+
     constrain(entity);
     updateNpcVitals(entity, dt, entity.running);
 
-    if (distance(entity, entity.target) < 0.9) entity.target = null;
+    if (distance(entity, entity.target) < 0.9) {
+      entity.target = null;
+      entity.jamSeconds = 0;
+      entity.phaseThroughUntil = 0;
+    }
 
     // Teachers occasionally issue live board tasks.
     if (entity.role === 'teacher' && game.rng() < 0.002) {
