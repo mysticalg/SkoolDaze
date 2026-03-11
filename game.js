@@ -8,6 +8,7 @@ const floorStatusEl = document.getElementById('floorStatus');
 const troubleEl = document.getElementById('trouble');
 const energyEl = document.getElementById('energy');
 const bladderEl = document.getElementById('bladder');
+const hygieneEl = document.getElementById('hygiene');
 const autoStatusEl = document.getElementById('autoStatus');
 const missionEl = document.getElementById('mission');
 const eventsEl = document.getElementById('events');
@@ -288,6 +289,8 @@ const JANITOR_IDLE_ROOM = 'Janitor Room';
 const LITTER_CLEANUP_DELAY_MS = 20000;
 const TOILET_DIRT_PER_USE = 4;
 const TOILET_MAX_DIRT = 100;
+const TOILET_BLOCK_INTERVAL_DAYS = 12;
+const TOILET_BLOCK_DURATION_MS = 18000;
 const WEEKLY_SICK_DAY_INTERVAL = 5;
 
 const game = {
@@ -315,6 +318,7 @@ const game = {
   bladder: 0,
   dailyToiletVisits: 0,
   drinksToday: 0,
+  hygiene: 100,
   warnedNeedToilet: false,
   registrationTaken: false,
   litter: [],
@@ -330,6 +334,9 @@ const game = {
   latePenaltyGiven: false,
   dayCount: 1,
   toiletDirt: 12,
+  toiletsBlocked: false,
+  toiletFloodUntil: 0,
+  lastHygieneShameAt: 0,
   weeklySickScheduledDay: WEEKLY_SICK_DAY_INTERVAL,
   janitorTask: null,
 };
@@ -362,6 +369,7 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     // Every NPC now mirrors Eric's stamina + bladder simulation.
     energy: 100,
     bladder: Math.random() * 8,
+    hygiene: 100,
     running: false,
     isSeated: false,
     seatedRoom: null,
@@ -549,8 +557,11 @@ function entityFloor(entity) {
 
 function updateFloorStatus() {
   const meta = floorMeta[entityFloor(player)] || floorMeta.ground;
-  floorStatusEl.textContent = `🧭 Floor: ${meta.label} (${meta.color}) | 🚽 Dirt: ${Math.round(game.toiletDirt)}%`;
-  floorStatusEl.title = 'Toilets get dirtier as people use them. Mr Mop cleans them when they are grubby.';
+  const toiletState = game.toiletsBlocked ? '⛔ Blocked/Flooded' : '✅ Open';
+  floorStatusEl.textContent = `🧭 Floor: ${meta.label} (${meta.color}) | 🚽 Dirt: ${Math.round(game.toiletDirt)}% | ${toiletState}`;
+  floorStatusEl.title = game.toiletsBlocked
+    ? 'Toilets are currently blocked and flooded while Mr Mop cleans.'
+    : 'Toilets get dirtier as people use them. Mr Mop cleans them when they are grubby.';
 }
 
 function updateAutoStatus() {
@@ -559,6 +570,48 @@ function updateAutoStatus() {
 
 function updateBladderHud() {
   bladderEl.textContent = `🚻 Bladder: ${Math.round(game.bladder)}%`;
+}
+
+function updateHygieneHud() {
+  hygieneEl.textContent = `🧼 Hygiene: ${Math.round(game.hygiene)}%`;
+  hygieneEl.title = game.hygiene < 35
+    ? 'Low hygiene: pupils and teachers may shame Eric.'
+    : 'Keep hygiene high: avoid wetting accidents and fights.';
+}
+
+function lowerHygiene(amount, reason) {
+  const prev = game.hygiene;
+  game.hygiene = Math.max(0, game.hygiene - amount);
+  if (Math.floor(prev / 10) !== Math.floor(game.hygiene / 10) && reason) {
+    announce(`🧼 Hygiene dropped (${reason}).`, { force: true });
+  }
+  updateHygieneHud();
+}
+
+function maybeShameEric(now = performance.now()) {
+  if (game.hygiene > 35) return;
+  if (now - game.lastHygieneShameAt < 5500) return;
+
+  const nearby = game.entities.find((entity) => (
+    entity !== player
+    && entity.knockedUntil < now
+    && distance(entity, player) < 3.1
+  ));
+  if (!nearby) return;
+
+  const lines = [
+    `${nearby.name}: "Pong, Eric!"`,
+    `${nearby.name}: "Wash up, stink bomb!"`,
+    `${nearby.name}: "Even the gym socks smell better."`,
+  ];
+
+  if (nearby.role === 'teacher') {
+    announce(`🧑‍🏫 ${nearby.name}: "Eric, sort your hygiene out at once."`, { source: nearby, range: 8, force: true });
+  } else {
+    const pick = lines[Math.floor(game.rng() * lines.length)];
+    announce(`😖 ${pick}`, { source: nearby, range: 8, force: true });
+  }
+  game.lastHygieneShameAt = now;
 }
 
 function getStairLink(fromFloor, toFloor) {
@@ -603,7 +656,7 @@ function nearestStairTarget(entity, fromFloor, targetFloor) {
 
 function chooseAutoDestination() {
   // Toilets become top priority when bladder is urgent.
-  if (game.bladder >= 75) return roomCenter('Toilets');
+  if (game.bladder >= 75 && !game.toiletsBlocked) return roomCenter('Toilets');
   const current = schedule[game.periodIndex];
   if (current.mode === 'lesson') {
     // Auto Eric uses the same assigned seat mapping as the other students.
@@ -857,6 +910,18 @@ function resetToSchoolMorning() {
   game.playerHeldItem = null;
   game.toiletDirt = Math.min(35, game.toiletDirt + 6);
   game.janitorTask = null;
+  game.toiletsBlocked = false;
+  game.toiletFloodUntil = 0;
+  game.lastHygieneShameAt = 0;
+  game.hygiene = Math.max(55, game.hygiene - 3);
+
+  if (game.dayCount > 1 && game.dayCount % TOILET_BLOCK_INTERVAL_DAYS === 0) {
+    game.toiletsBlocked = true;
+    game.toiletFloodUntil = performance.now() + TOILET_BLOCK_DURATION_MS;
+    const toilets = roomByName('Toilets');
+    queueJanitorTask({ type: 'flood', x: toilets.x + toilets.w / 2, y: toilets.y + toilets.h / 2, room: 'Toilets' });
+    announce('🌊 Toilets blocked! Bathrooms flooded. Mr Mop is rushing to clean it up.', { force: true });
+  }
 
   const gate = roomByName('School Gates');
   let teacherIndex = 0;
@@ -891,12 +956,14 @@ function resetToSchoolMorning() {
     entity.vx = 0;
     entity.vy = 0;
     entity.carryingTrash = false;
+    entity.hygiene = 100;
     entity.litterWarnUntil = 0;
     entity.assignedWaste = null;
   }
 
   setPeriod(0);
   updateBladderHud();
+  updateHygieneHud();
   announce('🌅 New school day: students gather at the gates ready for tutorial.');
 }
 
@@ -954,10 +1021,14 @@ function updateBladder(dt) {
 
   if (game.bladder >= 75 && !game.warnedNeedToilet) {
     game.warnedNeedToilet = true;
-    announce('🚻 Eric needs the toilet soon. Head to TOILETS quickly.');
+    if (game.toiletsBlocked) {
+      announce('🚫 Eric needs the toilet, but bathrooms are flooded and closed!', { force: true });
+    } else {
+      announce('🚻 Eric needs the toilet soon. Head to TOILETS quickly.');
+    }
   }
 
-  if (entityRoom(player) === 'Toilets' && game.bladder >= 20) {
+  if (!game.toiletsBlocked && entityRoom(player) === 'Toilets' && game.bladder >= 20) {
     game.bladder = 0;
     game.dailyToiletVisits += 1;
     game.toiletDirt = Math.min(TOILET_MAX_DIRT, game.toiletDirt + TOILET_DIRT_PER_USE);
@@ -968,9 +1039,11 @@ function updateBladder(dt) {
   if (game.bladder >= 100) {
     game.bladder = 20;
     game.warnedNeedToilet = false;
+    game.hygiene = 0;
     addLines(60, 'wetting himself in school');
-    announce('😳 Eric wet himself! Other students laugh loudly.');
-    announce('🧑‍🏫 Mr Wacker lectures Eric: "Use the toilet before it is urgent!"');
+    announce('😳 Eric wet himself! Students start name-calling in the corridor.', { force: true });
+    sendPlayerToHeadmaster('wetting himself while toilets were unavailable', 35);
+    updateHygieneHud();
   }
 
   updateBladderHud();
@@ -1116,11 +1189,13 @@ function updateTodo() {
     `Shields: ${found}/${shields.length}`,
     `Bladder: ${Math.round(game.bladder)}%`,
     `Auto mode: ${game.autoMode ? 'ON' : 'OFF'}`,
+    `Hygiene: ${Math.round(game.hygiene)}%`,
     `Energy should stay above 25`,
     `Use vending machines for snacks/drinks, then bin packaging`,
     `Use outside fountains (H2O) to lower bladder pressure`,
     `Throwing rubbish (V) can KO pupils but teachers punish witnesses`,
     `Mr Mop cleans old litter after 20s and scrubs dirty toilets`,
+    `If toilets are blocked/flooded, avoid bladder emergencies until they reopen`,
     `Avoid teachers while bunking`,
   ];
   todoEl.innerHTML = todoItems.map((t) => `<li>${t}</li>`).join('');
@@ -1365,6 +1440,11 @@ function meleeAttack(attacker) {
       } else {
         announce(`👊 ${attacker.name} punched ${target.name}`);
       }
+      if (attacker === player || target === player) {
+        lowerHygiene(attacker === player ? 6 : 4, 'fighting');
+      }
+      attacker.hygiene = Math.max(0, attacker.hygiene - 1.8);
+      target.hygiene = Math.max(0, target.hygiene - 3.2);
       if (target.hp <= 0) knockout(target, attacker);
       if (attacker === player && target.role === 'teacher') addLines(120, 'striking a teacher');
       spendEntityEnergy(attacker, 7);
@@ -1740,12 +1820,12 @@ function chooseTarget(entity, currentPeriod) {
   }
 
   // High bladder urgency overrides normal timetable targets.
-  if (entity.bladder >= 80) {
+  if (!game.toiletsBlocked && entity.bladder >= 80) {
     return roomCenter('Toilets');
   }
 
   // Teachers occasionally step out to the toilet and then return to class.
-  if (entity.role === 'teacher' && entity.bladder >= 72) {
+  if (!game.toiletsBlocked && entity.role === 'teacher' && entity.bladder >= 72) {
     return roomCenter('Toilets');
   }
 
@@ -1804,9 +1884,21 @@ function updateNpcVitals(entity, dt, isRunning) {
   // NPC bladder rises over time, slightly quicker while running.
   entity.bladder = Math.min(100, entity.bladder + deltaMins * (0.34 + (isRunning ? 0.2 : 0)));
 
-  if (entityRoom(entity) === 'Toilets' && entity.bladder >= 15) {
+  if (!game.toiletsBlocked && entityRoom(entity) === 'Toilets' && entity.bladder >= 15) {
     entity.bladder = 0;
     game.toiletDirt = Math.min(TOILET_MAX_DIRT, game.toiletDirt + TOILET_DIRT_PER_USE * 0.55);
+  }
+
+  if (entity.bladder >= 100) {
+    entity.bladder = 24;
+    entity.hygiene = 0;
+    if (entity.role !== 'teacher' && entity.role !== 'janitor') {
+      entity.target = roomCenter('Headmaster Office');
+      entity.mood = 'shamed';
+    }
+    if (distance(entity, player) < 8.5) {
+      announce(`😬 ${entity.name} had an accident, got shunned, and was sent to the office.`, { force: true });
+    }
   }
 
   // School-day tuned stamina: normal walking causes light drain so pupils tire by lunch.
@@ -1841,6 +1933,9 @@ function queueJanitorTask(task) {
   if (task.type === 'sick') {
     announce('🤢 A student was sick on the floor. Mr Mop is hurrying over to clean it.');
   }
+  if (task.type === 'flood') {
+    announce('🌊 Toilet flood alert: bathrooms are closed until Mr Mop clears the blockage.', { force: true });
+  }
 }
 
 function scheduleWeeklySickEvent() {
@@ -1865,6 +1960,13 @@ function scheduleWeeklySickEvent() {
 function updateJanitorSystems(dt) {
   const now = performance.now();
 
+  // Flood windows auto-clear as a safety net if pathing delays the janitor.
+  if (game.toiletsBlocked && game.toiletFloodUntil && now >= game.toiletFloodUntil) {
+    game.toiletsBlocked = false;
+    game.toiletFloodUntil = 0;
+    announce('✅ Toilets reopened after flood cleanup.');
+  }
+
   // Any litter older than 20 seconds gets escalated to the janitor.
   const staleLitter = game.litter.find((item) => now - (item.droppedAt || now) >= LITTER_CLEANUP_DELAY_MS);
   if (staleLitter) {
@@ -1886,6 +1988,11 @@ function updateJanitorSystems(dt) {
     if (game.janitorTask.type === 'toilet') {
       game.toiletDirt = Math.max(0, game.toiletDirt - 70);
       announce('🧼 Mr Mop scrubbed the toilets clean.');
+    } else if (game.janitorTask.type === 'flood') {
+      game.toiletsBlocked = false;
+      game.toiletFloodUntil = 0;
+      game.toiletDirt = Math.max(8, game.toiletDirt - 45);
+      announce('🛠️ Mr Mop cleared the toilet blockage and reopened the bathrooms.', { force: true });
     } else {
       game.litter = game.litter.filter((item) => distance(item, game.janitorTask) > 1.8);
       announce(game.janitorTask.type === 'sick' ? '🧽 Mr Mop cleaned the sick mess.' : '🧹 Mr Mop brushed up old litter.');
@@ -3045,7 +3152,7 @@ function updateEntityTooltip(event) {
   game.hoveredEntity = hovered;
   const role = hovered.role === 'player' ? 'You' : hovered.role;
   const room = entityRoom(hovered);
-  entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>❤️ HP: ${Math.round(hovered.hp)} | ⚡ EN: ${Math.round(hovered.energy)}<br>🚻 Bladder: ${Math.round(hovered.bladder)}% | 📍 ${room}`;
+  entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>❤️ HP: ${Math.round(hovered.hp)} | ⚡ EN: ${Math.round(hovered.energy)}<br>🚻 Bladder: ${Math.round(hovered.bladder)}% | 🧼 Hyg: ${Math.round(hovered.hygiene || 0)}%<br>📍 ${room}`;
 
   // Keep tooltip inside the canvas-wrap bounds for legibility.
   const wrap = canvas.parentElement.getBoundingClientRect();
@@ -3094,6 +3201,7 @@ function loop(now) {
     updateSchedule(dt);
     checkSchoolExit();
     updateBladder(dt);
+    maybeShameEric(now);
     recoverEnergy(dt / 1000);
     updateTodo();
   }
@@ -3145,6 +3253,7 @@ announce('Welcome! Follow bells, survive staff, and uncover every shield letter.
 updateMission();
 updateAutoStatus();
 updateBladderHud();
+updateHygieneHud();
 updateTodo();
 updateNameToggleButton();
 requestAnimationFrame(loop);
