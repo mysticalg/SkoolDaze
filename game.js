@@ -186,13 +186,13 @@ const lessonTasks = [
 ];
 
 const personalities = {
-  // Everyone now has Eric-level baseline speed; lateness triggers extra running pace.
-  bully: { speed: 1.26, aggression: 0.72, diligence: 0.2, focus: 0.5 },
-  swot: { speed: 1.26, aggression: 0.04, diligence: 0.96, focus: 0.9 },
-  hero: { speed: 1.26, aggression: 0.2, diligence: 0.75, focus: 0.7 },
-  weird: { speed: 1.26, aggression: 0.35, diligence: 0.45, focus: 0.4 },
-  teacher: { speed: 1.26, aggression: 0.55, diligence: 1.0, focus: 1.0 },
-  player: { speed: 1.26, aggression: 0, diligence: 0, focus: 0 },
+  // Eric is slightly slower now; other pupils/staff are nudged up for better balance.
+  bully: { speed: 1.21, aggression: 0.72, diligence: 0.2, focus: 0.5 },
+  swot: { speed: 1.19, aggression: 0.04, diligence: 0.96, focus: 0.9 },
+  hero: { speed: 1.2, aggression: 0.2, diligence: 0.75, focus: 0.7 },
+  weird: { speed: 1.18, aggression: 0.35, diligence: 0.45, focus: 0.4 },
+  teacher: { speed: 1.22, aggression: 0.55, diligence: 1.0, focus: 1.0 },
+  player: { speed: 1.05, aggression: 0, diligence: 0, focus: 0 },
 };
 
 const game = {
@@ -226,6 +226,7 @@ const game = {
 };
 
 let seatCounter = 0;
+const roomSeatCache = new Map();
 
 function mkEntity(name, role, x, y, color, traits = {}) {
   return {
@@ -253,6 +254,10 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     energy: 100,
     bladder: Math.random() * 8,
     running: false,
+    isSeated: false,
+    seatedRoom: null,
+    writingUntil: 0,
+    lastQuizAt: -Infinity,
     // Combat animation timers keep punch/fall visuals readable and lightweight.
     punchUntil: 0,
     fallStartedAt: 0,
@@ -447,19 +452,44 @@ function chooseAutoDestination() {
   return roomCenter(current.room);
 }
 
-function getSeatPosition(roomName, seatIndex) {
+function getRoomSeatLayout(roomName) {
   const room = roomByName(roomName);
-  if (!room) return null;
-  // Simple desk grid so pupils remain seated during tutorial/lesson periods.
-  const cols = 4;
-  const rows = 3;
-  const slot = seatIndex % (cols * rows);
-  const col = slot % cols;
-  const row = Math.floor(slot / cols);
-  return {
-    x: room.x + 4 + col * Math.max(3, (room.w - 8) / cols),
-    y: room.y + 4 + row * Math.max(2.6, (room.h - 8) / rows),
+  if (!room || room.type !== 'classroom') return null;
+  if (roomSeatCache.has(roomName)) return roomSeatCache.get(roomName);
+
+  // Build enough seats for everyone so each classroom can seat the full student body.
+  const studentCount = game.entities.filter((entity) => entity.role !== 'teacher').length;
+  const usableW = Math.max(8, room.w - 8);
+  const usableH = Math.max(5, room.h - 7);
+  const cols = Math.max(3, Math.floor(usableW / 3));
+  const rows = Math.max(2, Math.ceil(studentCount / cols));
+
+  const seats = [];
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      const x = room.x + 4 + ((col + 0.5) / cols) * usableW;
+      const y = room.y + 5 + ((row + 0.5) / rows) * usableH;
+      seats.push({ x, y, row, col });
+    }
+  }
+
+  const layout = {
+    room: roomName,
+    cols,
+    rows,
+    seats,
+    boardX: room.x + room.w / 2,
+    boardY: room.y + 2.2,
   };
+  roomSeatCache.set(roomName, layout);
+  return layout;
+}
+
+function getSeatPosition(roomName, seatIndex) {
+  const layout = getRoomSeatLayout(roomName);
+  if (!layout || !layout.seats.length) return null;
+  const slot = seatIndex % layout.seats.length;
+  return layout.seats[slot];
 }
 
 function resetToSchoolMorning() {
@@ -658,7 +688,7 @@ function handleInput(dt) {
   player.vy = 0;
 
   const manualMovement = game.keys.ArrowLeft || game.keys.a || game.keys.ArrowRight || game.keys.d || game.keys.ArrowUp || game.keys.w || game.keys.ArrowDown || game.keys.s;
-  if (manualMovement || game.keys.z || game.keys.x || game.keys.e || game.keys.c) {
+  if (manualMovement || game.keys.z || game.keys.x || game.keys.e || game.keys.c || game.keys.q) {
     // Manual control immediately overrides autopilot for responsiveness.
     if (game.autoMode) {
       game.autoMode = false;
@@ -670,6 +700,16 @@ function handleInput(dt) {
 
   if (game.autoMode) {
     updateAutoPilot(dt);
+    return;
+  }
+
+  if (player.isSeated) {
+    if (game.keys.q) {
+      toggleSeat();
+      game.keys.q = false;
+    }
+    player.vx = 0;
+    player.vy = 0;
     return;
   }
 
@@ -694,6 +734,10 @@ function handleInput(dt) {
   if (game.keys.e) {
     interact();
     game.keys.e = false;
+  }
+  if (game.keys.q) {
+    toggleSeat();
+    game.keys.q = false;
   }
   if (game.keys.c) {
     // Vending requires proximity and leaves packaging that should be binned.
@@ -834,6 +878,62 @@ function knockout(entity, by) {
   announce(`💫 ${entity.name} knocked out by ${by.name}`);
 }
 
+function isSeatOccupied(roomName, seat, ignoreEntity = null) {
+  return game.entities.some((entity) => (
+    entity !== ignoreEntity
+    && entity.isSeated
+    && entity.seatedRoom === roomName
+    && distance(entity, seat) < 0.65
+  ));
+}
+
+function nearestFreeSeatInRoom(roomName, actor) {
+  const layout = getRoomSeatLayout(roomName);
+  if (!layout) return null;
+
+  let best = null;
+  let bestDist = Infinity;
+  for (const seat of layout.seats) {
+    if (isSeatOccupied(roomName, seat, actor)) continue;
+    const d = distance(actor, seat);
+    if (d < bestDist) {
+      best = seat;
+      bestDist = d;
+    }
+  }
+  return best;
+}
+
+function toggleSeat() {
+  const currentRoom = entityRoom(player);
+  const room = roomByName(currentRoom);
+  if (!room || room.type !== 'classroom') {
+    announce('🪑 Eric can only sit in a classroom seat.');
+    return;
+  }
+
+  if (player.isSeated) {
+    player.isSeated = false;
+    player.seatedRoom = null;
+    announce('🧍 Eric stands up.');
+    return;
+  }
+
+  const seat = nearestFreeSeatInRoom(currentRoom, player);
+  if (!seat || distance(player, seat) > 2.2) {
+    announce('🪑 Move closer to an empty chair and press Q to sit.');
+    return;
+  }
+
+  player.x = seat.x;
+  player.y = seat.y;
+  player.vx = 0;
+  player.vy = 0;
+  player.isSeated = true;
+  player.seatedRoom = currentRoom;
+  announce(`🪑 Eric sits down in ${currentRoom}. Press Q again to stand.`);
+}
+
 function interact() {
   // Stairs are intentionally activated with interact for predictable movement.
   const nearbyStair = stairs.find((stair) => {
@@ -899,9 +999,18 @@ function interact() {
   // Interactive teacher quiz in class for extra detail.
   const teacherNearby = game.entities.find((e) => e.role === 'teacher' && distance(e, player) < 1.7);
   const current = schedule[game.periodIndex];
-  if (teacherNearby && entityRoom(player) === current.room && !game.quizActive) {
+  const now = performance.now();
+  if (
+    teacherNearby
+    && entityRoom(player) === current.room
+    && !game.quizActive
+    // Slower questioning cadence so lessons feel less spammy.
+    && now - teacherNearby.lastQuizAt > 45000
+    && game.rng() < 0.45
+  ) {
     const quiz = { q: 'What is 6 x 7?', answer: '42' };
     game.quizActive = quiz;
+    teacherNearby.lastQuizAt = now;
     const response = prompt(`${teacherNearby.name} asks: ${quiz.q}`);
     if ((response || '').trim() === quiz.answer) {
       announce(`✅ Correct answer. ${teacherNearby.name} nods approvingly.`);
@@ -928,6 +1037,15 @@ function updateMission() {
 // -----------------------------------------------------------------------------
 // AI systems
 // -----------------------------------------------------------------------------
+function teacherBoardSpot(periodRoom) {
+  const board = blackboards.find((candidate) => candidate.room === periodRoom);
+  if (board) {
+    return { x: board.x - 1.1, y: board.y + 0.2, room: periodRoom };
+  }
+  const fallback = roomCenter(periodRoom);
+  return { ...fallback, room: periodRoom };
+}
+
 function chooseTarget(entity, currentPeriod) {
   // High bladder urgency overrides normal timetable targets.
   if (entity.bladder >= 80) {
@@ -947,6 +1065,7 @@ function chooseTarget(entity, currentPeriod) {
   }
 
   if (currentPeriod.mode === 'lesson') {
+    if (entity.role === 'teacher') return teacherBoardSpot(currentPeriod.room);
     return getSeatPosition(currentPeriod.room, entity.seatIndex) || roomCenter(currentPeriod.room);
   }
 
@@ -975,7 +1094,11 @@ function chooseTarget(entity, currentPeriod) {
 
 function isTeacherPresentForPeriod(currentPeriod) {
   if (currentPeriod.mode !== 'lesson' && currentPeriod.period !== 'Tutorial') return true;
-  return game.entities.some((entity) => entity.role === 'teacher' && entityRoom(entity) === currentPeriod.room);
+  const boardSpot = teacherBoardSpot(currentPeriod.room);
+  return game.entities.some((entity) => (
+    entity.role === 'teacher'
+    && distance(entity, boardSpot) < 1.8
+  ));
 }
 
 function updateNpcVitals(entity, dt, isRunning) {
@@ -1126,23 +1249,23 @@ function updateAI(dt) {
       continue;
     }
 
+    const inLesson = current.mode === 'lesson' || current.period === 'Tutorial';
+    const seatedTarget = inLesson && entity.role !== 'teacher' && entityRoom(entity) === current.room;
+    entity.isSeated = seatedTarget && len < 0.55;
+    entity.seatedRoom = entity.isSeated ? current.room : null;
+
     const lateForClass = supervised && teacherPresent && entityRoom(entity) !== current.room;
     const canRun = entity.energy > 20;
     entity.running = lateForClass && canRun;
-    const runBoost = entity.running ? 1.7 : 1;
-    const speed = entity.personality.speed * (entity.energy / 100) * 2.15 * runBoost;
+    const runBoost = entity.running ? 1.62 : 1;
+    const hallwayBoost = entity.role !== 'teacher' ? 2.28 : 2.18;
+    const speed = entity.personality.speed * (entity.energy / 100) * hallwayBoost * runBoost;
 
-    entity.vx = (dx / len) * speed;
-    entity.vy = (dy / len) * speed;
+    entity.vx = entity.isSeated ? 0 : (dx / len) * speed;
+    entity.vy = entity.isSeated ? 0 : (dy / len) * speed;
 
     entity.x += entity.vx * (dt / 1000);
     entity.y += entity.vy * (dt / 1000);
-
-    // Pupils stay seated once in class/tutorial to match a structured school day.
-    if ((current.mode === 'lesson' || current.period === 'Tutorial') && entity.role !== 'teacher' && len < 0.5) {
-      entity.vx = 0;
-      entity.vy = 0;
-    }
 
     constrain(entity);
     updateNpcVitals(entity, dt, entity.running);
@@ -1409,6 +1532,28 @@ function drawWorld() {
     if (room.type !== 'outdoor') drawBrickTexture(drawX, drawY - 3, drawW, 3);
     drawRoomWalls(drawX, drawY, drawW, drawH, room);
 
+    if (room.type === 'classroom') {
+      const layout = getRoomSeatLayout(room.name);
+      // Every classroom renders a full desk/chair layout to match available student seating.
+      if (layout) {
+        for (const seat of layout.seats) {
+          const seatPos = worldToScreen(seat.x, seat.y);
+          // Desk top.
+          ctx.fillStyle = '#8b5e3c';
+          ctx.fillRect(seatPos.sx - 5, seatPos.sy - 5, 10, 4);
+          // Desk legs.
+          ctx.fillStyle = '#5f3d2a';
+          ctx.fillRect(seatPos.sx - 5, seatPos.sy - 1, 2, 3);
+          ctx.fillRect(seatPos.sx + 3, seatPos.sy - 1, 2, 3);
+          // Chair and backrest behind desk.
+          ctx.fillStyle = '#435b7a';
+          ctx.fillRect(seatPos.sx - 3, seatPos.sy + 2, 6, 2);
+          ctx.fillRect(seatPos.sx - 3, seatPos.sy, 2, 2);
+          ctx.fillRect(seatPos.sx + 1, seatPos.sy, 2, 2);
+        }
+      }
+    }
+
     // Doorway markers communicate where corridors connect rooms.
     if (room.type !== 'outdoor') {
       ctx.fillStyle = '#3e7e9c';
@@ -1585,14 +1730,15 @@ function drawEntities() {
       }
     } else {
       const moving = Math.abs(entity.vx) + Math.abs(entity.vy) > 0.05;
+      const seated = Boolean(entity.isSeated);
       // 5-frame walk cycle to replace the previous 2-pose sine swing.
-      const walkFrame = moving ? Math.floor(entity.animPhase) % 5 : 2;
+      const walkFrame = moving && !seated ? Math.floor(entity.animPhase) % 5 : 2;
       const walkBobOffsets = [-1.5, -0.5, 0.75, -0.5, -1.5];
       const legSwingOffsets = [-3, -1.5, 0, 1.5, 3];
       const armSwingOffsets = [3, 1.5, 0, -1.5, -3];
-      const bob = walkBobOffsets[walkFrame];
-      const legKick = legSwingOffsets[walkFrame];
-      const armKick = armSwingOffsets[walkFrame];
+      const bob = seated ? 1.6 : walkBobOffsets[walkFrame];
+      const legKick = seated ? 0 : legSwingOffsets[walkFrame];
+      const armKick = seated ? 0.6 : armSwingOffsets[walkFrame];
 
       // Punching uses a short forward-thrust frame and a recoil frame.
       const punchElapsed = Math.max(0, 220 - (entity.punchUntil - now));
@@ -1622,14 +1768,24 @@ function drawEntities() {
         const chalkX = strikeDir > 0 ? px + 14 : px - 14;
         ctx.fillRect(chalkX, py - 15, 3, 2);
       }
-      // Legs
+      // Legs use a bent seated frame when pupils sit in chairs.
       ctx.fillStyle = '#1f2a44';
-      ctx.fillRect(px - 6, py - 6 + legKick, 5, 8);
-      ctx.fillRect(px + 1, py - 6 - legKick, 5, 8);
-      // Shoe details
-      ctx.fillStyle = '#13151a';
-      ctx.fillRect(px - 6, py + 2 + legKick, 5, 2);
-      ctx.fillRect(px + 1, py + 2 - legKick, 5, 2);
+      if (seated) {
+        ctx.fillRect(px - 7, py - 8, 6, 3);
+        ctx.fillRect(px + 1, py - 8, 6, 3);
+        ctx.fillRect(px - 8, py - 5, 4, 6);
+        ctx.fillRect(px + 4, py - 5, 4, 6);
+        ctx.fillStyle = '#13151a';
+        ctx.fillRect(px - 8, py + 1, 4, 2);
+        ctx.fillRect(px + 4, py + 1, 4, 2);
+      } else {
+        ctx.fillRect(px - 6, py - 6 + legKick, 5, 8);
+        ctx.fillRect(px + 1, py - 6 - legKick, 5, 8);
+        // Shoe details
+        ctx.fillStyle = '#13151a';
+        ctx.fillRect(px - 6, py + 2 + legKick, 5, 2);
+        ctx.fillRect(px + 1, py + 2 - legKick, 5, 2);
+      }
 
       // Teachers are rendered larger and more formal than students.
       if (entity.role === 'teacher') {
