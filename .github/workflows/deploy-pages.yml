@@ -1,15 +1,17 @@
 # GitHub Pages deployment workflow for the static HTML5 game.
 #
 # This workflow publishes the repository root (index.html, game.js, styles.css, etc.)
-# to GitHub Pages whenever code updates are pushed.
+# to GitHub Pages whenever a pull request is merged into main.
 name: Deploy HTML5 Game to GitHub Pages
 
 on:
-  # Deploy only when the main branch is updated.
-  # Feature branches can iterate safely without publishing to production Pages.
-  push:
+  # Deploy when a pull request targeting main is closed.
+  # We gate the job below so it runs only for successful merges.
+  pull_request:
     branches:
       - main
+    types:
+      - closed
   workflow_dispatch:
 
 # Required permissions for Pages deployment.
@@ -25,6 +27,8 @@ concurrency:
 
 jobs:
   deploy:
+    # Only deploy when the closed pull request was actually merged.
+    if: ${{ github.event.pull_request.merged == true }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -34,6 +38,9 @@ jobs:
       # Checkout repository so we can package static site files.
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Always deploy the latest state of the main branch after merge.
+          ref: main
 
       # Configure GitHub Pages for this job.
       - name: Setup Pages
