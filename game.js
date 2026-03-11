@@ -132,8 +132,12 @@ const roomDoors = rooms
 
 const blackboards = [
   { room: 'Science Lab', x: 21, y: 6, text: '' },
+  { room: 'Upper Common', x: 50, y: 6, text: '' },
+  { room: 'Physics Lab', x: 80, y: 6, text: '' },
+  { room: 'Chem Prep', x: 108, y: 6, text: '' },
   { room: 'Maths', x: 23, y: 40, text: '' },
   { room: 'English', x: 56, y: 40, text: '' },
+  { room: 'Music Room', x: 116, y: 40, text: '' },
   { room: 'Computer Room', x: 144, y: 6, text: '' },
   { room: 'Geography', x: 18, y: 83, text: '' },
   { room: 'Art Room', x: 46, y: 83, text: '' },
@@ -188,21 +192,25 @@ const classroomProps = [
 ];
 
 // Bell schedule approximating school-day flow.
-// Arrival is intentionally short in real-time so pupils quickly move from the
-// gate lineup into tutorial without getting stuck outside.
-const ARRIVAL_REAL_SECONDS = 10;
+// Arrival now gives a full 30-second travel/setup window before tutorial.
+const ARRIVAL_REAL_SECONDS = 30;
 const ARRIVAL_GAME_MINUTES = (ARRIVAL_REAL_SECONDS / 60);
 const schedule = [
   { period: 'Arrival', room: 'School Gates', mins: ARRIVAL_GAME_MINUTES, mode: 'transition' },
   { period: 'Tutorial', room: 'Science Lab', mins: 30, mode: 'lesson' },
   { period: 'Lesson 1', room: 'Maths', mins: 60, mode: 'lesson' },
   { period: 'Lesson 2', room: 'English', mins: 60, mode: 'lesson' },
+  { period: 'Lesson 3', room: 'Upper Common', mins: 45, mode: 'lesson' },
+  { period: 'Lesson 4', room: 'Physics Lab', mins: 45, mode: 'lesson' },
   { period: 'Break', room: 'P.E. Field', mins: 20, mode: 'break' },
-  { period: 'Lesson 3', room: 'Geography', mins: 60, mode: 'lesson' },
-  { period: 'Lesson 4', room: 'History', mins: 60, mode: 'lesson' },
+  { period: 'Lesson 5', room: 'Geography', mins: 60, mode: 'lesson' },
+  { period: 'Lesson 6', room: 'History', mins: 60, mode: 'lesson' },
+  { period: 'Lesson 7', room: 'Music Room', mins: 45, mode: 'lesson' },
   { period: 'Lunch', room: 'P.E. Field', mins: 60, mode: 'break' },
-  { period: 'Lesson 5', room: 'Art Room', mins: 120, mode: 'lesson' },
-  { period: 'Lesson 6', room: 'Computer Room', mins: 120, mode: 'lesson' },
+  { period: 'Lesson 8', room: 'Art Room', mins: 60, mode: 'lesson' },
+  { period: 'Lesson 9', room: 'Computer Room', mins: 60, mode: 'lesson' },
+  { period: 'Lesson 10', room: 'Chem Prep', mins: 45, mode: 'lesson' },
+  { period: 'Lesson 11', room: 'Headmaster Office', mins: 30, mode: 'lesson' },
   { period: 'Home Time', room: 'School Gates', mins: 30, mode: 'home' },
 ];
 
@@ -220,12 +228,16 @@ const floorSequence = ['lower', 'ground', 'middle', 'upper'];
 // Preferred supervising teacher per lesson room keeps class starts orderly.
 const roomTeacherMap = {
   'Science Lab': 'Dr Beaker',
+  'Upper Common': 'Ms Mirth',
+  'Physics Lab': 'Prof Volt',
+  'Chem Prep': 'Ms Fizz',
   Maths: 'Mr Flash',
   English: 'Ms Take',
   Geography: 'Mr Creak',
   History: 'Mr Creak',
   'Art Room': 'Ms Take',
   'Computer Room': 'Mr Wacker',
+  'Music Room': 'Mr Boom',
   'Headmaster Office': 'Mr Wacker',
 };
 
@@ -236,6 +248,10 @@ const teacherHomeRoomMap = {
   'Ms Take': 'English',
   'Dr Beaker': 'Science Lab',
   'Mr Creak': 'History',
+  'Ms Mirth': 'Upper Common',
+  'Prof Volt': 'Physics Lab',
+  'Ms Fizz': 'Chem Prep',
+  'Mr Boom': 'Music Room',
 };
 
 const lessonTasks = [
@@ -260,8 +276,8 @@ const personalities = {
 const game = {
   timeMinutes: 8 * 60 + 20,
   // Minutes advanced per real-time second; tuned so lesson travel windows are fair.
-  // Slightly faster school clock so periods progress at a snappier pace.
-  timeScale: 0.09,
+  // Faster school clock keeps lessons moving and reduces long idle stretches.
+  timeScale: 0.14,
   periodIndex: 0,
   periodElapsed: 0,
   periodHoldMinutes: 0,
@@ -292,6 +308,9 @@ const game = {
   // Mini-map NPC dots are refreshed on an interval to keep rendering cheap.
   miniMapNpcSnapshot: [],
   miniMapLastRefreshAt: 0,
+  // Track anti-spam timings for board barks and late lines.
+  lastBoardCalloutAt: 0,
+  latePenaltyGiven: false,
 };
 
 let seatCounter = 0;
@@ -331,7 +350,7 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     punchUntil: 0,
     fallStartedAt: 0,
     fallDuration: 520,
-    // Arrival staging: students appear over the first 10 seconds, teachers are ready immediately.
+    // Arrival staging: students appear over the first 30 seconds, teachers are ready immediately.
     arrivedForDay: true,
     arrivalJoinMins: 0,
     // Movement watchdog helps recover teachers from rare wall-edge stalls.
@@ -372,6 +391,18 @@ game.entities.push(
   mkEntity('Mr Creak', 'teacher', 56, 84, '#7e9aff', {
     title: 'History Teacher', strict: 0.85, attire: 'oldBrown', cane: true,
   }),
+  mkEntity('Ms Mirth', 'teacher', 52, 8, '#ff9ad5', {
+    title: 'Drama Teacher', strict: 0.55, attire: 'plainBlueDress', quotes: ['Project your chaos!'],
+  }),
+  mkEntity('Prof Volt', 'teacher', 78, 8, '#8de7ff', {
+    title: 'Physics Teacher', strict: 0.78, attire: 'scienceCoat', quotes: ['Respect the equations!'],
+  }),
+  mkEntity('Ms Fizz', 'teacher', 108, 8, '#ffc48e', {
+    title: 'Chemistry Prep Lead', strict: 0.74, attire: 'scienceCoat', quotes: ['No explosions before break.'],
+  }),
+  mkEntity('Mr Boom', 'teacher', 112, 42, '#f7a6ff', {
+    title: 'Music Teacher', strict: 0.6, attire: 'oldBrown', quotes: ['In tune, in line, in silence!'],
+  }),
   mkEntity('Angelface', 'hero', 102, 88, '#ffd58e', { title: 'Handsome kid' }),
   mkEntity('Einstein', 'swot', 108, 87, '#8effd3', { title: 'Teacher pet', tattles: true }),
   mkEntity('Bully Boy', 'bully', 114, 89, '#ff5f88', { title: 'Playground terror' }),
@@ -379,6 +410,12 @@ game.entities.push(
   mkEntity('Slugger', 'bully', 128, 89, '#ff7ca0', { title: 'Fighter' }),
   mkEntity('Precious', 'hero', 136, 88, '#ffe6ae', { title: 'Narcissist' }),
   mkEntity('Nerdy Ned', 'swot', 144, 89, '#78ffcf', { title: 'Homework machine', tattles: true }),
+  mkEntity('Drama Llama', 'weird', 116, 87, '#e5a0ff', { title: 'Monologues in corridors' }),
+  mkEntity('Sir Tripsalot', 'hero', 124, 87, '#f7d794', { title: 'Sports captain, zero balance' }),
+  mkEntity('Detention Dave', 'bully', 132, 87, '#ff7096', { title: 'Collects detentions like stickers' }),
+  mkEntity('Quizzy Lizzy', 'swot', 140, 87, '#72ffc8', { title: 'Raises hand before questions exist', tattles: true }),
+  mkEntity('Whisper Knight', 'hero', 148, 87, '#ffe7a8', { title: 'Secret helper of lost pupils' }),
+  mkEntity('Loopy Lou', 'weird', 152, 89, '#c39bff', { title: 'Invents conspiracy timetables' }),
 );
 
 function formatTime(mins) {
@@ -810,7 +847,7 @@ function resetToSchoolMorning() {
       entity.arrivalJoinMins = 0;
       entity.target = { ...pos };
     } else {
-      // Students appear at random moments during the 10-second arrival phase.
+      // Students appear at random moments during the 30-second arrival phase.
       entity.x = schoolExit.x + 2.2 + game.rng() * 2.2;
       entity.y = gate.y + 4 + game.rng() * (gate.h - 6);
       entity.arrivedForDay = false;
@@ -1072,6 +1109,7 @@ function setPeriod(index) {
   game.periodIndex = index % schedule.length;
   game.periodElapsed = 0;
   game.periodHoldMinutes = 0;
+  game.latePenaltyGiven = false;
   const current = schedule[game.periodIndex];
   // Bell changes stand everyone up and clears stale routes between periods.
   player.isSeated = false;
@@ -1574,11 +1612,16 @@ function teacherBoardSpot(periodRoom) {
 function isAssignedTeacherSeatedForPeriod(currentPeriod = schedule[game.periodIndex]) {
   if (currentPeriod.mode !== 'lesson' && currentPeriod.period !== 'Tutorial') return true;
   const assignedTeacherName = assignedTeacherForRoom(currentPeriod.room);
+  const assignedSeat = getTeacherSeatPosition(currentPeriod.room);
   return game.entities.some((entity) => (
     entity.role === 'teacher'
     && (!assignedTeacherName || entity.name === assignedTeacherName)
-    && entity.isSeated
-    && entity.seatedRoom === currentPeriod.room
+    && entityRoom(entity) === currentPeriod.room
+    && (
+      (entity.isSeated && entity.seatedRoom === currentPeriod.room)
+      // Fallback: treat teacher as seated when they are effectively parked at desk.
+      || distance(entity, assignedSeat) < 0.72
+    )
     && entity.knockedUntil < performance.now()
   ));
 }
@@ -1961,11 +2004,18 @@ function updateAI(dt) {
 
     resolvePersistentOverlap(entity, current, dtSeconds);
 
-    // Teachers occasionally issue live board tasks.
-    if (entity.role === 'teacher' && game.rng() < 0.002) {
+    // Throttled board prompts: only the assigned teacher in the active lesson room speaks.
+    const boardCooldownMs = 55000;
+    const canCallOutBoard = entity.role === 'teacher'
+      && entity.name === assignedTeacherName
+      && entityRoom(entity) === current.room
+      && (current.mode === 'lesson' || current.period === 'Tutorial')
+      && (performance.now() - game.lastBoardCalloutAt > boardCooldownMs);
+    if (canCallOutBoard && game.rng() < 0.0011) {
       const board = blackboards.find((b) => b.room === current.room);
       if (board) {
         board.text = lessonTasks[Math.floor(game.rng() * lessonTasks.length)];
+        game.lastBoardCalloutAt = performance.now();
         announce(`🧑‍🏫 ${entity.name}: "Quiet! Copy the board."`, { source: entity, range: 8 });
       }
     }
@@ -2030,9 +2080,9 @@ function updateSchedule(dt) {
   const current = schedule[game.periodIndex];
   const deltaMins = (dt / 1000) * game.timeScale;
   const teacherPresent = isTeacherPresentForPeriod(current);
-  const teacherSeatedForLesson = isAssignedTeacherSeatedForPeriod(current);
+  const teacherReadyForLesson = isAssignedTeacherSeatedForPeriod(current);
   const periodWaiting = (current.mode === 'lesson' || current.period === 'Tutorial')
-    && (!teacherPresent || !teacherSeatedForLesson);
+    && (!teacherPresent || !teacherReadyForLesson);
 
   // Lessons wait briefly for the teacher to arrive and sit, then continue to avoid soft-locks.
   if (periodWaiting) {
@@ -2061,7 +2111,12 @@ function updateSchedule(dt) {
       // Keep home-time active until player exits via gates.
       game.periodElapsed = current.mins;
     } else {
-      setPeriod(game.periodIndex + 1);
+      // Ensure Eric always gets a fresh destination after each bell.
+      let nextIndex = game.periodIndex + 1;
+      while (nextIndex < schedule.length && schedule[nextIndex].room === current.room) {
+        nextIndex += 1;
+      }
+      setPeriod(Math.min(nextIndex, schedule.length - 1));
     }
   }
 
@@ -2069,8 +2124,12 @@ function updateSchedule(dt) {
   game.lastLateTick += dt;
   if (game.lastLateTick > 2000) {
     const monitored = current.mode === 'lesson' || current.period === 'Tutorial';
-    const graceWindow = game.periodElapsed < 2.5;
-    if (entityRoom(player) !== current.room && monitored && teacherPresent && !graceWindow) addLines(10, `late for ${current.period}`);
+    const graceWindow = game.periodElapsed < 4;
+    // One late penalty per period prevents feed spam and "mystery lines" stacking.
+    if (entityRoom(player) !== current.room && monitored && teacherPresent && !graceWindow && !game.latePenaltyGiven) {
+      addLines(10, `late for ${current.period}`);
+      game.latePenaltyGiven = true;
+    }
     game.lastLateTick = 0;
   }
 
@@ -2084,7 +2143,10 @@ function updateSchedule(dt) {
   }
 
   clockEl.textContent = `🕘 Time: ${formatTime(game.timeMinutes)}`;
-  periodEl.textContent = `🔔 Period: ${current.period}${periodWaiting ? ' (waiting for teacher to sit)' : ''}`;
+  const waitingLabel = !periodWaiting
+    ? ''
+    : (!teacherPresent ? ' (waiting for teacher to arrive)' : ' (waiting for teacher to sit)');
+  periodEl.textContent = `🔔 Period: ${current.period}${waitingLabel}`;
   roomTargetEl.textContent = `📍 Target: ${current.room}`;
   updateFloorStatus();
 }
