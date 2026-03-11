@@ -212,6 +212,22 @@ const game = {
   announcements: [],
   rng: Math.random,
   quizActive: null,
+  // Tracks one direct player question per lesson and NPC follow-up answers.
+  classQuestionState: {
+    key: '',
+    askedPlayer: false,
+    nextNpcAnswerAt: 0,
+  },
+  // Blackboard typing mode replaces browser popups for classroom answers.
+  boardInput: {
+    active: false,
+    armed: false,
+    boardRoom: null,
+    teacherName: '',
+    prompt: '',
+    expectedAnswer: '',
+    typed: '',
+  },
   lastLateTick: 0,
   autoMode: false,
   idleMs: 0,
@@ -649,6 +665,10 @@ function setPeriod(index) {
   game.periodElapsed = 0;
   const current = schedule[game.periodIndex];
   if (current.period === 'Tutorial') game.registrationTaken = false;
+  game.classQuestionState.key = '';
+  game.boardInput.active = false;
+  game.boardInput.armed = false;
+  game.quizActive = null;
 
   // Board content changes each bell to emulate lesson instructions.
   blackboards.forEach((board) => {
@@ -996,30 +1016,112 @@ function interact() {
     }
   }
 
-  // Interactive teacher quiz in class for extra detail.
-  const teacherNearby = game.entities.find((e) => e.role === 'teacher' && distance(e, player) < 1.7);
+  // Classroom questions are now answered directly on the board (no popups).
+  maybeStartClassQuestion();
+}
+
+
+function classSessionKey() {
   const current = schedule[game.periodIndex];
-  const now = performance.now();
-  if (
-    teacherNearby
-    && entityRoom(player) === current.room
-    && !game.quizActive
-    // Slower questioning cadence so lessons feel less spammy.
-    && now - teacherNearby.lastQuizAt > 45000
-    && game.rng() < 0.45
-  ) {
-    const quiz = { q: 'What is 6 x 7?', answer: '42' };
-    game.quizActive = quiz;
-    teacherNearby.lastQuizAt = now;
-    const response = prompt(`${teacherNearby.name} asks: ${quiz.q}`);
-    if ((response || '').trim() === quiz.answer) {
-      announce(`✅ Correct answer. ${teacherNearby.name} nods approvingly.`);
-    } else {
-      addLines(30, 'wrong answer in lesson');
-      announce(`❌ Wrong answer. ${teacherNearby.name}: "Concentrate!"`);
-    }
-    game.quizActive = null;
+  return `${game.periodIndex}:${current.room}:${current.period}`;
+}
+
+function ensureClassQuestionState() {
+  const key = classSessionKey();
+  if (game.classQuestionState.key !== key) {
+    game.classQuestionState.key = key;
+    game.classQuestionState.askedPlayer = false;
+    game.classQuestionState.nextNpcAnswerAt = 0;
   }
+}
+
+function beginBoardInput(board, teacher, question) {
+  game.boardInput.active = true;
+  game.boardInput.armed = false;
+  game.boardInput.boardRoom = board.room;
+  game.boardInput.teacherName = teacher.name;
+  game.boardInput.prompt = question.q;
+  game.boardInput.expectedAnswer = question.answer;
+  game.boardInput.typed = '';
+  game.quizActive = question;
+  announce(`❓ ${teacher.name}: "${question.q}" Click the board and type your answer, then press Enter.`);
+}
+
+function maybeStartClassQuestion() {
+  const current = schedule[game.periodIndex];
+  if (!current || current.mode !== 'lesson') return;
+
+  ensureClassQuestionState();
+  const state = game.classQuestionState;
+  const now = performance.now();
+
+  // After Eric answers once, NPCs handle the rest of the classroom Q&A.
+  if (state.askedPlayer) {
+    if (now >= state.nextNpcAnswerAt) {
+      state.nextNpcAnswerAt = now + 16000 + game.rng() * 12000;
+      const npcs = game.entities.filter((e) => e.role !== 'teacher' && e !== player && entityRoom(e) === current.room);
+      if (npcs.length) {
+        const npc = npcs[Math.floor(game.rng() * npcs.length)];
+        announce(`🧑‍🎓 ${npc.name} answers the follow-up question while ${player.name} listens.`);
+      }
+    }
+    return;
+  }
+
+  const teacherNearby = game.entities.find((e) => e.role === 'teacher' && distance(e, player) < 1.7 && entityRoom(e) === current.room);
+  if (!teacherNearby || entityRoom(player) !== current.room || game.quizActive || game.boardInput.active) return;
+
+  if (now - teacherNearby.lastQuizAt > 45000 && game.rng() < 0.45) {
+    teacherNearby.lastQuizAt = now;
+    const board = blackboards.find((b) => b.room === current.room);
+    if (!board) return;
+    beginBoardInput(board, teacherNearby, { q: 'What is 6 x 7?', answer: '42' });
+  }
+}
+
+function submitBoardAnswer() {
+  const typed = game.boardInput.typed.trim();
+  if (!typed) {
+    announce('✏️ Write an answer on the board before pressing Enter.');
+    return;
+  }
+
+  const board = blackboards.find((b) => b.room === game.boardInput.boardRoom);
+  if (board) board.text = typed;
+
+  const correct = typed.toLowerCase() === game.boardInput.expectedAnswer.toLowerCase();
+  if (correct) {
+    announce(`✅ Correct answer. ${game.boardInput.teacherName} nods approvingly.`);
+  } else {
+    addLines(30, 'wrong answer in lesson');
+    announce(`❌ Wrong answer. ${game.boardInput.teacherName}: "Concentrate!"`);
+  }
+
+  ensureClassQuestionState();
+  game.classQuestionState.askedPlayer = true;
+  game.classQuestionState.nextNpcAnswerAt = performance.now() + 12000;
+
+  game.boardInput.active = false;
+  game.boardInput.armed = false;
+  game.boardInput.boardRoom = null;
+  game.boardInput.teacherName = '';
+  game.boardInput.prompt = '';
+  game.boardInput.expectedAnswer = '';
+  game.boardInput.typed = '';
+  game.quizActive = null;
+}
+
+function cancelBoardInput() {
+  if (!game.boardInput.active) return;
+  announce('🧽 Board answer cancelled.');
+  game.boardInput.active = false;
+  game.boardInput.armed = false;
+  game.boardInput.boardRoom = null;
+  game.boardInput.teacherName = '';
+  game.boardInput.prompt = '';
+  game.boardInput.expectedAnswer = '';
+  game.boardInput.typed = '';
+  game.quizActive = null;
 }
 
 function updateMission() {
@@ -1958,6 +2060,26 @@ function drawMiniMap() {
   ctx.fillText('● Class  ■ Shield  ● Toilet  ○ You', mapX + 6, mapY + mapH - 6);
 }
 
+
+function drawBoardInputOverlay() {
+  if (!game.boardInput.active) return;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.62)';
+  ctx.fillRect(14, canvas.height - 128, canvas.width - 28, 114);
+  ctx.strokeStyle = '#95d5ff';
+  ctx.strokeRect(14, canvas.height - 128, canvas.width - 28, 114);
+  ctx.fillStyle = '#f1f5ff';
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText(`BOARD QUESTION: ${game.boardInput.prompt}`, 26, canvas.height - 98);
+  ctx.font = '12px monospace';
+  ctx.fillText('Click the classroom board, then type. Enter = submit, Esc = cancel.', 26, canvas.height - 76);
+  const typed = game.boardInput.typed || (game.boardInput.armed ? '_' : '[Click board to start typing]');
+  ctx.fillStyle = '#f8f9fa';
+  ctx.fillRect(26, canvas.height - 62, canvas.width - 52, 30);
+  ctx.fillStyle = '#101828';
+  ctx.fillText(`Answer: ${typed}`, 34, canvas.height - 42);
+}
+
 function drawStatusOverlay() {
   if (!game.paused) return;
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
@@ -2012,6 +2134,7 @@ function loop(now) {
   drawEntities();
   drawMiniMap();
   drawStatusOverlay();
+  drawBoardInputOverlay();
 
   requestAnimationFrame(loop);
 }
@@ -2020,6 +2143,23 @@ function togglePause() {
   game.paused = !game.paused;
   pauseBtn.textContent = game.paused ? '▶️' : '⏸️';
 }
+
+
+canvas.addEventListener('click', (event) => {
+  if (!game.boardInput.active) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const clickX = event.clientX - rect.left;
+  const clickY = event.clientY - rect.top;
+  const worldX = CAMERA.x + (clickX / rect.width) * CAMERA.w;
+  const worldY = CAMERA.y + (clickY / rect.height) * CAMERA.h;
+  const board = blackboards.find((candidate) => candidate.room === game.boardInput.boardRoom);
+
+  if (board && Math.hypot(worldX - board.x, worldY - board.y) < 2.6) {
+    game.boardInput.armed = true;
+    announce('⌨️ Board selected. Type your answer and press Enter. Esc cancels.');
+  }
+});
 
 window.addEventListener('keydown', (event) => {
   if (event.key.toLowerCase() === 'p') togglePause();
@@ -2030,6 +2170,31 @@ window.addEventListener('keydown', (event) => {
     announce(`🤖 Auto mode ${game.autoMode ? 'enabled' : 'disabled'} by key.`);
     updateTodo();
   }
+
+  // Keyboard is routed to board writing mode once a board has been clicked.
+  if (game.boardInput.active && game.boardInput.armed) {
+    if (event.key === 'Enter') {
+      submitBoardAnswer();
+      event.preventDefault();
+      return;
+    }
+    if (event.key === 'Escape') {
+      cancelBoardInput();
+      event.preventDefault();
+      return;
+    }
+    if (event.key === 'Backspace') {
+      game.boardInput.typed = game.boardInput.typed.slice(0, -1);
+      event.preventDefault();
+      return;
+    }
+    if (event.key.length === 1 && game.boardInput.typed.length < 32) {
+      game.boardInput.typed += event.key;
+      event.preventDefault();
+      return;
+    }
+  }
+
   game.keys[event.key] = true;
   game.keys[event.key.toLowerCase()] = true;
 });
