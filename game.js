@@ -24,7 +24,7 @@ helpBtn.onclick = () => helpDialog.showModal();
 // -----------------------------------------------------------------------------
 // Large campus coordinate space. We now render through a camera window so
 // players can scroll through multiple levels and corridors.
-const WORLD = { w: 170, h: 112 };
+const WORLD = { w: 170, h: 140 };
 
 // Camera view keeps the same aspect ratio as the canvas while following Eric.
 const CAMERA = { w: 72, h: 40, x: 0, y: 0 };
@@ -70,6 +70,7 @@ const rooms = [
 
   // Ground level circulation and outside area.
   { name: 'Ground Corridor', x: 4, y: 76, w: 160, h: 4, floor: 'ground', type: 'corridor' },
+  { name: 'Reception', x: 8, y: 66, w: 24, h: 10, floor: 'ground', type: 'hall' },
   { name: 'Geography', x: 8, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
   { name: 'Art Room', x: 34, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
   { name: 'History', x: 60, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
@@ -78,17 +79,27 @@ const rooms = [
   { name: 'P.E. Field', x: 90, y: 80, w: 70, h: 28, floor: 'ground', type: 'outdoor' },
   { name: 'Bike Sheds', x: 92, y: 94, w: 22, h: 12, floor: 'ground', type: 'outdoor' },
   { name: 'School Gates', x: 148, y: 80, w: 18, h: 28, floor: 'ground', type: 'outdoor' },
+
+  // Lower floor (bottom floor) with reception-adjacent spaces.
+  { name: 'Lower Corridor', x: 4, y: 110, w: 160, h: 4, floor: 'lower', type: 'corridor' },
+  { name: 'Boiler Room', x: 8, y: 114, w: 24, h: 14, floor: 'lower', type: 'hall' },
+  { name: 'Storage', x: 38, y: 114, w: 24, h: 14, floor: 'lower', type: 'hall' },
+  { name: 'Maintenance', x: 68, y: 114, w: 24, h: 14, floor: 'lower', type: 'hall' },
 ];
 
 const stairs = [
-  { x: 24, y: 17, toY: 52, label: 'West Stairs' },
-  { x: 64, y: 17, toY: 52, label: 'Central Stairs' },
-  { x: 104, y: 17, toY: 52, label: 'East Stairs' },
-  { x: 146, y: 17, toY: 52, label: 'Annex Stairs' },
-  { x: 24, y: 52, toY: 78, label: 'West Stairs' },
-  { x: 64, y: 52, toY: 78, label: 'Central Stairs' },
-  { x: 104, y: 52, toY: 78, label: 'East Stairs' },
-  { x: 146, y: 52, toY: 78, label: 'Annex Stairs' },
+  { x: 24, fromFloor: 'upper', toFloor: 'middle', fromY: 17, toY: 52, label: 'West Stairs' },
+  { x: 64, fromFloor: 'upper', toFloor: 'middle', fromY: 17, toY: 52, label: 'Central Stairs' },
+  { x: 104, fromFloor: 'upper', toFloor: 'middle', fromY: 17, toY: 52, label: 'East Stairs' },
+  { x: 146, fromFloor: 'upper', toFloor: 'middle', fromY: 17, toY: 52, label: 'Annex Stairs' },
+  { x: 24, fromFloor: 'middle', toFloor: 'ground', fromY: 52, toY: 78, label: 'West Stairs' },
+  { x: 64, fromFloor: 'middle', toFloor: 'ground', fromY: 52, toY: 78, label: 'Central Stairs' },
+  { x: 104, fromFloor: 'middle', toFloor: 'ground', fromY: 52, toY: 78, label: 'East Stairs' },
+  { x: 146, fromFloor: 'middle', toFloor: 'ground', fromY: 52, toY: 78, label: 'Annex Stairs' },
+  { x: 24, fromFloor: 'ground', toFloor: 'lower', fromY: 78, toY: 112, label: 'West Lower Stairs' },
+  { x: 64, fromFloor: 'ground', toFloor: 'lower', fromY: 78, toY: 112, label: 'Central Lower Stairs' },
+  { x: 104, fromFloor: 'ground', toFloor: 'lower', fromY: 78, toY: 112, label: 'East Lower Stairs' },
+  { x: 146, fromFloor: 'ground', toFloor: 'lower', fromY: 78, toY: 112, label: 'Annex Lower Stairs' },
 ];
 
 const blackboards = [
@@ -171,10 +182,12 @@ const floorMeta = {
   upper: { label: 'Upper', color: 'Purple' },
   middle: { label: 'Middle', color: 'Blue' },
   ground: { label: 'Ground', color: 'Green' },
+  lower: { label: 'Lower', color: 'Amber' },
 };
 
 const schoolExit = { x: 159.2, yMin: 84, yMax: 107 };
-const floorOrder = { upper: 2, middle: 1, ground: 0 };
+const floorOrder = { upper: 3, middle: 2, ground: 1, lower: 0 };
+const floorSequence = ['lower', 'ground', 'middle', 'upper'];
 
 const lessonTasks = [
   'Write 10x: I must not fire catapults.',
@@ -396,7 +409,7 @@ function entityRoom(entity) {
 
 function entityFloor(entity) {
   const room = rooms.find((r) => entity.x > r.x && entity.x < r.x + r.w && entity.y > r.y && entity.y < r.y + r.h);
-  return room?.floor || 'ground';
+  return room?.floor || 'lower';
 }
 
 function updateFloorStatus() {
@@ -413,26 +426,37 @@ function updateBladderHud() {
 }
 
 function getStairLink(fromFloor, toFloor) {
-  // Stairs directly connect upper<->middle and middle<->ground using shared x positions.
+  // Stairs directly connect adjacent floors through explicit floor links.
   if (fromFloor === toFloor) return null;
-  if (fromFloor === 'upper' && toFloor === 'middle') return stairs.filter((stair) => stair.y < stair.toY);
-  if (fromFloor === 'middle' && toFloor === 'upper') return stairs.filter((stair) => stair.y < stair.toY);
-  if (fromFloor === 'middle' && toFloor === 'ground') return stairs.filter((stair) => stair.y > 40);
-  if (fromFloor === 'ground' && toFloor === 'middle') return stairs.filter((stair) => stair.y > 40);
-  return stairs;
+  return stairs.filter((stair) => (
+    (stair.fromFloor === fromFloor && stair.toFloor === toFloor)
+    || (stair.fromFloor === toFloor && stair.toFloor === fromFloor)
+  ));
 }
 
-function nearestStairTarget(fromFloor, targetFloor) {
+function stairPointForFloor(stair, floor) {
+  if (stair.fromFloor === floor) return { x: stair.x, y: stair.fromY };
+  if (stair.toFloor === floor) return { x: stair.x, y: stair.toY };
+  return null;
+}
+
+function nextFloorToward(fromFloor, destinationFloor) {
+  const fromIndex = floorSequence.indexOf(fromFloor);
+  const destIndex = floorSequence.indexOf(destinationFloor);
+  if (fromIndex === -1 || destIndex === -1 || fromIndex === destIndex) return fromFloor;
+  return floorSequence[fromIndex + (destIndex > fromIndex ? 1 : -1)];
+}
+
+function nearestStairTarget(entity, fromFloor, targetFloor) {
   const relevant = getStairLink(fromFloor, targetFloor);
   if (!relevant || !relevant.length) return null;
 
   let best = null;
   let bestDist = Infinity;
   for (const stair of relevant) {
-    const onStepY = fromFloor === 'upper' ? stair.y : fromFloor === 'ground' ? stair.toY :
-      (targetFloor === 'upper' ? stair.toY : stair.y);
-    const candidate = { x: stair.x, y: onStepY };
-    const dist = distance(player, candidate);
+    const candidate = stairPointForFloor(stair, fromFloor);
+    if (!candidate) continue;
+    const dist = distance(entity, candidate);
     if (dist < bestDist) {
       bestDist = dist;
       best = candidate;
@@ -450,6 +474,61 @@ function chooseAutoDestination() {
   if (current.period === 'Arrival') return gateQueuePosition(player);
   if (current.mode === 'home') return roomCenter('School Gates');
   return roomCenter(current.room);
+}
+
+function roomAtPosition(pos) {
+  return rooms.find((r) => pos.x > r.x && pos.x < r.x + r.w && pos.y > r.y && pos.y < r.y + r.h) || null;
+}
+
+function roomDoorway(room) {
+  if (!room || room.type === 'corridor' || room.type === 'outdoor') return null;
+  const floorCorridorY = room.floor === 'upper' ? 17 : room.floor === 'middle' ? 52 : room.floor === 'ground' ? 78 : 112;
+  const topDist = Math.abs(room.y - floorCorridorY);
+  const bottomDist = Math.abs((room.y + room.h) - floorCorridorY);
+  const useTop = topDist <= bottomDist;
+  return {
+    x: room.x + room.w / 2,
+    y: useTop ? room.y + 0.45 : room.y + room.h - 0.45,
+  };
+}
+
+function routeWaypoint(entity, destination) {
+  const currentRoom = roomAtPosition(entity);
+  const destinationRoom = roomAtPosition(destination);
+  const currentFloor = entityFloor(entity);
+  const destinationFloor = destinationRoom?.floor || 'ground';
+
+  if (currentFloor !== destinationFloor) {
+    const nextFloor = nextFloorToward(currentFloor, destinationFloor);
+    return nearestStairTarget(entity, currentFloor, nextFloor) || destination;
+  }
+
+  if (currentRoom && currentRoom.type !== 'corridor' && currentRoom.type !== 'outdoor') {
+    const exitDoor = roomDoorway(currentRoom);
+    if (exitDoor && distance(entity, exitDoor) > 0.95) return exitDoor;
+  }
+
+  if (destinationRoom && destinationRoom.type !== 'corridor' && destinationRoom.type !== 'outdoor') {
+    const entryDoor = roomDoorway(destinationRoom);
+    if (entryDoor && distance(entity, entryDoor) > 1.1) return entryDoor;
+  }
+
+  return destination;
+}
+
+function tryUseStairs(entity) {
+  const currentFloor = entityFloor(entity);
+  for (const stair of stairs) {
+    const currentStep = stairPointForFloor(stair, currentFloor);
+    if (!currentStep || distance(entity, currentStep) > 0.72) continue;
+    const destinationFloor = stair.fromFloor === currentFloor ? stair.toFloor : stair.fromFloor;
+    const destinationStep = stairPointForFloor(stair, destinationFloor);
+    if (!destinationStep) continue;
+    entity.x = destinationStep.x;
+    entity.y = destinationStep.y + (destinationFloor === 'upper' || destinationFloor === 'middle' ? 0.35 : -0.35);
+    return true;
+  }
+  return false;
 }
 
 function getRoomSeatLayout(roomName) {
@@ -543,15 +622,7 @@ function resetToSchoolMorning() {
 function updateAutoPilot(dt) {
   const speed = (player.personality.speed * game.energy) / 100;
   const destination = chooseAutoDestination();
-  const destinationFloor = roomByName(entityRoom({ x: destination.x, y: destination.y }))?.floor || 'ground';
-  const currentFloor = entityFloor(player);
-
-  let waypoint = destination;
-  if (destinationFloor !== currentFloor) {
-    const floorDelta = floorOrder[destinationFloor] - floorOrder[currentFloor];
-    const nextFloor = floorDelta > 0 ? (currentFloor === 'ground' ? 'middle' : 'upper') : (currentFloor === 'upper' ? 'middle' : 'ground');
-    waypoint = nearestStairTarget(currentFloor, nextFloor) || destination;
-  }
+  const waypoint = routeWaypoint(player, destination);
 
   const dx = waypoint.x - player.x;
   const dy = waypoint.y - player.y;
@@ -559,8 +630,10 @@ function updateAutoPilot(dt) {
   player.vx = (dx / len) * speed;
   player.vy = (dy / len) * speed;
 
-  // Auto mode uses stairs when Eric reaches them and occasionally reads boards.
-  if (len < 1.1) interact();
+  // Auto mode uses doors/stairs when Eric reaches them.
+  if (len < 1.1) {
+    if (!tryUseStairs(player)) interact();
+  }
   spendEnergy(0.35 * (dt / 1000));
 }
 
@@ -625,6 +698,15 @@ function addLines(amount, reason) {
   game.lines += amount;
   troubleEl.textContent = `📝 Lines: ${game.lines}`;
   announce(`📝 ${amount} lines for ${reason}`);
+}
+
+function spendEntityEnergy(entity, amount) {
+  if (entity === player) {
+    spendEnergy(amount);
+    return;
+  }
+  // NPCs also burn stamina for combat bursts so fights have visible fatigue impact.
+  entity.energy = Math.max(10, entity.energy - amount);
 }
 
 function spendEnergy(amount) {
@@ -798,7 +880,8 @@ function meleeAttack(attacker) {
       }
       if (target.hp <= 0) knockout(target, attacker);
       if (attacker === player && target.role === 'teacher') addLines(120, 'striking a teacher');
-      spendEnergy(7);
+      spendEntityEnergy(attacker, 7);
+      if (target !== player) target.energy = Math.max(10, target.energy - 3.5);
       return;
     }
   }
@@ -814,7 +897,7 @@ function fireCatapult(attacker) {
   });
   announce(`🏹 ${attacker.name} fired a catapult`);
   if (attacker === player) addLines(20, 'catapult use');
-  spendEnergy(5);
+  spendEntityEnergy(attacker, 5);
 }
 
 function throwRubbish(attacker) {
@@ -936,17 +1019,23 @@ function toggleSeat() {
 
 function interact() {
   // Stairs are intentionally activated with interact for predictable movement.
+  const currentFloor = entityFloor(player);
   const nearbyStair = stairs.find((stair) => {
-    const nearStepA = distance(player, { x: stair.x, y: stair.y }) < 1.6;
-    const nearStepB = distance(player, { x: stair.x, y: stair.toY }) < 1.6;
+    const fromStep = { x: stair.x, y: stair.fromY };
+    const toStep = { x: stair.x, y: stair.toY };
+    const nearStepA = distance(player, fromStep) < 1.6;
+    const nearStepB = distance(player, toStep) < 1.6;
     return nearStepA || nearStepB;
   });
   if (nearbyStair) {
-    const nearStepA = distance(player, { x: nearbyStair.x, y: nearbyStair.y }) < 1.6;
-    const destinationY = nearStepA ? nearbyStair.toY : nearbyStair.y;
-    const movingUp = destinationY < player.y;
-    player.y = movingUp ? destinationY + 0.4 : destinationY - 0.4;
-    player.x = nearbyStair.x;
+    const fromPoint = stairPointForFloor(nearbyStair, nearbyStair.fromFloor);
+    const toPoint = stairPointForFloor(nearbyStair, nearbyStair.toFloor);
+    const standingOnFrom = currentFloor === nearbyStair.fromFloor && distance(player, fromPoint) < 1.6;
+    const destination = standingOnFrom ? toPoint : fromPoint;
+    const destinationFloor = standingOnFrom ? nearbyStair.toFloor : nearbyStair.fromFloor;
+    const movingUp = floorOrder[destinationFloor] > floorOrder[currentFloor];
+    player.x = destination.x;
+    player.y = destination.y + (movingUp ? 0.4 : -0.4);
     announce(`🪜 Used ${nearbyStair.label} to ${movingUp ? 'go up' : 'go down'} a floor.`);
     updateFloorStatus();
     return;
@@ -1110,11 +1199,22 @@ function updateNpcVitals(entity, dt, isRunning) {
     entity.bladder = 0;
   }
 
-  if (isRunning) {
-    entity.energy = Math.max(12, entity.energy - dt * 0.0125);
-  } else {
-    entity.energy = Math.min(100, entity.energy + dt * 0.0045);
+  // School-day tuned stamina: normal walking causes light drain so pupils tire by lunch.
+  const baseDrainPerSecond = 0.19;
+  const runningExtraDrainPerSecond = 0.58;
+  const recoverPerSecond = 0.16;
+  const period = schedule[game.periodIndex];
+  const isLunch = period.period === 'Lunch';
+  const inFoodZone = entityRoom(entity) === 'P.E. Field' || entityRoom(entity) === 'Reception';
+  const canRecoverFromMeal = period.mode === 'break' && isLunch && inFoodZone;
+
+  if (canRecoverFromMeal) {
+    entity.energy = Math.min(100, entity.energy + dt * recoverPerSecond);
+    return;
   }
+
+  const drainRate = baseDrainPerSecond + (isRunning ? runningExtraDrainPerSecond : 0);
+  entity.energy = Math.max(16, entity.energy - dt * drainRate);
 }
 
 function updateAI(dt) {
@@ -1221,8 +1321,16 @@ function updateAI(dt) {
       }
     }
 
-    let dx = entity.target.x - entity.x;
-    let dy = entity.target.y - entity.y;
+    if (tryUseStairs(entity)) {
+      entity.vx = 0;
+      entity.vy = 0;
+      updateNpcVitals(entity, dt, false);
+      continue;
+    }
+
+    const routedTarget = routeWaypoint(entity, entity.target);
+    let dx = routedTarget.x - entity.x;
+    let dy = routedTarget.y - entity.y;
 
     // Lightweight separation avoids visual clumping at start-of-day queues.
     for (const other of game.entities) {
@@ -1270,7 +1378,7 @@ function updateAI(dt) {
     constrain(entity);
     updateNpcVitals(entity, dt, entity.running);
 
-    if (len < 0.9) entity.target = null;
+    if (distance(entity, entity.target) < 0.9) entity.target = null;
 
     // Teachers occasionally issue live board tasks.
     if (entity.role === 'teacher' && game.rng() < 0.002) {
@@ -1580,7 +1688,7 @@ function drawWorld() {
 
   // Stair markers are larger with textured treads for readability.
   for (const stair of stairs) {
-    const points = [stair.y, stair.toY];
+    const points = [stair.fromY, stair.toY];
     for (const y of points) {
       const pos = worldToScreen(stair.x, y);
       fillDitherRect(pos.sx - 14, pos.sy - 10, 28, 20, '#f4d06f', '#ffbf3c', 4);
@@ -1606,6 +1714,8 @@ function drawWorld() {
   ctx.fillText('MIDDLE FLOOR', 12, 36);
   ctx.fillStyle = '#bdf6c4';
   ctx.fillText('GROUND FLOOR', 12, 52);
+  ctx.fillStyle = '#ffd67a';
+  ctx.fillText('LOWER FLOOR', 110, 52);
 
   // Vending machines and bins are rendered as interactable landmarks.
   for (const vm of vendingMachines) {
