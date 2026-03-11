@@ -1210,7 +1210,9 @@ function maxStudentPopulationForLessons() {
   return Math.max(12, classroomCapacity);
 }
 
-const maxStudentPopulation = maxStudentPopulationForLessons();
+// Keep a seat comfort buffer so pupils are less likely to contest the same chairs.
+const STUDENT_POPULATION_REDUCTION = 10;
+const maxStudentPopulation = Math.max(12, maxStudentPopulationForLessons() - STUDENT_POPULATION_REDUCTION);
 const activeStudentRoster = studentRoster.slice(0, maxStudentPopulation);
 
 function applyStudentAppearancePlan(roster) {
