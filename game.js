@@ -199,13 +199,13 @@ const lessonTasks = [
 ];
 
 const personalities = {
-  // Eric is slightly slower now; other pupils/staff are nudged up for better balance.
+  // Keep player movement aligned with student pace so Eric no longer outruns class flow.
   bully: { speed: 1.21, aggression: 0.72, diligence: 0.2, focus: 0.5 },
   swot: { speed: 1.19, aggression: 0.04, diligence: 0.96, focus: 0.9 },
   hero: { speed: 1.2, aggression: 0.2, diligence: 0.75, focus: 0.7 },
   weird: { speed: 1.18, aggression: 0.35, diligence: 0.45, focus: 0.4 },
   teacher: { speed: 1.22, aggression: 0.55, diligence: 1.0, focus: 1.0 },
-  player: { speed: 1.05, aggression: 0, diligence: 0, focus: 0 },
+  player: { speed: 1.19, aggression: 0, diligence: 0, focus: 0 },
 };
 
 const game = {
@@ -214,6 +214,7 @@ const game = {
   timeScale: 0.06,
   periodIndex: 0,
   periodElapsed: 0,
+  periodHoldMinutes: 0,
   paused: false,
   lines: 0,
   energy: 100,
@@ -469,6 +470,10 @@ function chooseAutoDestination() {
   // Toilets become top priority when bladder is urgent.
   if (game.bladder >= 75) return roomCenter('Toilets');
   const current = schedule[game.periodIndex];
+  if (current.mode === 'lesson') {
+    // Auto Eric uses the same assigned seat mapping as the other students.
+    return getSeatPosition(current.room, player.seatIndex) || roomCenter(current.room);
+  }
   // Keep Eric in the same gate lineup pattern as everyone else on arrival,
   // instead of dragging him to the middle of the School Gates room.
   if (current.period === 'Arrival') return gateQueuePosition(player);
@@ -495,6 +500,8 @@ function roomDoorway(room) {
 function routeWaypoint(entity, destination) {
   const currentRoom = roomAtPosition(entity);
   const destinationRoom = roomAtPosition(destination);
+  // If already inside the destination room, go directly to the desk/spot.
+  if (currentRoom && destinationRoom && currentRoom.name === destinationRoom.name) return destination;
   const currentFloor = entityFloor(entity);
   const destinationFloor = destinationRoom?.floor || 'ground';
 
@@ -516,12 +523,16 @@ function routeWaypoint(entity, destination) {
   return destination;
 }
 
-function tryUseStairs(entity) {
+function tryUseStairs(entity, desiredFloor = null) {
   const currentFloor = entityFloor(entity);
+  const intendedNextFloor = desiredFloor ? nextFloorToward(currentFloor, desiredFloor) : null;
+  if (desiredFloor && desiredFloor === currentFloor) return false;
   for (const stair of stairs) {
     const currentStep = stairPointForFloor(stair, currentFloor);
-    if (!currentStep || distance(entity, currentStep) > 0.72) continue;
+    // Slightly wider trigger prevents hover loops beside stair tiles.
+    if (!currentStep || distance(entity, currentStep) > 1.05) continue;
     const destinationFloor = stair.fromFloor === currentFloor ? stair.toFloor : stair.fromFloor;
+    if (intendedNextFloor && destinationFloor !== intendedNextFloor) continue;
     const destinationStep = stairPointForFloor(stair, destinationFloor);
     if (!destinationStep) continue;
     entity.x = destinationStep.x;
@@ -620,19 +631,46 @@ function resetToSchoolMorning() {
 }
 
 function updateAutoPilot(dt) {
-  const speed = (player.personality.speed * game.energy) / 100;
+  const current = schedule[game.periodIndex];
   const destination = chooseAutoDestination();
   const waypoint = routeWaypoint(player, destination);
+  const lateForClass = (current.mode === 'lesson' || current.period === 'Tutorial')
+    && entityRoom(player) !== current.room;
+  // Auto movement uses corridor pacing comparable to other students.
+  const hallwayBoost = 2.18;
+  const lateRunBoost = lateForClass ? 1.52 : 1;
+  const speed = ((player.personality.speed * game.energy) / 100) * hallwayBoost * lateRunBoost;
 
   const dx = waypoint.x - player.x;
   const dy = waypoint.y - player.y;
   const len = Math.hypot(dx, dy) || 1;
+
+  // In lessons, lock Eric to his seat once he reaches it so he does not hover.
+  const inLesson = current.mode === 'lesson';
+  const atSeat = inLesson && distance(player, destination) < 0.48;
+  if (atSeat) {
+    player.x = destination.x;
+    player.y = destination.y;
+    player.vx = 0;
+    player.vy = 0;
+    player.isSeated = true;
+    player.seatedRoom = current.room;
+    return;
+  }
+
+  if (player.isSeated) {
+    // Leaving a lesson seat is explicit so seated state stays visually stable.
+    player.isSeated = false;
+    player.seatedRoom = null;
+  }
+
   player.vx = (dx / len) * speed;
   player.vy = (dy / len) * speed;
 
   // Auto mode uses doors/stairs when Eric reaches them.
   if (len < 1.1) {
-    if (!tryUseStairs(player)) interact();
+    const desiredFloor = roomAtPosition(destination)?.floor || entityFloor(player);
+    if (!tryUseStairs(player, desiredFloor)) interact();
   }
   spendEnergy(0.35 * (dt / 1000));
 }
@@ -729,7 +767,11 @@ function constrain(entity) {
 function setPeriod(index) {
   game.periodIndex = index % schedule.length;
   game.periodElapsed = 0;
+  game.periodHoldMinutes = 0;
   const current = schedule[game.periodIndex];
+  // Bell changes stand Eric up to prevent stale seated state between rooms.
+  player.isSeated = false;
+  player.seatedRoom = null;
   if (current.period === 'Tutorial') game.registrationTaken = false;
 
   // Board content changes each bell to emulate lesson instructions.
@@ -1184,10 +1226,11 @@ function chooseTarget(entity, currentPeriod) {
 
 function isTeacherPresentForPeriod(currentPeriod) {
   if (currentPeriod.mode !== 'lesson' && currentPeriod.period !== 'Tutorial') return true;
-  const boardSpot = teacherBoardSpot(currentPeriod.room);
+  // Count attendance by room presence so lessons don't stall when teachers pace near the board.
   return game.entities.some((entity) => (
     entity.role === 'teacher'
-    && distance(entity, boardSpot) < 1.8
+    && entityRoom(entity) === currentPeriod.room
+    && entity.knockedUntil < performance.now()
   ));
 }
 
@@ -1330,7 +1373,8 @@ function updateAI(dt) {
       }
     }
 
-    if (tryUseStairs(entity)) {
+    const desiredFloor = roomAtPosition(entity.target)?.floor || entityFloor(entity);
+    if (tryUseStairs(entity, desiredFloor)) {
       entity.vx = 0;
       entity.vy = 0;
       updateNpcVitals(entity, dt, false);
@@ -1462,9 +1506,20 @@ function updateSchedule(dt) {
   const teacherPresent = isTeacherPresentForPeriod(current);
   const periodWaiting = (current.mode === 'lesson' || current.period === 'Tutorial') && !teacherPresent;
 
-  // Lessons now wait for the teacher before period time can advance.
-  if (!periodWaiting) {
+  // Lessons wait briefly for the teacher, then continue so the school day never soft-locks.
+  if (periodWaiting) {
+    game.periodHoldMinutes += deltaMins;
+  } else {
+    game.periodHoldMinutes = 0;
+  }
+
+  const maxTeacherWaitMins = 6;
+  const forceContinue = periodWaiting && game.periodHoldMinutes >= maxTeacherWaitMins;
+  if (!periodWaiting || forceContinue) {
     game.periodElapsed += deltaMins;
+  }
+  if (forceContinue && game.periodHoldMinutes - deltaMins < maxTeacherWaitMins) {
+    announce(`⏱️ ${current.period} resumed after waiting for staff to arrive.`);
   }
   game.timeMinutes += deltaMins;
 
@@ -2168,3 +2223,25 @@ updateAutoStatus();
 updateBladderHud();
 updateTodo();
 requestAnimationFrame(loop);
+
+// Lightweight debug hooks help automated validation without changing gameplay UI.
+window.__skoolDazeDebug = {
+  getState: () => ({
+    time: game.timeMinutes,
+    period: schedule[game.periodIndex].period,
+    targetRoom: schedule[game.periodIndex].room,
+    playerRoom: entityRoom(player),
+    playerSeated: player.isSeated,
+    lines: game.lines,
+  }),
+  setTimeScale: (value) => {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      game.timeScale = value;
+    }
+  },
+  setAutoMode: (enabled) => {
+    game.autoMode = Boolean(enabled);
+    game.idleMs = 0;
+    updateAutoStatus();
+  },
+};
