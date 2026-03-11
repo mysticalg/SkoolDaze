@@ -415,7 +415,7 @@ const ERIC_RESERVED_SEAT_CHANCE = 0.9;
 // Everyday school items can move through student pockets via trading and bartering.
 const TRADABLE_ITEMS = [
   'chewing gum', 'packed lunch', 'textbook', 'sunglasses', 'cap', 'conkers', 'apple',
-  'walkman stereo', 'cassette tape', 'letter', 'toy robot', 'paper airplane', 'trading cards',
+  'walkman stereo', 'cassette tape', 'letter', 'toy robot', 'paper airplane', 'trading cards', 'video game cart', 'video game disk',
 ];
 
 // Rare collectibles rotate around school and can be traded like pocket items.
@@ -840,6 +840,11 @@ const game = {
   lastHygieneAuraAt: 0,
   smelledStudents: {},
   selectedInteractionTarget: null,
+  // Optional after-school free-play window for computer gaming.
+  stayingAfterSchoolUntil: 0,
+  choseToStayAfterSchool: false,
+  playerComputerPlayUntil: 0,
+  playerComputerStationId: null,
   weeklySickScheduledDay: WEEKLY_SICK_DAY_INTERVAL,
   janitorTask: null,
   // Lesson chatter rhythm: teachers hush classes briefly, then noise returns gradually.
@@ -1216,6 +1221,15 @@ activeStudentRoster.forEach(([name, role, color, profile], idx) => {
   const row = Math.floor(idx / 10);
   game.entities.push(mkEntity(name, role, 98 + (column * 5.2), 86.5 + (row * 2.2), color, profile));
 });
+
+function seedSwotGameTraders() {
+  const swots = game.entities.filter((entity) => entity.role === 'swot').slice(0, 4);
+  for (const swot of swots) {
+    if (!hasVideoGameItem(swot)) swot.inventory.push(game.rng() < 0.5 ? 'video game cart' : 'video game disk');
+  }
+}
+
+seedSwotGameTraders();
 
 function initialiseNpcRelationships() {
   for (const entity of game.entities) {
@@ -2125,6 +2139,71 @@ function tryTrade(actor, partner, { isPlayerInitiated = false } = {}) {
   return true;
 }
 
+function hasVideoGameItem(entity) {
+  return Boolean(entity?.inventory?.some((item) => /video game/i.test(String(item))));
+}
+
+function itemTradeValue(item) {
+  const label = String(item || '').toLowerCase();
+  if (label.includes('video game')) return 14;
+  if (label.includes('walkman') || label.includes('toy robot')) return 10;
+  if (label.includes('trading card')) return 8;
+  return 4 + Math.min(5, Math.floor(label.length / 4));
+}
+
+function attemptInteractionTrade(target, { haggle = false } = {}) {
+  if (!target || target === player) return false;
+  if (!player.inventory?.length || !target.inventory?.length) {
+    announce('🎒 Trade failed: someone has no items to swap.');
+    return false;
+  }
+
+  const actorOffer = player.inventory[Math.floor(game.rng() * player.inventory.length)];
+  const partnerOffer = target.inventory[Math.floor(game.rng() * target.inventory.length)];
+  const relation = target.relationships?.Eric || 0;
+  const friendliness = target.traits?.friendly || 50;
+  const discipline = target.traits?.discipline || 50;
+  const playerBarter = (player.traits?.barter || 50) + (haggle ? 18 : 0);
+  const acceptance = 0.26 + (relation / 180) + (friendliness / 280) + (playerBarter / 220) - (discipline / 360);
+
+  const actorValue = itemTradeValue(actorOffer);
+  const partnerValue = itemTradeValue(partnerOffer);
+  const valueGap = partnerValue - actorValue;
+  const worthTolerance = 2 + ((target.traits?.trading || 45) / 28);
+
+  if (valueGap > worthTolerance && !haggle) {
+    announce(`🤨 ${target.name} thinks ${actorOffer} is not worth ${partnerOffer}. Try haggling.`, { source: target, range: 8, force: true });
+    adjustEricRelationship(target, -1.5, 'trade-refused');
+    return false;
+  }
+
+  const haggleRisk = haggle ? 0.12 : 0;
+  const accepted = game.rng() < Math.max(0.06, Math.min(0.94, acceptance - haggleRisk + ((worthTolerance - valueGap) / 14)));
+  if (!accepted) {
+    announce(`🙅 ${target.name} refused the ${haggle ? 'haggle' : 'trade'} offer.`, { source: target, range: 8, force: true });
+    adjustEricRelationship(target, haggle ? -3 : -2, haggle ? 'haggle-failed' : 'trade-failed');
+    return false;
+  }
+
+  const actorIdx = player.inventory.indexOf(actorOffer);
+  const partnerIdx = target.inventory.indexOf(partnerOffer);
+  if (actorIdx < 0 || partnerIdx < 0) return false;
+  player.inventory.splice(actorIdx, 1);
+  target.inventory.splice(partnerIdx, 1);
+  player.inventory.push(partnerOffer);
+  target.inventory.push(actorOffer);
+
+  const price = haggle ? 0 : Math.max(0, Math.floor((partnerValue - actorValue) / 3));
+  if (price > 0 && player.money >= price) {
+    player.money -= price;
+    target.money = (target.money || 0) + price;
+  }
+
+  adjustEricRelationship(target, haggle ? 2.5 : 2, haggle ? 'haggle-trade' : 'trade-success');
+  announce(`🤝 Eric traded ${actorOffer} for ${partnerOffer}${price > 0 ? ` (+£${price})` : ''} with ${target.name}.`, { source: target, range: 8, force: true });
+  return true;
+}
+
 function wrapBubbleText(text, maxWidth) {
   const words = String(text).split(/\s+/);
   const lines = [];
@@ -2450,12 +2529,19 @@ function setPeriod(index) {
   announce(`🔔 Bell! ${current.period} in ${current.room}`);
   if (current.period === 'Home Time') {
     announce('🏠 Home time! Students may leave through the school gates.');
+    announce('🎮 Want extra computer time? At the gates, press E to stay for one extra hour.', { force: true });
+    game.choseToStayAfterSchool = false;
+    game.stayingAfterSchoolUntil = 0;
   }
   if (current.period === 'End Day') {
     announce('🌙 End of day bell. Campus is closing.');
   }
   periodEl.textContent = `🔔 Period: ${current.period}`;
   roomTargetEl.textContent = `📍 Target: ${current.room}`;
+  if (current.period === 'Home Time' && game.choseToStayAfterSchool && game.timeMinutes < game.stayingAfterSchoolUntil) {
+    periodEl.textContent = `🔔 Period: Home Time (Free play until ${formatTime(game.stayingAfterSchoolUntil)})`;
+    roomTargetEl.textContent = '📍 Target: Computer Room (optional)';
+  }
   updateFloorStatus();
   updateTodo();
 }
@@ -3049,6 +3135,16 @@ function interact() {
     }
   }
 
+  // At home-time gates, Eric can choose an optional extra hour for computer gaming.
+  const currentPeriod = schedule[game.periodIndex];
+  const nearSchoolGate = player.x >= (schoolExit.x - 3.2) && player.y >= schoolExit.yMin && player.y <= schoolExit.yMax;
+  if (nearSchoolGate && currentPeriod.period === 'Home Time' && !game.choseToStayAfterSchool) {
+    game.choseToStayAfterSchool = true;
+    game.stayingAfterSchoolUntil = game.timeMinutes + 60;
+    announce(`🕹️ Eric chose to stay after school until ${formatTime(game.stayingAfterSchoolUntil)} for computer time.`, { force: true });
+    return;
+  }
+
   // Use nearby bins to dispose of packaging.
   const nearbyBin = trashCans.find((bin) => distance(player, bin) < 2.1);
   if (nearbyBin && game.playerCarryingTrash) {
@@ -3124,12 +3220,28 @@ function interact() {
     return;
   }
 
-  // Computer terminals are inspectable so players can see what students are really doing.
+  // Computer terminals support lunchtime games if Eric has traded for one.
   const nearbyPc = computerStations.find((station) => distance(player, station) < 1.7);
   if (nearbyPc && entityRoom(player) === 'Computer Room') {
+    const currentPeriod = schedule[game.periodIndex];
+    const lunchOrAfterHours = currentPeriod.period === 'Lunch Break' || game.choseToStayAfterSchool;
+    if (lunchOrAfterHours && hasVideoGameItem(player)) {
+      game.playerComputerStationId = nearbyPc.id;
+      game.playerComputerPlayUntil = performance.now() + 12000;
+      nearbyPc.use = 'game';
+      nearbyPc.userName = 'Eric';
+      game.energy = Math.min(100, game.energy + 6);
+      updateTodo();
+      announce('🎮 Eric loaded a traded video game on the school computer.', { force: true });
+      return;
+    }
+
     const meta = computerUseMeta[nearbyPc.use] || computerUseMeta.word;
     const userText = nearbyPc.userName ? ` used by ${nearbyPc.userName}` : ' idle';
     announce(`🖥️ ${meta.icon} ${meta.label}${userText}.`, { force: true });
+    if (currentPeriod.period !== 'Lunch Break' && !game.choseToStayAfterSchool && hasVideoGameItem(player)) {
+      announce('💡 You have a video game item. Use computers at lunch or during after-school free-play.');
+    }
     return;
   }
 
@@ -3319,6 +3431,15 @@ function syncComputerStations() {
     station.userName = null;
     station.temptationBy = null;
     if (station.use === 'game' || station.use === 'pictures') station.use = 'word';
+  }
+
+  // If Eric chose lunch/free-time gaming, keep his station marked as in use.
+  if (game.playerComputerPlayUntil > performance.now() && game.playerComputerStationId) {
+    const playerStation = computerStations.find((station) => station.id === game.playerComputerStationId);
+    if (playerStation) {
+      playerStation.use = 'game';
+      playerStation.userName = 'Eric';
+    }
   }
 
   for (const entity of game.entities) {
@@ -4246,7 +4367,10 @@ function updateSchedule(dt) {
   }
 
   if (game.periodElapsed >= current.mins) {
-    if (game.periodIndex === schedule.length - 1) {
+    if (current.period === 'Home Time' && game.choseToStayAfterSchool && game.timeMinutes < game.stayingAfterSchoolUntil) {
+      // Optional after-school free-play keeps Home Time active for one extra in-game hour.
+      game.periodElapsed = Math.min(current.mins, game.periodElapsed);
+    } else if (game.periodIndex === schedule.length - 1) {
       // Keep home-time active until player exits via gates.
       game.periodElapsed = current.mins;
     } else {
@@ -4288,6 +4412,10 @@ function updateSchedule(dt) {
     : (!teacherPresent ? ' (waiting for teacher to arrive)' : ' (waiting for teacher to sit)');
   periodEl.textContent = `🔔 Period: ${current.period}${waitingLabel}`;
   roomTargetEl.textContent = `📍 Target: ${current.room}`;
+  if (current.period === 'Home Time' && game.choseToStayAfterSchool && game.timeMinutes < game.stayingAfterSchoolUntil) {
+    periodEl.textContent = `🔔 Period: Home Time (Free play until ${formatTime(game.stayingAfterSchoolUntil)})`;
+    roomTargetEl.textContent = '📍 Target: Computer Room (optional)';
+  }
   updateAttendanceHud(current);
   updateFloorStatus();
 }
@@ -4297,6 +4425,12 @@ function checkSchoolExit() {
   const current = schedule[game.periodIndex];
   if (player.x >= schoolExit.x && player.y >= schoolExit.yMin && player.y <= schoolExit.yMax) {
     if (current.mode === 'home' || current.mode === 'end') {
+      if (game.choseToStayAfterSchool && game.timeMinutes < game.stayingAfterSchoolUntil) {
+        announce(`🕹️ Eric decides to stay for extra computer time until ${formatTime(game.stayingAfterSchoolUntil)}.`, { force: true });
+        player.x = schoolExit.x - 2.2;
+        player.y = 90;
+        return;
+      }
       announce('✅ Eric leaves at home time. School day complete.');
       game.dayCount += 1;
       resetToSchoolMorning();
@@ -5290,6 +5424,8 @@ function updateEntityTooltip(event) {
 }
 
 const studentInteractions = [
+  { id: 'trade', icon: '🤝', label: 'Offer a fair trade', action: 'trade', baseDelta: 3, lines: ['Fancy a swap?', 'Trade you something useful?', 'Want to exchange items?'] },
+  { id: 'haggle', icon: '💬', label: 'Try to haggle a better deal', action: 'haggle', baseDelta: 1, lines: ['Come on, I can sweeten this deal.', 'Let me talk you into this swap.', 'Surely that is worth a better bargain?'] },
   { id: 'compliment', icon: '✨', label: 'Compliment their style', baseDelta: 7, lines: ['Your trainers are elite today.', 'You handled class brilliantly.', 'You make this place less grim.'] },
   { id: 'joke', icon: '😄', label: 'Crack a joke', baseDelta: 5, lines: ['Need a laugh before next lesson?', 'I have got a joke about detentions.', 'This corridor needs better comedy.'] },
   { id: 'study', icon: '📚', label: 'Ask for study tips', baseDelta: 4, lines: ['Can you help me revise this topic?', 'What is your trick for remembering dates?', 'Any smart shortcut for homework?'] },
@@ -5351,13 +5487,21 @@ function openInteractionPanelFor(target) {
     btn.textContent = `${option.icon} ${option.label}`;
     btn.onclick = () => {
       const line = option.lines[Math.floor(game.rng() * option.lines.length)];
-      const delta = calculateStudentInteractionDelta(target, option);
-      adjustEricRelationship(target, delta, `social:${option.id}`);
-      target.ericReputation = Math.max(-100, Math.min(100, (target.ericReputation || 0) + delta));
       announce(`🗨️ Eric to ${target.name}: "${line}"`);
-      if (delta >= 4) announce(`🙂 ${target.name}: "Fair play, Eric."`, { source: target, range: 8, force: true });
-      else if (delta <= -4) announce(`😠 ${target.name}: "Not cool, Eric."`, { source: target, range: 8, force: true });
-      else announce(`😐 ${target.name}: "Hmm... maybe."`, { source: target, range: 8, force: true });
+
+      if (option.action === 'trade') {
+        attemptInteractionTrade(target, { haggle: false });
+      } else if (option.action === 'haggle') {
+        attemptInteractionTrade(target, { haggle: true });
+      } else {
+        const delta = calculateStudentInteractionDelta(target, option);
+        adjustEricRelationship(target, delta, `social:${option.id}`);
+        target.ericReputation = Math.max(-100, Math.min(100, (target.ericReputation || 0) + delta));
+        if (delta >= 4) announce(`🙂 ${target.name}: "Fair play, Eric."`, { source: target, range: 8, force: true });
+        else if (delta <= -4) announce(`😠 ${target.name}: "Not cool, Eric."`, { source: target, range: 8, force: true });
+        else announce(`😐 ${target.name}: "Hmm... maybe."`, { source: target, range: 8, force: true });
+      }
+
       interactionMetaEl.textContent = `Relationship: ${relationshipLabel(target.relationships?.Eric || 0)} • Reputation: ${Math.round(target.ericReputation || 0)}`;
     };
     interactionOptionsEl.appendChild(btn);
