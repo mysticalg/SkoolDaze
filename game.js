@@ -1066,6 +1066,7 @@ function chooseTarget(entity, currentPeriod) {
 
   if (currentPeriod.mode === 'lesson') {
     if (entity.role === 'teacher') return teacherBoardSpot(currentPeriod.room);
+    // Students always aim for seats during lessons so classes look orderly.
     return getSeatPosition(currentPeriod.room, entity.seatIndex) || roomCenter(currentPeriod.room);
   }
 
@@ -1133,12 +1134,20 @@ function updateAI(dt) {
     }
     if (entity.knockedUntil > performance.now()) continue;
 
-    if (!entity.target || game.rng() < 0.01) {
+    const inLesson = current.mode === 'lesson' || current.period === 'Tutorial';
+    const studentInCurrentClass = entity.role !== 'teacher' && entityRoom(entity) === current.room;
+
+    // Keep students focused in class: continuously pull them to their classroom seat.
+    if (inLesson && entity.role !== 'teacher') {
+      entity.target = getSeatPosition(current.room, entity.seatIndex)
+        || nearestFreeSeatInRoom(current.room, entity)
+        || roomCenter(current.room);
+    } else if (!entity.target || game.rng() < 0.01) {
       entity.target = chooseTarget(entity, current);
     }
 
-    // General student misbehaviour: pupils sometimes act up during lessons.
-    if (entity.role !== 'teacher' && supervised && game.rng() < 0.0016) {
+    // General student misbehaviour: keep rare and mostly outside lessons.
+    if (entity.role !== 'teacher' && !inLesson && supervised && game.rng() < 0.0016) {
       entity.mood = 'angry';
       entity.target = roomCenter(game.rng() < 0.5 ? 'P.E. Field' : 'Ground Corridor');
       announce(`😈 ${entity.name} started misbehaving in ${current.period}.`);
@@ -1193,7 +1202,7 @@ function updateAI(dt) {
     }
 
     // Most students bin litter; some occasionally drop it and get told off.
-    if (entity.role !== 'teacher' && entity.carryingTrash) {
+    if (entity.role !== 'teacher' && entity.carryingTrash && !inLesson) {
       const nearestBin = nearestPoint(entity, trashCans);
       const littering = game.rng() < 0.001;
       if (littering) {
@@ -1224,16 +1233,19 @@ function updateAI(dt) {
     let dx = entity.target.x - entity.x;
     let dy = entity.target.y - entity.y;
 
-    // Lightweight separation avoids visual clumping at start-of-day queues.
-    for (const other of game.entities) {
-      if (other === entity || other.knockedUntil > performance.now()) continue;
-      const gapX = entity.x - other.x;
-      const gapY = entity.y - other.y;
-      const gap = Math.hypot(gapX, gapY) || 0.001;
-      if (gap < 1.2) {
-        const push = ((1.2 - gap) / 1.2) * 0.28;
-        dx += (gapX / gap) * push;
-        dy += (gapY / gap) * push;
+    // Lightweight separation avoids visual clumping, but we skip it for seated pupils
+    // so classroom rows stay stable and students don't drift toward the blackboard.
+    if (!(inLesson && studentInCurrentClass)) {
+      for (const other of game.entities) {
+        if (other === entity || other.knockedUntil > performance.now()) continue;
+        const gapX = entity.x - other.x;
+        const gapY = entity.y - other.y;
+        const gap = Math.hypot(gapX, gapY) || 0.001;
+        if (gap < 1.2) {
+          const push = ((1.2 - gap) / 1.2) * 0.28;
+          dx += (gapX / gap) * push;
+          dy += (gapY / gap) * push;
+        }
       }
     }
 
@@ -1249,7 +1261,6 @@ function updateAI(dt) {
       continue;
     }
 
-    const inLesson = current.mode === 'lesson' || current.period === 'Tutorial';
     const seatedTarget = inLesson && entity.role !== 'teacher' && entityRoom(entity) === current.room;
     entity.isSeated = seatedTarget && len < 0.55;
     entity.seatedRoom = entity.isSeated ? current.room : null;
