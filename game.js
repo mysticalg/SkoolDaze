@@ -16,6 +16,8 @@ const todoEl = document.getElementById('todo');
 const helpDialog = document.getElementById('helpDialog');
 const helpBtn = document.getElementById('helpBtn');
 const pauseBtn = document.getElementById('pauseBtn');
+const toggleNamesBtn = document.getElementById('toggleNamesBtn');
+const entityTooltipEl = document.getElementById('entityTooltip');
 document.getElementById('closeHelp').onclick = () => helpDialog.close();
 helpBtn.onclick = () => helpDialog.showModal();
 
@@ -237,6 +239,8 @@ const game = {
   litter: [],
   playerCarryingTrash: false,
   playerHeldItem: null,
+  showNpcNames: true,
+  hoveredEntity: null,
 };
 
 let seatCounter = 0;
@@ -2047,9 +2051,12 @@ function drawEntities() {
     ctx.fillStyle = '#4cc9f0';
     ctx.fillRect(barX, py - 33, (barW * entity.bladder) / 100, 2);
 
-    ctx.fillStyle = PALETTE.chalk;
-    ctx.font = 'bold 9px monospace';
-    ctx.fillText(entity.name.toUpperCase(), px - 22, py - 29);
+    const shouldDrawName = entity.role === 'player' || game.showNpcNames;
+    if (shouldDrawName) {
+      ctx.fillStyle = PALETTE.chalk;
+      ctx.font = 'bold 9px monospace';
+      ctx.fillText(entity.name.toUpperCase(), px - 22, py - 29);
+    }
   }
 
   for (const pellet of game.pellets) {
@@ -2147,6 +2154,71 @@ function drawStatusOverlay() {
   ctx.fillText('PAUSED', canvas.width / 2 - 65, canvas.height / 2);
 }
 
+
+function updateNameToggleButton() {
+  // Button label mirrors the current render mode so players can switch quickly.
+  const showing = game.showNpcNames;
+  toggleNamesBtn.textContent = `🏷️ Names: ${showing ? 'ON' : 'OFF'}`;
+  toggleNamesBtn.title = showing
+    ? 'Hide NPC name labels to make energy bars easier to read'
+    : 'Show NPC name labels above students and teachers';
+}
+
+function getEntityScreenPosition(entity) {
+  const sx = canvas.width / CAMERA.w;
+  const sy = canvas.height / CAMERA.h;
+  return {
+    x: Math.floor((entity.x - CAMERA.x) * sx),
+    y: Math.floor((entity.y - CAMERA.y) * sy),
+  };
+}
+
+function findHoveredEntityAtScreen(mouseX, mouseY) {
+  const current = schedule[game.periodIndex];
+  // Reverse order makes overlapping hover match what is visually on top.
+  for (let i = game.entities.length - 1; i >= 0; i -= 1) {
+    const entity = game.entities[i];
+    if (!hasArrivedForCurrentPeriod(entity, current)) continue;
+    const pos = getEntityScreenPosition(entity);
+    const halfW = 10;
+    const height = 28;
+    const withinX = mouseX >= pos.x - halfW && mouseX <= pos.x + halfW;
+    const withinY = mouseY >= pos.y - height && mouseY <= pos.y + 6;
+    if (withinX && withinY) return entity;
+  }
+  return null;
+}
+
+function hideEntityTooltip() {
+  game.hoveredEntity = null;
+  entityTooltipEl.hidden = true;
+}
+
+function updateEntityTooltip(event) {
+  const rect = canvas.getBoundingClientRect();
+  const mouseX = event.clientX - rect.left;
+  const mouseY = event.clientY - rect.top;
+  const hovered = findHoveredEntityAtScreen(mouseX, mouseY);
+
+  if (!hovered) {
+    hideEntityTooltip();
+    return;
+  }
+
+  game.hoveredEntity = hovered;
+  const role = hovered.role === 'player' ? 'You' : hovered.role;
+  const room = entityRoom(hovered);
+  entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>❤️ HP: ${Math.round(hovered.hp)} | ⚡ EN: ${Math.round(hovered.energy)}<br>🚻 Bladder: ${Math.round(hovered.bladder)}% | 📍 ${room}`;
+
+  // Keep tooltip inside the canvas-wrap bounds for legibility.
+  const wrap = canvas.parentElement.getBoundingClientRect();
+  const left = Math.min(mouseX + 16, wrap.width - 190);
+  const top = Math.max(8, mouseY - 56);
+  entityTooltipEl.style.left = `${left}px`;
+  entityTooltipEl.style.top = `${top}px`;
+  entityTooltipEl.hidden = false;
+}
+
 // -----------------------------------------------------------------------------
 // Main loop
 // -----------------------------------------------------------------------------
@@ -2221,11 +2293,20 @@ window.addEventListener('keyup', (event) => {
 
 pauseBtn.onclick = togglePause;
 
+toggleNamesBtn.onclick = () => {
+  game.showNpcNames = !game.showNpcNames;
+  updateNameToggleButton();
+};
+
+canvas.addEventListener('mousemove', updateEntityTooltip);
+canvas.addEventListener('mouseleave', hideEntityTooltip);
+
 announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
 updateMission();
 updateAutoStatus();
 updateBladderHud();
 updateTodo();
+updateNameToggleButton();
 requestAnimationFrame(loop);
 
 // Lightweight debug hooks help automated validation without changing gameplay UI.

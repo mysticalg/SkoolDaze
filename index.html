@@ -23,12 +23,14 @@
     <div class="top-controls">
       <button id="pauseBtn" class="control" title="Pause or resume game">⏯️</button>
       <button id="helpBtn" class="control" title="Open controls and tips" aria-label="Help">❔</button>
+      <button id="toggleNamesBtn" class="control" title="Toggle NPC name labels so bars are easier to read" aria-label="Toggle NPC names">🏷️ Names: ON</button>
     </div>
   </header>
 
   <main>
     <section class="canvas-wrap" title="Use arrow keys or WASD to move. Z punch, X catapult, V throw rubbish, E interact, Q sit/stand. Camera follows you through a multi-level campus.">
       <canvas id="game" width="1280" height="700" aria-label="School game area"></canvas>
+      <div id="entityTooltip" class="entity-tooltip" role="status" aria-live="polite" hidden></div>
     </section>
 
     <aside class="panel">
