@@ -263,6 +263,9 @@ const game = {
   playerHeldItem: null,
   showNpcNames: true,
   hoveredEntity: null,
+  // Mini-map NPC dots are refreshed on an interval to keep rendering cheap.
+  miniMapNpcSnapshot: [],
+  miniMapLastRefreshAt: 0,
 };
 
 let seatCounter = 0;
@@ -313,6 +316,8 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     phaseThroughUntil: 0,
     // During supervised periods, students cache which classroom they are trying to attend.
     lessonRoom: null,
+    // Tracks prolonged body overlap so we can respawn congested students.
+    overlapSeconds: 0,
     lastX: x,
     lastY: y,
   };
@@ -588,6 +593,45 @@ function resetEntityPathing(entity, destination) {
   }
 
   entity.target = destination;
+}
+
+function teleportEntityToTarget(entity, target, reason = 'stuck') {
+  if (!target) return;
+
+  // Teleporting is a last-resort recovery so NPCs never remain blocked forever.
+  entity.x = target.x;
+  entity.y = target.y;
+  entity.vx = 0;
+  entity.vy = 0;
+  entity.jamSeconds = 0;
+  entity.stuckSeconds = 0;
+  entity.overlapSeconds = 0;
+  entity.phaseThroughUntil = 0;
+  constrain(entity);
+
+  if (reason === 'overlap') {
+    entity.target = null;
+  }
+}
+
+function resolvePersistentOverlap(entity, currentPeriod, dtSeconds) {
+  if (entity === player || entity.role === 'teacher') return;
+
+  const overlapping = game.entities.find((other) => (
+    other !== entity
+    && other !== player
+    && other.knockedUntil < performance.now()
+    && distance(entity, other) < 0.36
+  ));
+  entity.overlapSeconds = overlapping ? (entity.overlapSeconds + dtSeconds) : 0;
+  if (entity.overlapSeconds < 1.8) return;
+
+  // During lessons, overlap recovery respawns to a deterministic seat assignment.
+  const roomName = entity.lessonRoom || currentPeriod.room;
+  const seatTarget = currentPeriod.mode === 'lesson'
+    ? (getSeatPosition(roomName, entity.seatIndex) || entity.target)
+    : entity.target;
+  teleportEntityToTarget(entity, seatTarget || roomCenter(currentPeriod.room), 'overlap');
 }
 
 function routeWaypoint(entity, destination) {
@@ -1493,6 +1537,7 @@ function updateAI(dt) {
     if (entity.knockedUntil > performance.now()) continue;
 
     const inLesson = current.mode === 'lesson' || current.period === 'Tutorial';
+    const dtSeconds = dt / 1000;
 
     // Keep students in supervised, staffed classrooms instead of empty rooms.
     if (inLesson && entity.role !== 'teacher') {
@@ -1657,6 +1702,15 @@ function updateAI(dt) {
     // not just the currently assigned teacher in the active period room.
     const seatedTarget = inLesson && entityRoom(entity) === expectedRoom;
     entity.isSeated = seatedTarget && len < 0.55;
+    // Keep lessons visually correct: students sit once they are at their desk tile.
+    if (seatedTarget && entity.role !== 'teacher') {
+      const seatTarget = getSeatPosition(expectedRoom, entity.seatIndex) || entity.target;
+      if (seatTarget && distance(entity, seatTarget) < 0.6) {
+        entity.x = seatTarget.x;
+        entity.y = seatTarget.y;
+        entity.isSeated = true;
+      }
+    }
     entity.seatedRoom = entity.isSeated ? expectedRoom : null;
     const lateForClass = entity.role === 'teacher'
       ? (inLesson && entityRoom(entity) !== expectedRoom)
@@ -1683,20 +1737,21 @@ function updateAI(dt) {
     const moved = Math.hypot(entity.x - entity.lastX, entity.y - entity.lastY);
     entity.lastX = entity.x;
     entity.lastY = entity.y;
-    if (entity.role === 'teacher' && lateForClass && distance(entity, entity.target) > 2.1) {
-      entity.stuckSeconds = moved < 0.06 ? (entity.stuckSeconds + (dt / 1000)) : 0;
-      if (entity.stuckSeconds > 2.4) {
-        const rescueRoom = roomByName(expectedRoom);
-        const rescueDoor = roomDoorway(rescueRoom);
-        if (rescueDoor) {
-          entity.x = rescueDoor.x;
-          entity.y = rescueDoor.y;
-          entity.target = teacherBoardSpot(expectedRoom);
-        }
-        entity.stuckSeconds = 0;
-      }
-    } else {
-      entity.stuckSeconds = 0;
+    const farFromAssignedTarget = distance(entity, entity.target) > 1.6;
+    entity.stuckSeconds = (lateForClass && farFromAssignedTarget && moved < 0.06)
+      ? (entity.stuckSeconds + dtSeconds)
+      : Math.max(0, entity.stuckSeconds - (dtSeconds * 0.5));
+
+    // If routing fails for too long, teleport straight to destination.
+    if (entity.stuckSeconds > 3.2) {
+      const rescueTarget = entity.role === 'teacher'
+        ? (getTeacherSeatPosition(expectedRoom) || entity.target)
+        : (inLesson
+          ? (getSeatPosition(expectedRoom, entity.seatIndex) || entity.target)
+          : entity.target);
+      teleportEntityToTarget(entity, rescueTarget, 'stuck');
+      entity.isSeated = inLesson;
+      entity.seatedRoom = inLesson ? expectedRoom : null;
     }
 
     // Generic doorway jam recovery for all NPCs. If movement stalls in a choke-point,
@@ -1718,6 +1773,8 @@ function updateAI(dt) {
       entity.jamSeconds = 0;
       entity.phaseThroughUntil = 0;
     }
+
+    resolvePersistentOverlap(entity, current, dtSeconds);
 
     // Teachers occasionally issue live board tasks.
     if (entity.role === 'teacher' && game.rng() < 0.002) {
@@ -2358,6 +2415,22 @@ function drawEntities() {
   }
 }
 
+function refreshMiniMapNpcSnapshot() {
+  const now = performance.now();
+  if (now - game.miniMapLastRefreshAt < 350) return;
+
+  // Snapshotting reduces mini-map draw cost while still showing movement frequently.
+  game.miniMapNpcSnapshot = game.entities
+    .filter((entity) => entity !== player && hasArrivedForCurrentPeriod(entity))
+    .map((entity) => ({
+      x: entity.x,
+      y: entity.y,
+      role: entity.role,
+      seated: Boolean(entity.isSeated),
+    }));
+  game.miniMapLastRefreshAt = now;
+}
+
 function drawMiniMap() {
   // Compact mini-map with objective locators for fast orientation.
   const mapW = 220;
@@ -2385,6 +2458,7 @@ function drawMiniMap() {
 
   const current = schedule[game.periodIndex];
   const objectiveRoom = roomByName(current.room);
+  refreshMiniMapNpcSnapshot();
 
   // Objective locator: class target for the current period.
   if (objectiveRoom) {
@@ -2431,11 +2505,24 @@ function drawMiniMap() {
   ctx.arc(mapX + player.x * scaleX, mapY + player.y * scaleY, 3.5, 0, Math.PI * 2);
   ctx.fill();
 
+  // Student/teacher markers are refreshed periodically via snapshot cache.
+  for (const npc of game.miniMapNpcSnapshot) {
+    if (npc.role === 'teacher') {
+      ctx.fillStyle = '#8ec5ff';
+      ctx.fillRect(mapX + npc.x * scaleX - 1.8, mapY + npc.y * scaleY - 1.8, 3.6, 3.6);
+      continue;
+    }
+    ctx.fillStyle = npc.seated ? '#9ae6b4' : '#ffd166';
+    ctx.beginPath();
+    ctx.arc(mapX + npc.x * scaleX, mapY + npc.y * scaleY, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   ctx.fillStyle = '#d9ecff';
   ctx.font = 'bold 9px monospace';
   ctx.fillText('MINI MAP', mapX + 6, mapY + 12);
   ctx.font = '8px monospace';
-  ctx.fillText('● Class  ■ Shield  ● Toilet  ○ You', mapX + 6, mapY + mapH - 6);
+  ctx.fillText('● Class ■ Shield ● Toilet ○ You • Students ■ Teachers', mapX + 6, mapY + mapH - 6);
 }
 
 function drawStatusOverlay() {
