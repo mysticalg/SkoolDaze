@@ -271,9 +271,21 @@ const player = mkEntity('Eric', 'player', 48, 64, '#ffe04d', {
 
 game.entities.push(
   player,
-  mkEntity('Mr Wacker', 'teacher', 22, 42, '#8eb2ff', { title: 'Headmaster', strict: 0.9 }),
-  mkEntity('Ms Take', 'teacher', 75, 42, '#82a4ff', { title: 'Science Teacher', strict: 0.8 }),
-  mkEntity('Mr Creak', 'teacher', 56, 84, '#7e9aff', { title: 'History Teacher', strict: 0.7 }),
+  mkEntity('Mr Wacker', 'teacher', 22, 42, '#8eb2ff', {
+    title: 'Headmaster', strict: 0.95, attire: 'headmaster', beard: true,
+  }),
+  mkEntity('Mr Flash', 'teacher', 70, 40, '#f4d35e', {
+    title: 'Maths Teacher', strict: 0.75, attire: 'flash', chin: 'big',
+  }),
+  mkEntity('Ms Take', 'teacher', 75, 42, '#82a4ff', {
+    title: 'English Teacher', strict: 0.65, attire: 'plainBlueDress',
+  }),
+  mkEntity('Dr Beaker', 'teacher', 88, 41, '#e9ecef', {
+    title: 'Science Teacher', strict: 0.8, attire: 'scienceCoat', bald: true, build: 'fat',
+  }),
+  mkEntity('Mr Creak', 'teacher', 56, 84, '#7e9aff', {
+    title: 'History Teacher', strict: 0.85, attire: 'oldBrown', cane: true,
+  }),
   mkEntity('Angelface', 'hero', 102, 88, '#ffd58e', { title: 'Handsome kid' }),
   mkEntity('Einstein', 'swot', 108, 87, '#8effd3', { title: 'Teacher pet', tattles: true }),
   mkEntity('Bully Boy', 'bully', 114, 89, '#ff5f88', { title: 'Playground terror' }),
@@ -729,12 +741,17 @@ function handleInput(dt) {
 
 function meleeAttack(attacker) {
   attacker.punchUntil = performance.now() + 220;
+  const strikeRange = attacker.profile.cane ? 1.95 : 1.45;
   for (const target of game.entities) {
     if (target === attacker || target.knockedUntil > performance.now()) continue;
-    if (distance(attacker, target) < 1.45) {
-      target.hp -= 45;
+    if (distance(attacker, target) < strikeRange) {
+      target.hp -= attacker.profile.cane ? 55 : 45;
       target.mood = 'angry';
-      announce(`👊 ${attacker.name} punched ${target.name}`);
+      if (attacker.profile.cane) {
+        announce(`🪵 ${attacker.name} thwacked ${target.name} with a walking stick`);
+      } else {
+        announce(`👊 ${attacker.name} punched ${target.name}`);
+      }
       if (target.hp <= 0) knockout(target, attacker);
       if (attacker === player && target.role === 'teacher') addLines(120, 'striking a teacher');
       spendEnergy(7);
@@ -1098,6 +1115,17 @@ function updateAI(dt) {
     }
 
     const len = Math.hypot(dx, dy) || 1;
+
+    // During gate lineup, lock pupils/teachers still once they reach their slot.
+    if (current.period === 'Arrival' && len < 0.52) {
+      entity.vx = 0;
+      entity.vy = 0;
+      entity.running = false;
+      constrain(entity);
+      updateNpcVitals(entity, dt, false);
+      continue;
+    }
+
     const lateForClass = supervised && teacherPresent && entityRoom(entity) !== current.room;
     const canRun = entity.energy > 20;
     entity.running = lateForClass && canRun;
@@ -1602,6 +1630,61 @@ function drawEntities() {
       ctx.fillStyle = '#13151a';
       ctx.fillRect(px - 6, py + 2 + legKick, 5, 2);
       ctx.fillRect(px + 1, py + 2 - legKick, 5, 2);
+
+      // Teachers are rendered larger and more formal than students.
+      if (entity.role === 'teacher') {
+        const attire = entity.profile.attire || 'staff';
+
+        // Broad shoulders + taller coat silhouette to read clearly at distance.
+        ctx.fillStyle = attire === 'scienceCoat' ? '#f8f9fa' : attire === 'flash' ? '#f4d35e' : attire === 'plainBlueDress' ? '#4f86f7' : attire === 'oldBrown' ? '#8d6e63' : '#1e2438';
+        ctx.fillRect(px - 9, py - 21 + bob, 18, 15);
+
+        // Formal tie/collar motif helps identify staff quickly.
+        ctx.fillStyle = '#fefefe';
+        ctx.fillRect(px - 2, py - 19 + bob, 4, 4);
+        ctx.fillStyle = '#c1121f';
+        ctx.fillRect(px - 1, py - 15 + bob, 2, 4);
+
+        if (entity.name === 'Mr Wacker' || entity.profile.beard) {
+          // Headmaster: black suit with beard.
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(px - 10, py - 22 + bob, 20, 3);
+          ctx.fillStyle = '#5a3b2e';
+          ctx.fillRect(px - 4, py - 16 + bob, 8, 4);
+        }
+
+        if (entity.name === 'Mr Flash' || entity.profile.chin === 'big') {
+          // Mr Flash: bright yellow style + pronounced chin.
+          ctx.fillStyle = '#ffd166';
+          ctx.fillRect(px - 6, py - 25 + bob, 12, 3);
+          ctx.fillStyle = '#d9a066';
+          ctx.fillRect(px - 4, py - 18 + bob, 8, 3);
+        }
+
+        if (entity.name === 'Ms Take') {
+          // Ms Take: plain, dull blue dress silhouette.
+          ctx.fillStyle = '#3a5fa0';
+          ctx.fillRect(px - 8, py - 10 + bob, 16, 6);
+        }
+
+        if (entity.name === 'Dr Beaker' || attire === 'scienceCoat') {
+          // Science teacher: bald, heavier build, white overcoat.
+          ctx.fillStyle = '#ffe0bd';
+          ctx.fillRect(px - 5, py - 24 + bob, 10, 2);
+          ctx.fillStyle = '#f8f9fa';
+          ctx.fillRect(px - 10, py - 20 + bob, 20, 14);
+        }
+
+        if (entity.name === 'Mr Creak' || entity.profile.cane) {
+          // History teacher: older brown look with walking stick/cane.
+          ctx.fillStyle = '#7f5539';
+          ctx.fillRect(px - 9, py - 22 + bob, 18, 15);
+          ctx.fillStyle = '#5b3a29';
+          const caneReach = isPunching ? 6 : 0;
+          const stickX = entity.facing >= 0 ? px + 11 + caneReach : px - 13 - caneReach;
+          ctx.fillRect(stickX, py - 16 + bob, 2, 14);
+        }
+      }
     }
 
     // Mood marker remains concise and readable.
