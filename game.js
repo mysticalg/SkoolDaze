@@ -609,6 +609,9 @@ function getRoomSeatLayout(roomName) {
     seats,
     boardX: room.x + room.w / 2,
     boardY: room.y + 2.2,
+    // Each classroom gets a dedicated teacher station at the front.
+    teacherDesk: { x: room.x + room.w / 2, y: room.y + 3.4 },
+    teacherSeat: { x: room.x + room.w / 2, y: room.y + 4.4 },
   };
   roomSeatCache.set(roomName, layout);
   return layout;
@@ -619,6 +622,11 @@ function getSeatPosition(roomName, seatIndex) {
   if (!layout || !layout.seats.length) return null;
   const slot = seatIndex % layout.seats.length;
   return layout.seats[slot];
+}
+
+function getTeacherSeatPosition(roomName) {
+  const layout = getRoomSeatLayout(roomName);
+  return layout?.teacherSeat || roomCenter(roomName);
 }
 
 function resetToSchoolMorning() {
@@ -1180,6 +1188,7 @@ function interact() {
   if (
     teacherNearby
     && entityRoom(player) === current.room
+    && isAssignedTeacherSeatedForPeriod(current)
     && !game.quizActive
     // Slower questioning cadence so lessons feel less spammy.
     && now - teacherNearby.lastQuizAt > 45000
@@ -1215,12 +1224,21 @@ function updateMission() {
 // AI systems
 // -----------------------------------------------------------------------------
 function teacherBoardSpot(periodRoom) {
-  const board = blackboards.find((candidate) => candidate.room === periodRoom);
-  if (board) {
-    return { x: board.x - 1.1, y: board.y + 0.2, room: periodRoom };
-  }
-  const fallback = roomCenter(periodRoom);
-  return { ...fallback, room: periodRoom };
+  // Teachers now run lessons from their own desk/chair station.
+  const teacherSeat = getTeacherSeatPosition(periodRoom);
+  return { ...teacherSeat, room: periodRoom };
+}
+
+function isAssignedTeacherSeatedForPeriod(currentPeriod = schedule[game.periodIndex]) {
+  if (currentPeriod.mode !== 'lesson' && currentPeriod.period !== 'Tutorial') return true;
+  const assignedTeacherName = assignedTeacherForRoom(currentPeriod.room);
+  return game.entities.some((entity) => (
+    entity.role === 'teacher'
+    && (!assignedTeacherName || entity.name === assignedTeacherName)
+    && entity.isSeated
+    && entity.seatedRoom === currentPeriod.room
+    && entity.knockedUntil < performance.now()
+  ));
 }
 
 function assignedTeacherForRoom(roomName) {
@@ -1499,7 +1517,7 @@ function updateAI(dt) {
       continue;
     }
 
-    const seatedTarget = inLesson && entity.role !== 'teacher' && entityRoom(entity) === current.room;
+    const seatedTarget = inLesson && entityRoom(entity) === current.room;
     entity.isSeated = seatedTarget && len < 0.55;
     entity.seatedRoom = entity.isSeated ? current.room : null;
 
@@ -1596,9 +1614,11 @@ function updateSchedule(dt) {
   const current = schedule[game.periodIndex];
   const deltaMins = (dt / 1000) * game.timeScale;
   const teacherPresent = isTeacherPresentForPeriod(current);
-  const periodWaiting = (current.mode === 'lesson' || current.period === 'Tutorial') && !teacherPresent;
+  const teacherSeatedForLesson = isAssignedTeacherSeatedForPeriod(current);
+  const periodWaiting = (current.mode === 'lesson' || current.period === 'Tutorial')
+    && (!teacherPresent || !teacherSeatedForLesson);
 
-  // Lessons wait briefly for the teacher, then continue so the school day never soft-locks.
+  // Lessons wait briefly for the teacher to arrive and sit, then continue to avoid soft-locks.
   if (periodWaiting) {
     game.periodHoldMinutes += deltaMins;
   } else {
@@ -1611,7 +1631,7 @@ function updateSchedule(dt) {
     game.periodElapsed += deltaMins;
   }
   if (forceContinue && game.periodHoldMinutes - deltaMins < maxTeacherWaitMins) {
-    announce(`⏱️ ${current.period} resumed after waiting for staff to arrive.`);
+    announce(`⏱️ ${current.period} resumed after waiting for teacher to get seated.`);
   }
   game.timeMinutes += deltaMins;
 
@@ -1648,7 +1668,7 @@ function updateSchedule(dt) {
   }
 
   clockEl.textContent = `🕘 Time: ${formatTime(game.timeMinutes)}`;
-  periodEl.textContent = `🔔 Period: ${current.period}${periodWaiting ? ' (waiting for teacher)' : ''}`;
+  periodEl.textContent = `🔔 Period: ${current.period}${periodWaiting ? ' (waiting for teacher to sit)' : ''}`;
   roomTargetEl.textContent = `📍 Target: ${current.room}`;
   updateFloorStatus();
 }
@@ -1817,6 +1837,21 @@ function drawWorld() {
           ctx.fillRect(seatPos.sx - 3, seatPos.sy, 2, 2);
           ctx.fillRect(seatPos.sx + 1, seatPos.sy, 2, 2);
         }
+
+        // Teacher furniture is always present so every room can run lessons.
+        const teacherDesk = worldToScreen(layout.teacherDesk.x, layout.teacherDesk.y);
+        const teacherChair = worldToScreen(layout.teacherSeat.x, layout.teacherSeat.y);
+        // Wider teacher desk stands out visually from pupil desks.
+        ctx.fillStyle = '#7a4a2a';
+        ctx.fillRect(teacherDesk.sx - 8, teacherDesk.sy - 5, 16, 5);
+        ctx.fillStyle = '#4f2f1c';
+        ctx.fillRect(teacherDesk.sx - 8, teacherDesk.sy, 2, 3);
+        ctx.fillRect(teacherDesk.sx + 6, teacherDesk.sy, 2, 3);
+        // Teacher chair tucked behind desk for seated lesson state.
+        ctx.fillStyle = '#2f4868';
+        ctx.fillRect(teacherChair.sx - 4, teacherChair.sy + 1, 8, 2);
+        ctx.fillRect(teacherChair.sx - 4, teacherChair.sy - 1, 2, 2);
+        ctx.fillRect(teacherChair.sx + 2, teacherChair.sy - 1, 2, 2);
       }
     }
 
