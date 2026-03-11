@@ -32,6 +32,13 @@
     </section>
 
     <aside class="panel">
+      <!-- Keep live updates at the top of the menu bar for quick scanning during play. -->
+      <h3>Event Feed</h3>
+      <div id="events" class="events" aria-live="polite"></div>
+
+      <h3>Daily Objectives</h3>
+      <ul id="todo" class="todo" aria-live="polite"></ul>
+
       <h2>Legend</h2>
       <ul>
         <li><span class="dot player"></span> Eric (you)</li>
@@ -54,11 +61,6 @@
       <p title="Pause game logic and rendering updates."><strong>Pause:</strong> P or ⏯️</p>
       <p title="The view scrolls with Eric so you can navigate floors with stairs."><strong>🧭 Navigation:</strong> Follow corridors and use marked stairs between levels. Floor colors: Upper purple, Middle blue, Ground green.</p>
 
-      <h3>Daily Objectives</h3>
-      <ul id="todo" class="todo" aria-live="polite"></ul>
-
-      <h3>Event Feed</h3>
-      <div id="events" class="events" aria-live="polite"></div>
     </aside>
   </main>
 
