@@ -61,6 +61,7 @@ const optRatioSwotEl = document.getElementById('optRatioSwot');
 const optRatioWeirdEl = document.getElementById('optRatioWeird');
 const optGameSpeedEl = document.getElementById('optGameSpeed');
 const optWeatherEl = document.getElementById('optWeather');
+const optNpcChatterDelayEl = document.getElementById('optNpcChatterDelay');
 const optLlmEnabledEl = document.getElementById('optLlmEnabled');
 const optLlmNsfwEl = document.getElementById('optLlmNsfw');
 const optLlmNoFallbackEl = document.getElementById('optLlmNoFallback');
@@ -2395,6 +2396,9 @@ const game = {
   energy: 100,
   charisma: 50,
   missionComplete: false,
+  // Global NPC chatter throttle keeps social bubbles readable and prevents spam bursts.
+  npcChatterDelayMs: 1000,
+  lastNpcChatterAt: -Infinity,
   safeCombo: '',
   entities: [],
   pellets: [],
@@ -2985,6 +2989,12 @@ function allNonPlayerStudents() {
 }
 
 
+
+function normalizedNpcChatterDelay(value) {
+  // Clamp chatter delay to keep simulation responsive while still user-configurable.
+  return Math.max(100, Math.min(10000, Number(value) || 1000));
+}
+
 function persistSplashSettings() {
   try {
     localStorage.setItem(SPLASH_STORAGE_KEY, JSON.stringify({
@@ -2996,6 +3006,7 @@ function persistSplashSettings() {
       ratioHero: Number(optRatioHeroEl?.value || 25),
       ratioSwot: Number(optRatioSwotEl?.value || 25),
       ratioWeird: Number(optRatioWeirdEl?.value || 25),
+      npcChatterDelay: normalizedNpcChatterDelay(optNpcChatterDelayEl?.value || 1000),
     }));
   } catch (error) {
     // Ignore storage failures so startup still works in private browsing contexts.
@@ -3015,6 +3026,7 @@ function loadSplashSettings() {
     if (optRatioHeroEl && Number.isFinite(Number(saved.ratioHero))) optRatioHeroEl.value = String(Math.max(0, Math.min(100, Number(saved.ratioHero))));
     if (optRatioSwotEl && Number.isFinite(Number(saved.ratioSwot))) optRatioSwotEl.value = String(Math.max(0, Math.min(100, Number(saved.ratioSwot))));
     if (optRatioWeirdEl && Number.isFinite(Number(saved.ratioWeird))) optRatioWeirdEl.value = String(Math.max(0, Math.min(100, Number(saved.ratioWeird))));
+    if (optNpcChatterDelayEl && Number.isFinite(Number(saved.npcChatterDelay))) optNpcChatterDelayEl.value = String(normalizedNpcChatterDelay(saved.npcChatterDelay));
   } catch (error) {
     // Ignore malformed splash settings and use HTML defaults.
   }
@@ -3063,6 +3075,7 @@ function applyStartupOptions() {
   const desiredTeachers = Number(optTeacherCountEl?.value || 9);
   const speedMultiplier = Math.max(0.5, Math.min(2, Number(optGameSpeedEl?.value || 1)));
   const weatherSetting = optWeatherEl?.value || 'auto';
+  const npcChatterDelayMs = normalizedNpcChatterDelay(optNpcChatterDelayEl?.value || game.npcChatterDelayMs || 1000);
   const llmEnabled = Boolean(optLlmEnabledEl?.checked);
   const llmSource = String(optLlmSourceEl?.value || 'local');
   const llmNsfw = Boolean(optLlmNsfwEl?.checked);
@@ -3085,6 +3098,7 @@ function applyStartupOptions() {
   });
 
   game.speedMultiplier = speedMultiplier;
+  game.npcChatterDelayMs = npcChatterDelayMs;
   game.timeScale = (TOTAL_DAY_GAME_MINUTES / TARGET_DAY_REAL_SECONDS) * game.speedMultiplier;
   game.preferredWeather = weatherSetting;
   if (weatherSetting !== 'auto' && weatherModes[weatherSetting]) {
@@ -4229,6 +4243,12 @@ function canUseDialogue(entity, now, channel = 'speech') {
   }
   // Off-screen or out-of-room NPCs stay silent and follow routines to avoid queue saturation.
   if (entity?.role !== 'player' && (channel === 'speech' || channel === 'thought') && !isEntityVisibleToPlayer(entity)) return false;
+
+  // Global chatter limiter: any NPC speech/thought must wait for the configured cooldown.
+  if (entity?.role !== 'player' && (channel === 'speech' || channel === 'thought')) {
+    if ((now - (game.lastNpcChatterAt || -Infinity)) < normalizedNpcChatterDelay(game.npcChatterDelayMs)) return false;
+  }
+
   const lastAt = channel === 'thought' ? (entity.lastThoughtAt || 0) : (entity.lastSpokeAt || 0);
   const inClassroom = channel === 'speech' && isSupervisedPeriod(schedule[game.periodIndex]) && entityRoom(entity) === schedule[game.periodIndex].room;
   const minInterval = inClassroom ? CLASSROOM_DIALOGUE_INTERVAL_MS : MIN_DIALOGUE_INTERVAL_MS;
@@ -4285,9 +4305,11 @@ function deliverResolvedSpeech(entity, resolvedText, addressee, opts = {}, now =
   const finalSpeech = entity.role === 'student' && addressee?.name
     ? ensureAddressedNameInSpeech(resolvedText, addressee.name)
     : sanitizeLlmLine(resolvedText, '...');
+  if (entity.role !== 'player' && !opts.bypassGlobalChatterLimit && (now - (game.lastNpcChatterAt || -Infinity)) < normalizedNpcChatterDelay(game.npcChatterDelayMs)) return false;
   if (!opts.force && !markDialogueUsed(entity, finalSpeech, 'speech')) return false;
   entity.speech = { text: finalSpeech, kind: opts.kind || 'speech', until: now + (opts.durationMs || 2600) };
   entity.lastSpokeAt = now;
+  if (entity.role !== 'player') game.lastNpcChatterAt = now;
   const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 8;
   const shouldLogSpeech = opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange);
   if (shouldLogSpeech) pushFeedEvent(`${entity.name}: ${finalSpeech}`, 'speech');
@@ -4297,9 +4319,11 @@ function deliverResolvedSpeech(entity, resolvedText, addressee, opts = {}, now =
 
 function deliverResolvedThought(entity, resolvedText, durationMs = 3200, opts = {}, now = performance.now()) {
   const thoughtText = sanitizeLlmLine(resolvedText, '...');
+  if (entity.role !== 'player' && !opts.bypassGlobalChatterLimit && (now - (game.lastNpcChatterAt || -Infinity)) < normalizedNpcChatterDelay(game.npcChatterDelayMs)) return false;
   if (!markDialogueUsed(entity, thoughtText, 'thought')) return false;
   entity.thought = { text: thoughtText, until: now + durationMs };
   entity.lastThoughtAt = now;
+  if (entity.role !== 'player') game.lastNpcChatterAt = now;
   const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 7.2;
   if (opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange)) {
     pushFeedEvent(`💭 ${entity.name}: ${thoughtText}`, 'thought');
@@ -4315,14 +4339,18 @@ function flushDeferredLlmDialogue(now = performance.now()) {
       const key = llmCacheKey(pendingSpeech.payload);
       const cached = game.llm.cache.get(key);
       if (cached) {
-        deliverResolvedSpeech(entity, cached, pendingSpeech.addressee, pendingSpeech.opts, now);
-        pushLlmDebug(`🗣️ Delivered deferred speech bubble for ${llmActorLabel(pendingSpeech.payload)}.`, 'info');
-        entity.pendingSpeech = null;
+        const delivered = deliverResolvedSpeech(entity, cached, pendingSpeech.addressee, pendingSpeech.opts, now);
+        if (delivered) {
+          pushLlmDebug(`🗣️ Delivered deferred speech bubble for ${llmActorLabel(pendingSpeech.payload)}.`, 'info');
+          entity.pendingSpeech = null;
+        }
       } else if (now - pendingSpeech.createdAt > 24000) {
         // Do not silently drop deferred lines; deliver fallback so players always see who spoke.
-        deliverResolvedSpeech(entity, pendingSpeech.payload?.fallback || '...', pendingSpeech.addressee, { ...pendingSpeech.opts, force: true }, now);
-        pushLlmDebug(`♻️ Deferred speech timed out; fallback delivered for ${llmActorLabel(pendingSpeech.payload)}.`, 'warn');
-        entity.pendingSpeech = null;
+        const deliveredFallback = deliverResolvedSpeech(entity, pendingSpeech.payload?.fallback || '...', pendingSpeech.addressee, { ...pendingSpeech.opts, force: true }, now);
+        if (deliveredFallback) {
+          pushLlmDebug(`♻️ Deferred speech timed out; fallback delivered for ${llmActorLabel(pendingSpeech.payload)}.`, 'warn');
+          entity.pendingSpeech = null;
+        }
       }
     }
 
@@ -4331,14 +4359,18 @@ function flushDeferredLlmDialogue(now = performance.now()) {
       const key = llmCacheKey(pendingThought.payload);
       const cached = game.llm.cache.get(key);
       if (cached) {
-        deliverResolvedThought(entity, cached, pendingThought.durationMs, pendingThought.opts, now);
-        pushLlmDebug(`💭 Delivered deferred thought bubble for ${pendingThought.payload?.speaker || entity.name}.`, 'info');
-        entity.pendingThought = null;
+        const delivered = deliverResolvedThought(entity, cached, pendingThought.durationMs, pendingThought.opts, now);
+        if (delivered) {
+          pushLlmDebug(`💭 Delivered deferred thought bubble for ${pendingThought.payload?.speaker || entity.name}.`, 'info');
+          entity.pendingThought = null;
+        }
       } else if (now - pendingThought.createdAt > 24000) {
         // Keep no-fallback mode readable: if AI stalls too long, show the fallback thought instead of dropping it.
-        deliverResolvedThought(entity, pendingThought.payload?.fallback || '...', pendingThought.durationMs, { ...pendingThought.opts, force: true }, now);
-        pushLlmDebug(`♻️ Deferred thought timed out; fallback delivered for ${pendingThought.payload?.speaker || entity.name}.`, 'warn');
-        entity.pendingThought = null;
+        const deliveredFallback = deliverResolvedThought(entity, pendingThought.payload?.fallback || '...', pendingThought.durationMs, { ...pendingThought.opts, force: true }, now);
+        if (deliveredFallback) {
+          pushLlmDebug(`♻️ Deferred thought timed out; fallback delivered for ${pendingThought.payload?.speaker || entity.name}.`, 'warn');
+          entity.pendingThought = null;
+        }
       }
     }
   }
@@ -9415,6 +9447,14 @@ if (llmDebugClearBtn) {
 }
 
 if (startGameBtn) startGameBtn.addEventListener('click', startGameFromSplash);
+
+
+if (optNpcChatterDelayEl) {
+  optNpcChatterDelayEl.value = String(normalizedNpcChatterDelay(optNpcChatterDelayEl.value || 1000));
+  optNpcChatterDelayEl.addEventListener('change', () => {
+    optNpcChatterDelayEl.value = String(normalizedNpcChatterDelay(optNpcChatterDelayEl.value));
+  });
+}
 
 if (optLlmTimeoutEl) {
   optLlmTimeoutEl.value = String(effectiveLlmBaseTimeout());
