@@ -278,7 +278,7 @@ const roomDoors = rooms
       exteriorY: corridorAtTop ? room.y - 0.55 : room.y + room.h + 0.55,
       icon: '🚪',
     };
-  }, { schoolIntake, girlsRatio });
+  });
 
 // Lockers are split to corridor ends so stair landings remain clear for traffic.
 const lockerBanks = [
@@ -3161,7 +3161,7 @@ function applyStartupOptions() {
     hero: Number(optRatioHeroEl?.value || 25),
     swot: Number(optRatioSwotEl?.value || 25),
     weird: Number(optRatioWeirdEl?.value || 25),
-  }, { schoolIntake, girlsRatio });
+  });
 
   game.speedMultiplier = speedMultiplier;
   game.npcChatterDelayMs = npcChatterDelayMs;
