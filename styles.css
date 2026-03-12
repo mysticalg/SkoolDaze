@@ -217,6 +217,11 @@ canvas {
   z-index: 30;
 }
 
+/* Keep day/night banner behavior consistent: hidden attribute must trump display:flex. */
+.day-transition-overlay[hidden] {
+  display: none !important;
+}
+
 .day-transition-card {
   width: min(82%, 460px);
   padding: 1rem 1.1rem;
