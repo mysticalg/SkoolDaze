@@ -5562,10 +5562,15 @@ resetToSchoolMorning();
 // Player input and actions
 // -----------------------------------------------------------------------------
 function handleInput(dt) {
-  // Slower default walk pace; hold Shift to run and spend extra stamina.
+  // Match manual movement against NPC world-speed math.
+  // NPCs move with (dt / 1000) integration and a student hallway boost of 3.3,
+  // while Eric uses (dt * 0.011), so we divide by 11 to keep equivalent pacing.
   const baseSpeed = (player.personality.speed * game.energy) / 100;
   const running = Boolean(game.keys.Shift || game.keys.shift || game.keys.r);
-  const speed = baseSpeed * (running ? 1.65 : 0.76);
+  const studentHallwayParityBoost = 3.3 / 11;
+  // Running remains useful but should not let Eric outpace late-running students.
+  const runBoost = running ? 1.35 : 1;
+  const speed = baseSpeed * studentHallwayParityBoost * runBoost;
   player.vx = 0;
   player.vy = 0;
 
