@@ -642,6 +642,9 @@ const ROLE_VISUALS = {
   swot: '#8effd3',
   weird: '#c58eff',
 };
+
+// Lightweight student expression set used by ambient social animation.
+const STUDENT_EXPRESSIVE_EMOTES = ['dance-1', 'dance-2', 'dance-3', 'high-five', 'wave', 'celebrate', 'cry', 'angry'];
 // NPC stamina tuning:
 // - movement drain is 4x slower than the previous build so students do not crash before lunch.
 // - a gentle day-fatigue baseline still brings most pupils to ~30 energy by home time.
@@ -2892,6 +2895,10 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     // Facial animation timers keep eyes/mouth lively without expensive sprite swaps.
     blinkUntil: 0,
     nextBlinkAt: performance.now() + 2000 + Math.random() * 7000,
+    // Ambient expression animation allows pupils to emote non-verbally.
+    emote: null,
+    emoteUntil: 0,
+    nextEmoteAt: performance.now() + 2500 + Math.random() * 5000,
     dailyCards: [],
     refusesEricUntilDay: 0,
     // Lunch-service state machine: plate -> queue -> serve -> sit -> eat.
@@ -7134,6 +7141,42 @@ function pushStudentAsideForTeacher(teacher, student, dtSeconds) {
   constrain(student);
 }
 
+function triggerStudentEmote(entity, now, emote, durationMs = 1400) {
+  entity.emote = emote;
+  entity.emoteUntil = now + durationMs;
+}
+
+function maybeTriggerAmbientStudentEmote(entity, current, now) {
+  if (!isStudentCharacter(entity) || entity.role === 'player') return;
+  if (entity.knockedUntil > now) return;
+  if (now < (entity.emoteUntil || 0)) return;
+  if (now < (entity.nextEmoteAt || 0)) return;
+
+  const inAssemblyHall = isAssemblyPeriod(current) && entityRoom(entity) === 'Assembly Hall';
+  const inBreak = !isSupervisedPeriod(current);
+  const inDining = isLunchtimePeriod(current) && entityRoom(entity) === 'Dining Hall';
+  const mood = entity.mood || 'calm';
+
+  // Keep expression moments occasional so animation remains readable, not noisy.
+  let chance = 0.08;
+  if (inAssemblyHall || inDining) chance = 0.14;
+  else if (inBreak) chance = 0.11;
+
+  let emotePool = STUDENT_EXPRESSIVE_EMOTES;
+  if (mood === 'furious') emotePool = ['angry', 'angry', 'angry', 'cry'];
+  else if (mood === 'angry') emotePool = ['angry', 'angry', 'dance-2', 'cry'];
+  else if (inAssemblyHall) emotePool = ['wave', 'celebrate', 'dance-1', 'dance-3', 'high-five'];
+  else if (inDining) emotePool = ['high-five', 'wave', 'dance-2', 'celebrate'];
+
+  if (game.rng() < chance) {
+    const pick = emotePool[Math.floor(game.rng() * emotePool.length)] || 'wave';
+    const durationMs = pick.startsWith('dance') ? 1700 : pick === 'cry' ? 1500 : 1300;
+    triggerStudentEmote(entity, now, pick, durationMs);
+  }
+
+  entity.nextEmoteAt = now + 3200 + (game.rng() * 6800);
+}
+
 function updateAI(dt) {
   const current = schedule[game.periodIndex];
   const supervised = isSupervisedPeriod(current);
@@ -7198,6 +7241,9 @@ function updateAI(dt) {
     const isOutside = ['P.E. Field', 'School Gates', 'Bike Sheds'].includes(entityRoom(entity));
     const lunchDutyLady = dinnerLadyEntity();
     const dinnerLadyWatchingField = dinnerLadyCanObserve(lunchDutyLady);
+
+    // Students occasionally emote (dance/wave/high-five/etc.) to express social mood.
+    if (isStudent) maybeTriggerAmbientStudentEmote(entity, current, now);
 
 
     if (isLunchtimePeriod(current) && isStudent) {
@@ -8894,7 +8940,10 @@ function drawEntities() {
         && isStudentCharacter(entity)
         && entity.seatedRoom
         && roomByName(entity.seatedRoom)?.type === 'classroom';
-      const facingBack = seatedFacingAway || entity.verticalFacing === 'back';
+      const assemblyFacingHeadmaster = isAssemblyPeriod(current)
+        && isStudentCharacter(entity)
+        && entityRoom(entity) === 'Assembly Hall';
+      const facingBack = seatedFacingAway || assemblyFacingHeadmaster || entity.verticalFacing === 'back';
       // 5-frame walk cycle to replace the previous 2-pose sine swing.
       const walkFrame = moving && !seated ? Math.floor(entity.animPhase) % 5 : 2;
       const walkBobOffsets = [-1.5, -0.5, 0.75, -0.5, -1.5];
@@ -9015,10 +9064,24 @@ function drawEntities() {
 
       // Mouth opens while speaking to make dialogue readable from sprites.
       const isSpeaking = Boolean(entity.speech && entity.speech.until > now);
+      const activeEmote = now < (entity.emoteUntil || 0) ? entity.emote : null;
       if (!facingBack) {
         ctx.fillStyle = isFemaleStudent && makeupStyle !== 'none' ? '#c93b65' : '#4a1e1e';
         if (isSpeaking) ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 2);
         else ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 1);
+        if (activeEmote === 'cry') {
+          // Crying frame: visible tears under both eyes.
+          ctx.fillStyle = '#7cc8ff';
+          ctx.fillRect(px - 3, py - 20 + bob - heightShift, 1, 2);
+          ctx.fillRect(px + 2, py - 20 + bob - heightShift, 1, 2);
+        } else if (activeEmote === 'angry') {
+          // Angry frame: heavy brows and a stress mark on forehead.
+          ctx.fillStyle = '#2b2b2b';
+          ctx.fillRect(px - 4, py - 23 + bob - heightShift, 3, 1);
+          ctx.fillRect(px + 1, py - 23 + bob - heightShift, 3, 1);
+          ctx.fillStyle = '#e63946';
+          ctx.fillRect(px + 4, py - 24 + bob - heightShift, 1, 2);
+        }
       }
 
       // School uniform base: shirt/tie first, then role/sex overlays (e.g., blazer/skirt).
@@ -9055,8 +9118,36 @@ function drawEntities() {
       // Assembly flourish: the headmaster waves both arms while speaking from the podium.
       const isHeadmasterAssemblySpeech = entity.name === 'Mr Wacker' && entityRoom(entity) === 'Assembly Hall' && isSpeaking;
       const speechWave = isHeadmasterAssemblySpeech ? Math.sin(now / 95) * 3.8 : 0;
-      const leftArmYOffset = py - 17 + armKick + (strikeDir < 0 ? punchLift : 0) - (isWriting ? writingFrame : 0) - heightShift - speechWave;
-      const rightArmYOffset = py - 17 - armKick + (strikeDir > 0 ? punchLift : 0) + (isWriting ? writingFrame : 0) - heightShift + speechWave;
+      let leftArmYOffset = py - 17 + armKick + (strikeDir < 0 ? punchLift : 0) - (isWriting ? writingFrame : 0) - heightShift - speechWave;
+      let rightArmYOffset = py - 17 - armKick + (strikeDir > 0 ? punchLift : 0) + (isWriting ? writingFrame : 0) - heightShift + speechWave;
+      let emoteLegDelta = 0;
+      // Emote overlays act like extra animation frames layered onto walk cycle.
+      if (activeEmote === 'wave') {
+        rightArmYOffset -= 5 + Math.sin(now / 90) * 2;
+      } else if (activeEmote === 'high-five') {
+        rightArmYOffset -= 7;
+      } else if (activeEmote === 'celebrate') {
+        leftArmYOffset -= 6;
+        rightArmYOffset -= 6;
+      } else if (activeEmote === 'dance-1') {
+        leftArmYOffset += Math.sin(now / 85) * 3;
+        rightArmYOffset -= Math.sin(now / 85) * 3;
+        emoteLegDelta = Math.sin(now / 120) * 2;
+      } else if (activeEmote === 'dance-2') {
+        leftArmYOffset -= 3;
+        rightArmYOffset += 2;
+        emoteLegDelta = Math.cos(now / 95) * 2.4;
+      } else if (activeEmote === 'dance-3') {
+        leftArmYOffset -= 4;
+        rightArmYOffset -= 1;
+        emoteLegDelta = Math.sin(now / 70) * 3;
+      } else if (activeEmote === 'cry') {
+        leftArmYOffset += 2;
+        rightArmYOffset += 2;
+      } else if (activeEmote === 'angry') {
+        leftArmYOffset -= 2;
+        rightArmYOffset -= 2;
+      }
       ctx.fillRect(leftArmX, leftArmYOffset, armW, armL);
       ctx.fillRect(rightArmX, rightArmYOffset, armW, armL);
       if (isWriting && entity.role === 'teacher') {
@@ -9088,6 +9179,7 @@ function drawEntities() {
         ctx.fillRect(px - Math.floor(bodyW / 2), py + 1 - heightShift, legW, 2);
         ctx.fillRect(px + Math.floor(bodyW / 2) - legW, py + 1 - heightShift, legW, 2);
       } else {
+        const expressiveLegKick = legKick + emoteLegDelta;
         if (isFemaleStudent) {
           const standingSkirtDrop = skirtLength === 'long' ? 8 : 5;
           ctx.fillStyle = '#1f3f85';
@@ -9096,15 +9188,15 @@ function drawEntities() {
           ctx.fillStyle = skinTone;
           const legTop = py - 4 + (skirtLength === 'long' ? 2 : 0);
           const legLen = skirtLength === 'long' ? Math.max(5, legL - 2) : legL;
-          ctx.fillRect(px - legW - 1, legTop + legKick - heightShift, legW, legLen);
-          ctx.fillRect(px + 1, legTop - legKick - heightShift, legW, legLen);
+          ctx.fillRect(px - legW - 1, legTop + expressiveLegKick - heightShift, legW, legLen);
+          ctx.fillRect(px + 1, legTop - expressiveLegKick - heightShift, legW, legLen);
         } else {
-          ctx.fillRect(px - legW - 1, py - 6 + legKick - heightShift, legW, legL);
-          ctx.fillRect(px + 1, py - 6 - legKick - heightShift, legW, legL);
+          ctx.fillRect(px - legW - 1, py - 6 + expressiveLegKick - heightShift, legW, legL);
+          ctx.fillRect(px + 1, py - 6 - expressiveLegKick - heightShift, legW, legL);
         }
         ctx.fillStyle = '#000000';
-        ctx.fillRect(px - legW - 1, py + 2 + legKick + (legL - 8) - heightShift, legW, 2);
-        ctx.fillRect(px + 1, py + 2 - legKick + (legL - 8) - heightShift, legW, 2);
+        ctx.fillRect(px - legW - 1, py + 2 + expressiveLegKick + (legL - 8) - heightShift, legW, 2);
+        ctx.fillRect(px + 1, py + 2 - expressiveLegKick + (legL - 8) - heightShift, legW, 2);
       }
 
       // Teachers are rendered larger and more formal than students.
