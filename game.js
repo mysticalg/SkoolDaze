@@ -1205,7 +1205,7 @@ function resolveLlmSocialDirective(actor, peer, fallbackIntent = 'ally') {
     return null;
   }
   try {
-    const parsed = JSON.parse(cached);
+    const parsed = parseJsonFromLlm(cached);
     const allowed = new Set(['ally', 'tease', 'avoid', 'follow', 'defend']);
     const intent = allowed.has(parsed.intent) ? parsed.intent : fallbackIntent;
     const bondDelta = clampScore(Number(parsed.bondDelta || 0), -3, 3);
@@ -1879,17 +1879,41 @@ function queueLlmText(payload) {
   });
 }
 
-function resolveLlmText(payload) {
+
+function parseJsonFromLlm(rawText) {
+  const text = String(rawText || '').trim();
+  if (!text) return null;
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  const candidate = fenced ? fenced[1].trim() : text;
+  try {
+    return JSON.parse(candidate);
+  } catch (error) {
+    const start = candidate.indexOf('{');
+    const end = candidate.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(candidate.slice(start, end + 1));
+      } catch (nestedError) {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+function resolveLlmText(payload, options = {}) {
   const fallback = sanitizeLlmLine(payload.fallback, '...');
+  const allowFallback = options.allowFallback !== false;
+  const suppressMissLog = Boolean(options.suppressMissLog);
   if (!llmModeEnabled()) return fallback;
   const key = llmCacheKey(payload);
   if (game.llm.cache.has(key)) {
     pushLlmDebug(`🎯 Cache hit [${payload.channel}] speaker=${payload.speaker}`);
     return game.llm.cache.get(key);
   }
-  pushLlmDebug(`🪫 Cache miss [${payload.channel}] speaker=${payload.speaker}; fallback used.`,'warn');
+  if (!suppressMissLog) pushLlmDebug(`🪫 Cache miss [${payload.channel}] speaker=${payload.speaker}; ${allowFallback ? 'fallback used.' : 'queued for deferred delivery.'}`,'warn');
   queueLlmText(payload);
-  return fallback;
+  return allowFallback ? fallback : null;
 }
 
 function resolveLlmQuizQuestion(fallbackQuiz) {
@@ -1910,7 +1934,8 @@ function resolveLlmQuizQuestion(fallbackQuiz) {
     return fallbackQuiz;
   }
   try {
-    const parsed = JSON.parse(cached);
+    const parsed = parseJsonFromLlm(cached);
+    if (!parsed) return fallbackQuiz;
     const choices = Array.isArray(parsed.choices) ? parsed.choices.slice(0, 4).map((choice) => sanitizeLlmLine(choice)) : [];
     while (choices.length < 4) choices.push(randomFunnyWrongAnswer());
     const answer = sanitizeLlmLine(parsed.answer).toLowerCase();
@@ -2237,6 +2262,8 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     // Social profile stores evolving quirks, clique membership, and momentum over time.
     socialProfile: null,
     socialNextLlmAt: 0,
+    pendingSpeech: null,
+    pendingThought: null,
     // Wrong-room excuse throttle keeps corridor chatter readable.
     lastWrongRoomExcuseAt: 0,
     // Facial animation timers keep eyes/mouth lively without expensive sprite swaps.
@@ -3735,6 +3762,63 @@ function inferSpeechAddressee(speaker, opts = {}) {
   return sameRoom.sort((a, b) => distance(a, speaker) - distance(b, speaker))[0] || null;
 }
 
+
+function deliverResolvedSpeech(entity, resolvedText, addressee, opts = {}, now = performance.now()) {
+  const finalSpeech = entity.role === 'student' && addressee?.name
+    ? ensureAddressedNameInSpeech(resolvedText, addressee.name)
+    : sanitizeLlmLine(resolvedText, '...');
+  if (!opts.force && !markDialogueUsed(entity, finalSpeech, 'speech')) return false;
+  entity.speech = { text: finalSpeech, kind: opts.kind || 'speech', until: now + (opts.durationMs || 2600) };
+  entity.lastSpokeAt = now;
+  const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 8;
+  const shouldLogSpeech = opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange);
+  if (shouldLogSpeech) pushFeedEvent(`${entity.name}: ${finalSpeech}`, 'speech');
+  return true;
+}
+
+function deliverResolvedThought(entity, resolvedText, durationMs = 3200, opts = {}, now = performance.now()) {
+  const thoughtText = sanitizeLlmLine(resolvedText, '...');
+  if (!markDialogueUsed(entity, thoughtText, 'thought')) return false;
+  entity.thought = { text: thoughtText, until: now + durationMs };
+  entity.lastThoughtAt = now;
+  const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 7.2;
+  if (opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange)) {
+    pushFeedEvent(`💭 ${entity.name}: ${thoughtText}`, 'thought');
+  }
+  return true;
+}
+
+function flushDeferredLlmDialogue(now = performance.now()) {
+  for (const entity of game.entities) {
+    if (!entity) continue;
+    const pendingSpeech = entity.pendingSpeech;
+    if (pendingSpeech) {
+      const key = llmCacheKey(pendingSpeech.payload);
+      const cached = game.llm.cache.get(key);
+      if (cached) {
+        deliverResolvedSpeech(entity, cached, pendingSpeech.addressee, pendingSpeech.opts, now);
+        entity.pendingSpeech = null;
+      } else if (now - pendingSpeech.createdAt > 16000) {
+        pushLlmDebug(`🧼 Dropped stale deferred speech for ${entity.name} (no fallback used).`, 'warn');
+        entity.pendingSpeech = null;
+      }
+    }
+
+    const pendingThought = entity.pendingThought;
+    if (pendingThought) {
+      const key = llmCacheKey(pendingThought.payload);
+      const cached = game.llm.cache.get(key);
+      if (cached) {
+        deliverResolvedThought(entity, cached, pendingThought.durationMs, pendingThought.opts, now);
+        entity.pendingThought = null;
+      } else if (now - pendingThought.createdAt > 16000) {
+        pushLlmDebug(`🧼 Dropped stale deferred thought for ${entity.name} (no fallback used).`, 'warn');
+        entity.pendingThought = null;
+      }
+    }
+  }
+}
+
 function ensureAddressedNameInSpeech(line, addresseeName) {
   const text = sanitizeLlmLine(line, '...');
   if (!addresseeName) return text;
@@ -3751,7 +3835,7 @@ function say(entity, text, opts = {}) {
   const silenceBias = clampScore(55 - ((entity.traits?.friendly || 40) * 0.28) - ((entity.traits?.funny || 40) * 0.18) + ((entity.traits?.discipline || 40) * 0.08), 8, 70);
   if (!opts.force && Math.random() < (silenceBias / 100)) return;
   const addressee = inferSpeechAddressee(entity, opts);
-  const spokenText = resolveLlmText({
+  const payload = {
     channel: 'speech',
     subject: roomSubjectName(entityRoom(entity)),
     speaker: entity.name,
@@ -3761,25 +3845,32 @@ function say(entity, text, opts = {}) {
     addresseeName: addressee?.name || '',
     addresseeRole: addressee ? roleLabelForLlm(addressee.role) : '',
     fallback: String(text),
-  });
-  const finalSpeech = entity.role === 'student' && addressee?.name
-    ? ensureAddressedNameInSpeech(spokenText, addressee.name)
-    : spokenText;
-  if (!opts.force && !markDialogueUsed(entity, finalSpeech, 'speech')) return;
-  entity.speech = { text: finalSpeech, kind: opts.kind || 'speech', until: now + (opts.durationMs || 2600) };
-  entity.lastSpokeAt = now;
+  };
 
-  // Mirror audible speech into the side feed so players can review chatter they may miss on-screen.
-  const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 8;
-  const shouldLogSpeech = opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange);
-  if (shouldLogSpeech) pushFeedEvent(`${entity.name}: ${finalSpeech}`, 'speech');
+  const shouldDefer = llmModeEnabled() && opts.force !== true;
+  const spokenText = resolveLlmText(payload, { allowFallback: !shouldDefer });
+  if (!spokenText && shouldDefer) {
+    const pendingKey = entity.pendingSpeech ? llmCacheKey(entity.pendingSpeech.payload) : '';
+    const requestKey = llmCacheKey(payload);
+    if (pendingKey === requestKey) return;
+    // Keep the interaction responsive by deferring until model output lands, instead of using fallback text.
+    entity.pendingSpeech = {
+      payload,
+      addressee,
+      opts: { ...opts },
+      createdAt: now,
+    };
+    return;
+  }
+
+  deliverResolvedSpeech(entity, spokenText || String(text), addressee, opts, now);
 }
 
 function think(entity, text, durationMs = 3200, opts = {}) {
   if (!entity || !text) return;
   const now = performance.now();
   if (!canUseDialogue(entity, now, 'thought')) return;
-  const thoughtText = resolveLlmText({
+  const payload = {
     channel: 'thought',
     subject: roomSubjectName(entityRoom(entity)),
     speaker: entity.name,
@@ -3789,16 +3880,22 @@ function think(entity, text, durationMs = 3200, opts = {}) {
     addresseeName: '',
     addresseeRole: '',
     fallback: String(text),
-  });
-  if (!markDialogueUsed(entity, thoughtText, 'thought')) return;
-  entity.thought = { text: thoughtText, until: now + durationMs };
-  entity.lastThoughtAt = now;
-
-  // Optional thought-feed mirror helps debug AI intent while staying filterable.
-  const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 7.2;
-  if (opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange)) {
-    pushFeedEvent(`💭 ${entity.name}: ${thoughtText}`, 'thought');
+  };
+  const shouldDefer = llmModeEnabled();
+  const thoughtText = resolveLlmText(payload, { allowFallback: !shouldDefer });
+  if (!thoughtText && shouldDefer) {
+    const pendingKey = entity.pendingThought ? llmCacheKey(entity.pendingThought.payload) : '';
+    const requestKey = llmCacheKey(payload);
+    if (pendingKey === requestKey) return;
+    entity.pendingThought = {
+      payload,
+      durationMs,
+      opts: { ...opts },
+      createdAt: now,
+    };
+    return;
   }
+  deliverResolvedThought(entity, thoughtText || String(text), durationMs, opts, now);
 }
 
 function tradeChanceFor(actor, partner, isPlayerInitiated = false) {
@@ -5975,6 +6072,8 @@ function updateAI(dt) {
   const assignedTeacherName = assignedTeacherForRoom(current.room);
   const now = performance.now();
   const headmaster = game.entities.find((entity) => entity.role === 'teacher' && entity.name === 'Mr Wacker');
+  // Deliver any deferred LLM-only dialogue once responses arrive in cache.
+  flushDeferredLlmDialogue(now);
 
   if (isAssemblyPeriod(current) && headmaster && now >= game.assemblyNextSpeechAt) {
     let thought = randomHeadmasterAssemblyThought();
