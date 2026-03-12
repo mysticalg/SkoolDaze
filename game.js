@@ -294,6 +294,48 @@ const lockerBanks = [
 ];
 
 const lockers = [];
+// Pocket inventory soft cap: overflow can be offloaded to personal lockers (unlimited storage).
+const INVENTORY_SOFT_CAP = 10;
+
+function lockerNumberFromId(lockerId = '') {
+  const digits = String(lockerId).replace(/\D+/g, '');
+  return Number(digits) || 0;
+}
+
+function lockerKeyLabel(locker) {
+  const num = lockerNumberFromId(locker?.id);
+  return `key ${num} for locker ${num}`;
+}
+
+function findLockerById(lockerId) {
+  return lockers.find((locker) => locker.id === lockerId) || null;
+}
+
+function lockerHasMatchingKey(entity, locker) {
+  const keyName = lockerKeyLabel(locker);
+  return Boolean(entity?.inventory?.includes(keyName));
+}
+
+function stashOverflowToLocker(entity, limit = INVENTORY_SOFT_CAP) {
+  if (!entity?.hasLocker || !entity.lockerId) return 0;
+  const locker = findLockerById(entity.lockerId);
+  if (!locker || !lockerHasMatchingKey(entity, locker)) return 0;
+  locker.storage = locker.storage || [];
+  const protectedItems = new Set([lockerKeyLabel(locker)]);
+  const stashable = (entity.inventory || []).filter((item) => !protectedItems.has(item));
+  const overflowCount = Math.max(0, stashable.length - limit);
+  if (!overflowCount) return 0;
+
+  let moved = 0;
+  for (let i = entity.inventory.length - 1; i >= 0 && moved < overflowCount; i -= 1) {
+    const item = entity.inventory[i];
+    if (protectedItems.has(item)) continue;
+    locker.storage.push(item);
+    entity.inventory.splice(i, 1);
+    moved += 1;
+  }
+  return moved;
+}
 
 const blackboards = [
   { room: 'Science Lab', x: 21, y: 6, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
@@ -548,16 +590,16 @@ const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 // Bell schedule now compresses a full school day to ~15 real-world minutes.
 const SCHOOL_DAY_START_MINUTES = (8 * 60) + 20;
-const REGISTRATION_START_MINUTES = (9 * 60) + 5;
+const REGISTRATION_START_MINUTES = (8 * 60) + 30;
 
 function buildScheduleForDay(dayCount = 1) {
   const weekday = weekdayLabelForDay(dayCount);
   const mondayWednesdayAssembly = weekday === 'Mon' || weekday === 'Wed';
-  // Keep a longer arrival/tutorial window so registration does not begin before 9:05.
+  // Morning tutorial/registration now begins at 08:30 after a short arrivals window.
   const startDayMinutes = Math.max(10, REGISTRATION_START_MINUTES - SCHOOL_DAY_START_MINUTES);
   const routine = [
     { period: 'Start Day', room: 'School Gates', mins: startDayMinutes, mode: 'transition' },
-    { period: 'Registration', room: 'Science Lab', mins: 25, mode: 'lesson' },
+    { period: 'Registration', room: 'Science Lab', mins: 40, mode: 'lesson' },
     { period: 'Lesson 1', room: 'Maths', mins: 60, mode: 'lesson' },
   ];
 
@@ -622,9 +664,14 @@ function isRegistrationPeriod(period) {
   return period.period === 'Registration';
 }
 
+function registrationReplyForTeacher(teacher) {
+  const teacherName = String(teacher?.name || '').toLowerCase();
+  // Ms/Miss teachers get a respectful "Yes miss" response, all others get "Yes sir".
+  return teacherName.startsWith('ms ') || teacherName.startsWith('miss ') ? 'Yes miss.' : 'Yes sir.';
+}
+
 // Tutor rooms host morning registration: each student stays in one fixed tutor group.
 const TUTOR_ROOMS = ['Science Lab', 'Upper Common', 'Physics Lab', 'Chem Prep', 'English', 'Music Room', 'Geography', 'History'];
-const CLASS_RESPONSE_LINES = ['Here sir.', 'Sir.', 'Here.', 'Yes sir.', 'Yes miss.', 'Here miss.', 'Present.', 'Yep, here.'];
 
 const floorMeta = {
   upper: { label: 'Upper', color: 'Purple' },
@@ -2964,8 +3011,9 @@ const activeStudentRoster = studentRoster.slice(0, maxStudentPopulation);
 
 function createLockerPlanForStudents(students) {
   lockers.length = 0;
-  const allStudents = students.filter((entity) => isStudentCharacter(entity) && entity.role !== 'player');
-  const targetWithLocker = Math.min(allStudents.length, Math.floor(allStudents.length * 0.7));
+  const allStudents = students.filter((entity) => isStudentCharacter(entity));
+  // Every student (including Eric) gets a dedicated locker and matching key.
+  const targetWithLocker = allStudents.length;
 
   let lockerId = 1;
   for (const bank of lockerBanks) {
@@ -2979,6 +3027,7 @@ function createLockerPlanForStudents(students) {
         x: bank.x + (i % bankColumns) * 2.15,
         y: bank.y + Math.floor(i / bankColumns) * 1.35,
         assignedTo: null,
+        storage: [],
       });
       lockerId += 1;
     }
@@ -2986,23 +3035,23 @@ function createLockerPlanForStudents(students) {
 
   game.lockerCapacity = lockers.length;
 
-  // Shuffle student order for fair locker distribution across personalities.
-  const shuffled = [...allStudents].sort(() => game.rng() - 0.5);
+  // Deterministic assignment keeps locker numbers stable and easy to remember.
+  const orderedStudents = [...allStudents].sort((a, b) => a.seatIndex - b.seatIndex);
   const assignmentCount = Math.min(targetWithLocker, lockers.length);
   for (let i = 0; i < assignmentCount; i += 1) {
-    const student = shuffled[i];
+    const student = orderedStudents[i];
     const locker = lockers[i];
     locker.assignedTo = student.name;
     student.hasLocker = true;
     student.lockerId = locker.id;
-    student.lockerKey = `${locker.id}-KEY`;
+    student.lockerKey = lockerKeyLabel(locker);
     student.lockerFloor = locker.floor;
     student.lockerRoom = locker.room;
-    student.inventory.push('locker key');
+    if (!student.inventory.includes(student.lockerKey)) student.inventory.push(student.lockerKey);
   }
 
-  for (let i = assignmentCount; i < shuffled.length; i += 1) {
-    const student = shuffled[i];
+  for (let i = assignmentCount; i < orderedStudents.length; i += 1) {
+    const student = orderedStudents[i];
     student.hasLocker = false;
     student.lockerId = null;
     student.lockerKey = null;
@@ -3010,7 +3059,7 @@ function createLockerPlanForStudents(students) {
     student.lockerRoom = null;
   }
 
-  game.lockerCoverage = shuffled.length ? Math.round((assignmentCount / shuffled.length) * 100) : 0;
+  game.lockerCoverage = orderedStudents.length ? Math.round((assignmentCount / orderedStudents.length) * 100) : 0;
 }
 
 function applyStudentAppearancePlan(roster) {
@@ -4185,11 +4234,11 @@ function resetToSchoolMorning() {
       entity.arrivedForDay = true;
       entity.arrivalJoinMins = 0;
     } else if (entity.role === 'teacher') {
-      // Teachers now arrive in random order from the school entrance, then walk to line up.
+      // Teachers now arrive in random order from the school entrance, then head to registration rooms.
       entity.x = schoolExit.x + 2.8 + (game.rng() * 1.2);
       entity.y = schoolExit.yMin + 1.2 + (game.rng() * (schoolExit.yMax - schoolExit.yMin - 2.4));
       entity.arrivedForDay = false;
-      entity.arrivalJoinMins = game.rng() * Math.max(0.01, schedule[0].mins * 0.82);
+      entity.arrivalJoinMins = game.rng() * Math.max(0.01, schedule[0].mins * 0.55);
       entity.target = null;
     } else if (entity.role === 'janitor') {
       const room = roomCenter(JANITOR_IDLE_ROOM);
@@ -4210,7 +4259,7 @@ function resetToSchoolMorning() {
       entity.x = schoolExit.x + 2.8 + (game.rng() * 1.2);
       entity.y = schoolExit.yMin + 1.2 + (game.rng() * (schoolExit.yMax - schoolExit.yMin - 2.4));
       entity.arrivedForDay = false;
-      entity.arrivalJoinMins = game.rng() * Math.max(0.01, schedule[0].mins * 0.92);
+      entity.arrivalJoinMins = game.rng() * Math.max(0.01, schedule[0].mins * 0.55);
       entity.target = null;
     }
     entity.vx = 0;
@@ -4236,8 +4285,8 @@ function resetToSchoolMorning() {
   updateBladderHud();
   updateHygieneHud();
   updateWeatherHud();
-  announce('🌅 New school day: teachers arrive from the gate and form a single line left of the black divider while students queue to the right.', { feedType: 'world' });
-  announce(`🗄️ Lockers ready: ${game.lockerCapacity} total, ${game.lockerCoverage}% of students issued keys.`, { force: true });
+  announce('🌅 New school day: students queue in the field while teachers prepare in registration rooms.', { feedType: 'world' });
+  announce(`🗄️ Lockers ready: ${game.lockerCapacity} total, ${game.lockerCoverage}% of students issued matched keys.`, { force: true });
   if (game.dutyTeacherName) {
     announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
   }
@@ -5381,7 +5430,7 @@ function setPeriod(index) {
   });
 
   if (isStartDayPeriod(current)) {
-    announce('👨‍🏫 Teachers line up in a single file left of the black divider while students queue to the right.');
+    announce('🧭 Tutorial prep: students queue in the field while teachers wait in registration rooms.');
   }
 
   game.bellRingingUntil = performance.now() + 3000;
@@ -6025,7 +6074,7 @@ function initTutorialRollCallState() {
   const state = {};
   for (const [roomName, roster] of Object.entries(rooms)) {
     if (!roster.length) continue;
-    state[roomName] = { index: 0, waitingForReply: false, nextAt: 0 };
+    state[roomName] = { index: 0, waitingForReply: false, hushedClass: false, nextAt: 0 };
   }
   game.tutorialRollCall = state;
 }
@@ -6040,7 +6089,7 @@ function updateTutorialRollCall(now = performance.now()) {
       completedRooms += 1;
       continue;
     }
-    const roll = game.tutorialRollCall[roomName] || { index: 0, waitingForReply: false, nextAt: 0 };
+    const roll = game.tutorialRollCall[roomName] || { index: 0, waitingForReply: false, hushedClass: false, nextAt: 0 };
     game.tutorialRollCall[roomName] = roll;
     if (roll.index >= roster.length) {
       completedRooms += 1;
@@ -6068,13 +6117,23 @@ function updateTutorialRollCall(now = performance.now()) {
     const student = game.entities.find((entity) => entity.name === studentName && entityRoom(entity) === roomName);
     if (!teacher || !student) continue;
 
+    if (!roll.hushedClass) {
+      // Registration now begins with an explicit settle-down cue from the teacher.
+      say(teacher, 'Quiet please. We are starting registration now.', { durationMs: 2300 });
+      announce(`🔔 ${teacher.name} settles ${roomName}: "Quiet please. We are starting registration now."`, { source: teacher, range: 10, force: true });
+      roll.hushedClass = true;
+      roll.nextAt = now + 950;
+      continue;
+    }
+
     if (!roll.waitingForReply) {
       say(teacher, `${student.name}?`, { durationMs: 2300 });
       announce(`📘 ${teacher.name} calls register in ${roomName}: "${student.name}?"`, { source: teacher, range: 10, force: true });
       roll.waitingForReply = true;
       roll.nextAt = now + 900 + (game.rng() * 450);
     } else {
-      const line = CLASS_RESPONSE_LINES[Math.floor(game.rng() * CLASS_RESPONSE_LINES.length)];
+      // Keep tutorial roll call consistent: every student (including Eric) responds identically.
+      const line = registrationReplyForTeacher(teacher);
       say(student, line, { durationMs: 2100 });
       roll.waitingForReply = false;
       roll.index += 1;
@@ -6085,6 +6144,7 @@ function updateTutorialRollCall(now = performance.now()) {
   if (!game.registrationTaken && completedRooms === Object.keys(rooms).length && completedRooms > 0) {
     game.registrationTaken = true;
     announce('📘 Tutorial registration complete: every tutor has called the full class list.', { force: true });
+    announce('💬 Registration finished early: students may chat quietly until Lesson 1 begins at 09:10.', { force: true });
   }
 }
 
@@ -6219,6 +6279,26 @@ function interact() {
         student.ericReputation = Math.min(100, (student.ericReputation || 0) + 4);
         game.smelledStudents[student.name] = false;
       }
+    }
+    return;
+  }
+
+  // Personal lockers: matching key opens your locker, which has unlimited storage.
+  const nearbyLocker = lockers.find((locker) => distance(player, locker) < 1.3);
+  if (nearbyLocker) {
+    const lockerNumber = lockerNumberFromId(nearbyLocker.id);
+    if (!lockerHasMatchingKey(player, nearbyLocker)) {
+      announce(`🔒 Locker ${lockerNumber} is locked. Need ${lockerKeyLabel(nearbyLocker)}.`);
+      return;
+    }
+
+    const moved = stashOverflowToLocker(player, INVENTORY_SOFT_CAP);
+    if (moved > 0) {
+      playSfx('interact');
+      announce(`🗄️ Eric stashed ${moved} item${moved === 1 ? '' : 's'} in Locker ${lockerNumber}.`);
+    } else {
+      const lockerSize = (nearbyLocker.storage || []).length;
+      announce(`🗄️ Locker ${lockerNumber} open. Stored items: ${lockerSize}.`);
     }
     return;
   }
@@ -6385,6 +6465,12 @@ function assignedTeacherForRoom(roomName) {
 
 function teacherHomeRoom(teacherName) {
   return teacherHomeRoomMap[teacherName] || 'Staff Room';
+}
+
+function teacherRegistrationRoom(teacherName) {
+  // During start-of-day tutorial prep, teachers should wait in their registration classroom.
+  const room = Object.keys(roomTeacherMap).find((roomName) => roomTeacherMap[roomName] === teacherName);
+  return room || teacherHomeRoom(teacherName);
 }
 
 function teachersInRoster() {
@@ -6573,8 +6659,8 @@ function chooseTarget(entity, currentPeriod) {
 
   if (isStartDayPeriod(currentPeriod)) {
     if (entity.role === 'teacher') {
-      const teacherIndex = teachersInRoster().findIndex((teacher) => teacher.name === entity.name);
-      return teacherGateLinePosition(Math.max(0, teacherIndex));
+      // Teachers now stage inside registration rooms before students arrive.
+      return teacherBoardSpot(teacherRegistrationRoom(entity.name));
     }
     return gateQueuePosition(entity);
   }
@@ -7498,8 +7584,6 @@ function updateAI(dt) {
         // Keep morning queues split by role to match the field divider visuals.
         if (isStudentCharacter(entity)) {
           entity.x = Math.max(dividerX + 0.6, entity.x);
-        } else if (entity.role === 'teacher') {
-          entity.x = Math.min(dividerX - 0.6, entity.x);
         }
       }
     }
@@ -7536,6 +7620,14 @@ function updateAI(dt) {
     }
 
     const len = Math.hypot(dx, dy) || 1;
+
+    // Students with crowded pockets can offload extras into their own locker (unlimited storage).
+    if (isStudent && entity.hasLocker && entity.lockerId) {
+      const ownLocker = findLockerById(entity.lockerId);
+      if (ownLocker && distance(entity, ownLocker) < 1.15) {
+        stashOverflowToLocker(entity, INVENTORY_SOFT_CAP);
+      }
+    }
 
     // During gate lineup, lock pupils/teachers still once they reach their slot.
     if (isStartDayPeriod(current) && len < 0.52) {
@@ -8406,7 +8498,8 @@ function drawWorld() {
     ctx.fillRect(p.sx - 4, p.sy - 4, 8, 8);
     ctx.fillStyle = '#2a3540';
     ctx.font = 'bold 6px monospace';
-    ctx.fillText(locker.assignedTo ? 'L' : '-', p.sx - 2, p.sy + 2);
+    const lockerNum = lockerNumberFromId(locker.id);
+    ctx.fillText(String(lockerNum), p.sx - 4, p.sy + 2);
   }
 
   for (const fountain of waterFountains) {
@@ -9155,7 +9248,10 @@ function findHoveredWorldTargetAtScreen(mouseX, mouseY) {
   // Keep item labels short and descriptive to avoid clutter while moving the mouse.
   addPoints(vendingMachines, (point) => `🥤 ${point.label}`);
   addPoints(trashCans, (point) => `🗑️ ${point.label}`);
-  addPoints(lockers, (point) => `🗄️ Locker ${point.id}${point.assignedTo ? ` (${point.assignedTo})` : ''}`, 0.9);
+  addPoints(lockers, (point) => {
+    const lockerNum = lockerNumberFromId(point.id);
+    return `🗄️ Locker ${lockerNum}${point.assignedTo ? ` (${point.assignedTo})` : ''}`;
+  }, 0.9);
   addPoints(waterFountains, (point) => `⛲ ${point.label}`);
   addPoints(urinals, (point) => `🚻 ${point.label}`, 0.95);
   addPoints(showers, (point) => `🚿 ${point.label}`, 0.95);
