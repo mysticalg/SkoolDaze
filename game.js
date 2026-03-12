@@ -626,6 +626,7 @@ const floorMeta = {
 
 const schoolExit = { x: 159.2, yMin: 84, yMax: 107 };
 const DAY_TRANSITION_MS = 4600;
+const MORNING_BANNER_MS = 2600;
 // Morning lineup geometry in the field: students queue on the right, teachers on the left.
 const morningQueue = {
   dividerInsetFromFieldLeft: 35,
@@ -1371,7 +1372,8 @@ const OLLAMA_DEFAULT_ENDPOINT = 'http://127.0.0.1:11434';
 const OPENAI_API_BASE = 'https://api.openai.com/v1';
 const GROK_API_BASE = 'https://api.x.ai/v1';
 const LLM_DEFAULT_TIMEOUT_MS = 3800;
-const LLM_MAX_INFLIGHT = 6;
+// Expand active LLM queue concurrency so dialogue spikes can buffer up to 20 requests.
+const LLM_MAX_INFLIGHT = 20;
 const LLM_STORAGE_KEY = 'skooldaze.llm.settings.v1';
 
 const LLM_GAME_PRIMER = [
@@ -2297,6 +2299,7 @@ const game = {
   schoolHistory: [],
   endDaySequenceActive: false,
   transitionUntil: 0,
+  dayStartBannerUntil: 0,
   despawnedStudentsToday: 0,
   nightCutscenePlayedToday: false,
   lastCollectableSpawnAt: 0,
@@ -3758,6 +3761,8 @@ function resetToSchoolMorning() {
   game.dailyAssemblyHymnDay = 0;
   game.endDaySequenceActive = false;
   game.transitionUntil = 0;
+  // Keep morning UX lightweight: a short "new day" banner instead of replaying night text.
+  game.dayStartBannerUntil = performance.now() + MORNING_BANNER_MS;
   game.despawnedStudentsToday = 0;
   game.nightCutscenePlayedToday = false;
   game.llm.backlog = [];
@@ -3897,8 +3902,10 @@ function updateAutoPilot(dt) {
 
 function updateBladder(dt) {
   const deltaMins = (dt / 1000) * game.timeScale;
-  const baseRate = 0.55; // ~once per school day if Eric does not over-drink.
-  const drinkBonus = game.drinksToday * 0.35;
+  // User tuning: Eric's bladder now fills 5x slower so toilet trips are much less frequent.
+  const bladderFillMultiplier = 0.2;
+  const baseRate = 0.55 * bladderFillMultiplier; // baseline tuned to stretch urgency over longer sessions.
+  const drinkBonus = game.drinksToday * 0.35 * bladderFillMultiplier;
   game.bladder = Math.min(100, game.bladder + (baseRate + drinkBonus) * deltaMins);
 
   if (game.bladder >= 75 && !game.warnedNeedToilet) {
@@ -7351,17 +7358,27 @@ function isStudentDespawningAtGate(entity) {
 
 function updateDayTransitionOverlay(now = performance.now()) {
   if (!dayTransitionOverlayEl) return;
-  const active = game.endDaySequenceActive && now < (game.transitionUntil || 0);
+  const endDayActive = game.endDaySequenceActive && now < (game.transitionUntil || 0);
+  const morningBannerActive = now < (game.dayStartBannerUntil || 0);
+  const active = endDayActive || morningBannerActive;
   dayTransitionOverlayEl.hidden = !active;
   if (!active) return;
+
+  // Morning banner should never show the night cutscene copy/text.
+  if (morningBannerActive && !endDayActive) {
+    if (dayTransitionTitleEl) dayTransitionTitleEl.textContent = '🌅 A new day begins';
+    if (dayTransitionBodyEl) dayTransitionBodyEl.textContent = `Day ${game.dayCount} has started. Bells are ready—let's go.`;
+    return;
+  }
+
   const progress = 1 - Math.max(0, Math.min(1, (game.transitionUntil - now) / DAY_TRANSITION_MS));
   if (dayTransitionTitleEl) {
-    dayTransitionTitleEl.textContent = progress < 0.55 ? '🌙 Night falls over school' : '🌅 A fresh morning begins';
+    dayTransitionTitleEl.textContent = '🌙 Night falls over school';
   }
   if (dayTransitionBodyEl) {
-    dayTransitionBodyEl.textContent = progress < 0.55
+    dayTransitionBodyEl.textContent = progress < 0.6
       ? 'Students are heading home. Classrooms settle into silence…'
-      : `Day ${game.dayCount + 1} is preparing. Bags packed, bells resetting.`;
+      : 'The campus sleeps while tomorrow prepares.';
   }
 }
 
