@@ -50,6 +50,9 @@ const filterThoughtsEl = document.getElementById('filterThoughts');
 const filterWorldEl = document.getElementById('filterWorld');
 const startOverlayEl = document.getElementById('startOverlay');
 const startGameBtn = document.getElementById('startGameBtn');
+const openSplashSettingsBtn = document.getElementById('openSplashSettings');
+const splashSettingsDialog = document.getElementById('splashSettingsDialog');
+const closeSplashSettingsBtn = document.getElementById('closeSplashSettings');
 const optStudentCountEl = document.getElementById('optStudentCount');
 const optTeacherCountEl = document.getElementById('optTeacherCount');
 const optRatioBullyEl = document.getElementById('optRatioBully');
@@ -62,6 +65,7 @@ const optLlmEnabledEl = document.getElementById('optLlmEnabled');
 const optLlmNsfwEl = document.getElementById('optLlmNsfw');
 const optLlmNoFallbackEl = document.getElementById('optLlmNoFallback');
 const optLlmSourceEl = document.getElementById('optLlmSource');
+const optLlmPrePromptEl = document.getElementById('optLlmPrePrompt');
 const optLlmModelEl = document.getElementById('optLlmModel');
 const optLlmLocalEndpointEl = document.getElementById('optLlmLocalEndpoint');
 const optLlmTimeoutEl = document.getElementById('optLlmTimeout');
@@ -1535,6 +1539,12 @@ function effectiveLlmMaxInFlight() {
   return Math.max(LLM_MIN_INFLIGHT, Math.min(LLM_MAX_INFLIGHT_LIMIT, Number(game.llm.maxInFlight) || LLM_MAX_INFLIGHT));
 }
 
+
+function sanitizeLlmPrePrompt(value = '') {
+  // Keep user pre-prompt compact so requests stay fast and avoid queue spikes.
+  return sanitizeLlmLine(value, '').slice(0, 260);
+}
+
 function llmProviderLabel() {
   if (game.llm.source === 'remote') {
     return `${game.llm.remoteProvider}:${game.llm.remoteModel || 'default'}`;
@@ -1556,6 +1566,7 @@ function persistLlmSettings() {
       remoteToken: game.llm.remoteToken,
       nsfw: Boolean(game.llm.nsfw),
       noFallback: Boolean(game.llm.noFallback),
+      prePrompt: sanitizeLlmPrePrompt(game.llm.prePrompt),
     }));
   } catch (error) {
     // Storage can fail in private modes; gameplay should still continue.
@@ -1578,6 +1589,7 @@ function loadLlmSettings() {
     game.llm.remoteToken = sanitizeLlmLine(saved.remoteToken, '');
     game.llm.nsfw = Boolean(saved.nsfw);
     game.llm.noFallback = Boolean(saved.noFallback);
+    game.llm.prePrompt = sanitizeLlmPrePrompt(saved.prePrompt || '');
   } catch (error) {
     // Ignore malformed storage and keep defaults.
   }
@@ -1602,6 +1614,7 @@ function applyLlmUiState() {
   if (optLlmSourceEl) optLlmSourceEl.disabled = !enabled;
   if (optLlmNsfwEl) optLlmNsfwEl.disabled = !isLocal;
   if (optLlmNoFallbackEl) optLlmNoFallbackEl.disabled = !enabled;
+  if (optLlmPrePromptEl) optLlmPrePromptEl.disabled = !enabled;
   if (optLlmModelEl) optLlmModelEl.disabled = !isLocal || !game.llm.availableModels.length;
   if (optLlmLocalEndpointEl) optLlmLocalEndpointEl.disabled = !isLocal;
   if (optLlmTimeoutEl) optLlmTimeoutEl.disabled = !enabled;
@@ -1912,6 +1925,7 @@ function buildLlmPrompt({
           : 'The answer must exactly match one of the choices. No markdown.',
       `Subject: ${subject}. Room: ${room}. Teacher context: ${speaker}.`,
       `Teacher role: ${speakerRole}. Traits snapshot: ${traitSummary}.`,
+      game.llm.prePrompt ? `Player pre-prompt: ${game.llm.prePrompt}` : null,
       socialSummary ? `Reputation/relationships: ${socialSummary}` : null,
       interestSummary ? `Common interests: ${interestSummary}` : null,
       addresseeName ? `Directed at: ${addresseeName} (${addresseeRole || 'character'}).` : null,
@@ -1940,6 +1954,7 @@ function buildLlmPrompt({
 
   return [
     primer,
+    game.llm.prePrompt ? `Player pre-prompt: ${game.llm.prePrompt}` : null,
     'You write concise text for a school simulation game.',
     'Pretend you are the exact character below speaking in first person voice.',
     styleGuide,
@@ -2401,6 +2416,7 @@ const game = {
     remoteToken: '',
     nsfw: false,
     noFallback: false,
+    prePrompt: '',
     cache: new Map(),
     inFlight: new Set(),
     debugLog: [],
@@ -3051,6 +3067,7 @@ function applyStartupOptions() {
   const llmSource = String(optLlmSourceEl?.value || 'local');
   const llmNsfw = Boolean(optLlmNsfwEl?.checked);
   const llmNoFallback = Boolean(optLlmNoFallbackEl?.checked);
+  const llmPrePrompt = sanitizeLlmPrePrompt(optLlmPrePromptEl?.value || game.llm.prePrompt || '');
   const llmModel = String(optLlmModelEl?.value || '').trim();
   const llmLocalEndpoint = normalizeLocalEndpoint(optLlmLocalEndpointEl?.value || game.llm.localEndpoint);
   const llmTimeoutMs = Math.max(LLM_MIN_TIMEOUT_MS, Math.min(LLM_MAX_TIMEOUT_MS, Number(optLlmTimeoutEl?.value || game.llm.timeoutMs || LLM_DEFAULT_TIMEOUT_MS)));
@@ -3084,7 +3101,8 @@ function applyStartupOptions() {
     || game.llm.remoteModel !== llmRemoteModel
     || game.llm.remoteToken !== llmRemoteToken
     || game.llm.nsfw !== llmNsfw
-    || game.llm.noFallback !== llmNoFallback;
+    || game.llm.noFallback !== llmNoFallback
+    || game.llm.prePrompt !== llmPrePrompt;
   if (providerChanged) {
     game.llm.cache.clear();
     game.llm.worldPreloadedForProvider = '';
@@ -3100,6 +3118,7 @@ function applyStartupOptions() {
   game.llm.remoteToken = llmRemoteToken;
   game.llm.nsfw = llmNsfw;
   game.llm.noFallback = llmNoFallback;
+  game.llm.prePrompt = llmPrePrompt;
   persistLlmSettings();
 
   // Startup population changes alter seating demand; rebuild cached layouts.
@@ -9338,6 +9357,23 @@ closeInteractionPanelBtn.onclick = () => {
   game.selectedInteractionTarget = null;
 };
 
+
+if (openSplashSettingsBtn && splashSettingsDialog) {
+  openSplashSettingsBtn.addEventListener('click', () => splashSettingsDialog.showModal());
+}
+if (closeSplashSettingsBtn && splashSettingsDialog) {
+  closeSplashSettingsBtn.addEventListener('click', () => splashSettingsDialog.close());
+}
+if (splashSettingsDialog) {
+  // Click on backdrop closes the settings modal for quick access back to Start button.
+  splashSettingsDialog.addEventListener('click', (event) => {
+    const rect = splashSettingsDialog.getBoundingClientRect();
+    const inside = event.clientX >= rect.left && event.clientX <= rect.right
+      && event.clientY >= rect.top && event.clientY <= rect.bottom;
+    if (!inside) splashSettingsDialog.close();
+  });
+}
+
 async function startGameFromSplash() {
   persistSplashSettings();
   applyStartupOptions();
@@ -9346,6 +9382,7 @@ async function startGameFromSplash() {
     initialiseFullRelationshipMesh();
     initialiseNpcRelationships();
   }
+  if (splashSettingsDialog?.open) splashSettingsDialog.close();
   if (startOverlayEl) startOverlayEl.hidden = true;
   assignDailyDutyTeacher();
   announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
@@ -9397,6 +9434,21 @@ if (optLlmQueueEl) {
     persistLlmSettings();
     setLlmStatus(`🧵 LLM queue concurrency set to ${game.llm.maxInFlight}.`);
     drainLlmBacklog();
+  });
+}
+
+
+if (optLlmPrePromptEl) {
+  optLlmPrePromptEl.value = sanitizeLlmPrePrompt(game.llm.prePrompt || '');
+  optLlmPrePromptEl.addEventListener('change', () => {
+    game.llm.prePrompt = sanitizeLlmPrePrompt(optLlmPrePromptEl.value || '');
+    optLlmPrePromptEl.value = game.llm.prePrompt;
+    // Prompt content changes output style, so clear cache to avoid mixed responses.
+    game.llm.cache.clear();
+    persistLlmSettings();
+    setLlmStatus(game.llm.prePrompt
+      ? '🧩 AI pre-prompt updated. Cache cleared for consistent style.'
+      : '🧩 AI pre-prompt cleared. Using default prompt behavior.');
   });
 }
 

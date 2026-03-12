@@ -11,112 +11,128 @@
     <div class="start-card">
       <h2>🏫 Skool Daze Tribute</h2>
       <p class="start-subtitle">Set up your school day, then hit start.</p>
+      <p class="todo-help">⚙️ All startup options now live in the Settings popup so the splash screen stays clean and fast.</p>
 
-      <div class="start-grid">
-        <label title="Total active students in simulation.">👨‍🎓 Students
-          <input id="optStudentCount" type="number" min="8" max="60" value="30" />
-        </label>
-        <label title="Active teaching staff count.">🧑‍🏫 Teachers
-          <input id="optTeacherCount" type="number" min="1" max="11" value="9" />
-        </label>
-        <label title="Scales school-day clock speed.">⏱️ Game speed
-          <select id="optGameSpeed">
-            <option value="0.75">Slow (0.75x)</option>
-            <option value="1" selected>Normal (1x)</option>
-            <option value="1.25">Fast (1.25x)</option>
-            <option value="1.5">Very fast (1.5x)</option>
-          </select>
-        </label>
-        <label title="Choose fixed weather or let it rotate weekly.">🌦️ Weather
-          <select id="optWeather">
-            <option value="auto" selected>Auto weekly</option>
-            <option value="sunny">Sunny</option>
-            <option value="rain">Rain</option>
-            <option value="snow">Snow</option>
-            <option value="windy">Windy</option>
-          </select>
-        </label>
+      <div class="splash-actions">
+        <button id="openSplashSettings" class="secondary-btn splash-settings-btn" type="button" title="Open startup settings window">⚙️ Open Settings</button>
+        <button id="startGameBtn" class="start-btn" type="button" title="Start the school day with current settings">▶️ Start school day</button>
       </div>
-
-      <h3>🎭 Student mix (%)</h3>
-      <div class="start-grid ratios">
-        <label title="Aggressive students who start fights.">👊 Bully <input id="optRatioBully" type="number" min="0" max="100" value="25" /></label>
-        <label title="Helpful students with balanced behaviour.">🛡️ Hero <input id="optRatioHero" type="number" min="0" max="100" value="25" /></label>
-        <label title="Studious students who focus in class.">📚 Swot <input id="optRatioSwot" type="number" min="0" max="100" value="25" /></label>
-        <label title="Chaotic students with odd routines.">🌀 Weird <input id="optRatioWeird" type="number" min="0" max="100" value="25" /></label>
-      </div>
-
-      <h3>🤖 AI Dialogue Engine</h3>
-      <div class="start-grid llm-grid">
-        <label class="llm-toggle" title="Enable to generate classroom chatter and prompts from an AI model.">
-          🧠 Enable LLM mode
-          <input id="optLlmEnabled" type="checkbox" />
-        </label>
-        <label class="llm-toggle" title="When enabled, local AI prompts allow uncensored, explicit, vulgar, and offensive language styles.">
-          🔞 NSFW / uncensored style
-          <input id="optLlmNsfw" type="checkbox" />
-        </label>
-        <label class="llm-toggle" title="When enabled, NPC speech/thought waits for model output and does not use built-in fallback lines.">
-          🧵 No fallback (LLM-only dialogue)
-          <input id="optLlmNoFallback" type="checkbox" />
-        </label>
-        <label title="Use local Ollama models or remote cloud providers.">🌐 LLM source
-          <select id="optLlmSource" disabled>
-            <option value="local" selected>Local (Ollama)</option>
-            <option value="remote">Remote (Cloud API)</option>
-          </select>
-        </label>
-        <label title="Choose which local Ollama model should generate school dialogue.">🗂️ Ollama model
-          <select id="optLlmModel" disabled>
-            <option value="">Loading models…</option>
-          </select>
-        </label>
-        <label title="Local Ollama API endpoint. Use 127.0.0.1 if localhost fails on your browser/network setup.">🔌 Ollama endpoint
-          <input id="optLlmLocalEndpoint" type="text" placeholder="http://127.0.0.1:11434" disabled />
-        </label>
-        <label title="Maximum time each AI request can run before fallback kicks in. Increase this on slower hardware/models.">⏳ LLM timeout
-          <select id="optLlmTimeout" disabled>
-            <option value="3800" selected>Fast (3.8s)</option>
-            <option value="6000">Balanced (6s)</option>
-            <option value="9000">Relaxed (9s)</option>
-            <option value="12000">Long (12s)</option>
-            <option value="18000">Very long (18s)</option>
-          </select>
-        </label>
-        <label title="How many AI requests can run at once before new ones queue. Higher values improve throughput but may stress slower machines.">🧵 LLM queue size
-          <select id="optLlmQueue" disabled>
-            <option value="8">Small (8)</option>
-            <option value="12">Medium (12)</option>
-            <option value="20" selected>Large (20)</option>
-            <option value="30">XL (30)</option>
-            <option value="40">XXL (40)</option>
-          </select>
-        </label>
-        <label title="Choose your remote provider when cloud mode is active.">☁️ Remote provider
-          <select id="optLlmRemoteProvider" disabled>
-            <option value="openai" selected>OpenAI</option>
-            <option value="grok">Grok (xAI)</option>
-          </select>
-        </label>
-        <label title="Model name for cloud provider (example: gpt-4.1-mini or grok-2-latest).">🧾 Remote model
-          <input id="optLlmRemoteModel" type="text" placeholder="gpt-4.1-mini" disabled />
-        </label>
-        <label title="Remote API bearer token. OpenAI can be filled automatically by OAuth sign-in.">🔑 Remote token
-          <input id="optLlmRemoteToken" type="password" placeholder="Paste token or use OpenAI sign-in" disabled autocomplete="off" />
-        </label>
-      </div>
-      <p class="todo-help">📝 NSFW mode only changes AI prompt style guidance; generated text still depends on your chosen model.</p>
-      <div class="llm-actions llm-actions-wrap">
-        <button id="optLlmRefreshModels" type="button" class="secondary-btn" title="Refresh model list from Ollama">🔄 Refresh models</button>
-        <button id="optLlmImportModels" type="button" class="secondary-btn" title="Paste output from 'ollama list' to import model names when browser API access is blocked">📋 Import ollama list</button>
-        <button id="optLlmOpenAiAuth" type="button" class="secondary-btn" title="Sign in with OpenAI OAuth in this same browser tab and save token for API calls" disabled>🔐 Sign in OpenAI (this tab)</button>
-        <button id="optLlmClearToken" type="button" class="secondary-btn" title="Clear saved cloud token from this browser" disabled>🧹 Clear token</button>
-      </div>
-      <p id="optLlmTokenStatus" class="todo-help" aria-live="polite">🔒 No remote token saved.</p>
-      <p id="optLlmStatus" class="todo-help" aria-live="polite">ℹ️ LLM mode uses default game text until AI replies are cached.</p>
-
-      <button id="startGameBtn" class="start-btn" type="button" title="Start the school day with these options">▶️ Start school day</button>
       <p class="todo-help">💡 Tip: percentages are normalized automatically if they do not add up to 100.</p>
+
+      <dialog id="splashSettingsDialog" class="splash-settings-dialog" aria-labelledby="splashSettingsTitle">
+        <h3 id="splashSettingsTitle">⚙️ Splash Settings</h3>
+        <p class="todo-help">Tune population, pacing, weather, and LLM behavior before starting.</p>
+
+        <div class="start-grid">
+          <label title="Total active students in simulation.">👨‍🎓 Students
+            <input id="optStudentCount" type="number" min="8" max="60" value="30" />
+          </label>
+          <label title="Active teaching staff count.">🧑‍🏫 Teachers
+            <input id="optTeacherCount" type="number" min="1" max="11" value="9" />
+          </label>
+          <label title="Scales school-day clock speed.">⏱️ Game speed
+            <select id="optGameSpeed">
+              <option value="0.75">Slow (0.75x)</option>
+              <option value="1" selected>Normal (1x)</option>
+              <option value="1.25">Fast (1.25x)</option>
+              <option value="1.5">Very fast (1.5x)</option>
+            </select>
+          </label>
+          <label title="Choose fixed weather or let it rotate weekly.">🌦️ Weather
+            <select id="optWeather">
+              <option value="auto" selected>Auto weekly</option>
+              <option value="sunny">Sunny</option>
+              <option value="rain">Rain</option>
+              <option value="snow">Snow</option>
+              <option value="windy">Windy</option>
+            </select>
+          </label>
+        </div>
+
+        <h3>🎭 Student mix (%)</h3>
+        <div class="start-grid ratios">
+          <label title="Aggressive students who start fights.">👊 Bully <input id="optRatioBully" type="number" min="0" max="100" value="25" /></label>
+          <label title="Helpful students with balanced behaviour.">🛡️ Hero <input id="optRatioHero" type="number" min="0" max="100" value="25" /></label>
+          <label title="Studious students who focus in class.">📚 Swot <input id="optRatioSwot" type="number" min="0" max="100" value="25" /></label>
+          <label title="Chaotic students with odd routines.">🌀 Weird <input id="optRatioWeird" type="number" min="0" max="100" value="25" /></label>
+        </div>
+
+        <h3>🤖 AI Dialogue Engine</h3>
+        <div class="start-grid llm-grid">
+          <label class="llm-toggle" title="Enable to generate classroom chatter and prompts from an AI model.">
+            🧠 Enable LLM mode
+            <input id="optLlmEnabled" type="checkbox" />
+          </label>
+          <label class="llm-toggle" title="When enabled, local AI prompts allow uncensored, explicit, vulgar, and offensive language styles.">
+            🔞 NSFW / uncensored style
+            <input id="optLlmNsfw" type="checkbox" />
+          </label>
+          <label class="llm-toggle" title="When enabled, NPC speech/thought waits for model output and does not use built-in fallback lines.">
+            🧵 No fallback (LLM-only dialogue)
+            <input id="optLlmNoFallback" type="checkbox" />
+          </label>
+          <label title="Use local Ollama models or remote cloud providers.">🌐 LLM source
+            <select id="optLlmSource" disabled>
+              <option value="local" selected>Local (Ollama)</option>
+              <option value="remote">Remote (Cloud API)</option>
+            </select>
+          </label>
+          <label title="Extra instruction prepended to AI prompts. Keep short for speed.">🧩 AI pre-prompt
+            <textarea id="optLlmPrePrompt" rows="2" placeholder="Example: Keep dialogue witty, concise, and Yorkshire-accented where natural." disabled></textarea>
+          </label>
+          <label title="Choose which local Ollama model should generate school dialogue.">🗂️ Ollama model
+            <select id="optLlmModel" disabled>
+              <option value="">Loading models…</option>
+            </select>
+          </label>
+          <label title="Local Ollama API endpoint. Use 127.0.0.1 if localhost fails on your browser/network setup.">🔌 Ollama endpoint
+            <input id="optLlmLocalEndpoint" type="text" placeholder="http://127.0.0.1:11434" disabled />
+          </label>
+          <label title="Maximum time each AI request can run before fallback kicks in. Increase this on slower hardware/models.">⏳ LLM timeout
+            <select id="optLlmTimeout" disabled>
+              <option value="3800" selected>Fast (3.8s)</option>
+              <option value="6000">Balanced (6s)</option>
+              <option value="9000">Relaxed (9s)</option>
+              <option value="12000">Long (12s)</option>
+              <option value="18000">Very long (18s)</option>
+            </select>
+          </label>
+          <label title="How many AI requests can run at once before new ones queue. Higher values improve throughput but may stress slower machines.">🧵 LLM queue size
+            <select id="optLlmQueue" disabled>
+              <option value="8">Small (8)</option>
+              <option value="12">Medium (12)</option>
+              <option value="20" selected>Large (20)</option>
+              <option value="30">XL (30)</option>
+              <option value="40">XXL (40)</option>
+            </select>
+          </label>
+          <label title="Choose your remote provider when cloud mode is active.">☁️ Remote provider
+            <select id="optLlmRemoteProvider" disabled>
+              <option value="openai" selected>OpenAI</option>
+              <option value="grok">Grok (xAI)</option>
+            </select>
+          </label>
+          <label title="Model name for cloud provider (example: gpt-4.1-mini or grok-2-latest).">🧾 Remote model
+            <input id="optLlmRemoteModel" type="text" placeholder="gpt-4.1-mini" disabled />
+          </label>
+          <label title="Remote API bearer token. OpenAI can be filled automatically by OAuth sign-in.">🔑 Remote token
+            <input id="optLlmRemoteToken" type="password" placeholder="Paste token or use OpenAI sign-in" disabled autocomplete="off" />
+          </label>
+        </div>
+        <p class="todo-help">📝 NSFW mode only changes AI prompt style guidance; generated text still depends on your chosen model.</p>
+        <div class="llm-actions llm-actions-wrap">
+          <button id="optLlmRefreshModels" type="button" class="secondary-btn" title="Refresh model list from Ollama">🔄 Refresh models</button>
+          <button id="optLlmImportModels" type="button" class="secondary-btn" title="Paste output from 'ollama list' to import model names when browser API access is blocked">📋 Import ollama list</button>
+          <button id="optLlmOpenAiAuth" type="button" class="secondary-btn" title="Sign in with OpenAI OAuth in this same browser tab and save token for API calls" disabled>🔐 Sign in OpenAI (this tab)</button>
+          <button id="optLlmClearToken" type="button" class="secondary-btn" title="Clear saved cloud token from this browser" disabled>🧹 Clear token</button>
+        </div>
+        <p id="optLlmTokenStatus" class="todo-help" aria-live="polite">🔒 No remote token saved.</p>
+        <p id="optLlmStatus" class="todo-help" aria-live="polite">ℹ️ LLM mode uses default game text until AI replies are cached.</p>
+
+        <div class="settings-footer-actions">
+          <button id="closeSplashSettings" class="dialog-close" type="button" aria-label="Close splash settings">✖ Close Settings</button>
+        </div>
+      </dialog>
     </div>
   </section>
 
