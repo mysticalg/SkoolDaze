@@ -57,6 +57,7 @@ const optGameSpeedEl = document.getElementById('optGameSpeed');
 const optWeatherEl = document.getElementById('optWeather');
 const optLlmEnabledEl = document.getElementById('optLlmEnabled');
 const optLlmNsfwEl = document.getElementById('optLlmNsfw');
+const optLlmNoFallbackEl = document.getElementById('optLlmNoFallback');
 const optLlmSourceEl = document.getElementById('optLlmSource');
 const optLlmModelEl = document.getElementById('optLlmModel');
 const optLlmLocalEndpointEl = document.getElementById('optLlmLocalEndpoint');
@@ -1467,6 +1468,7 @@ function persistLlmSettings() {
       remoteModel: game.llm.remoteModel,
       remoteToken: game.llm.remoteToken,
       nsfw: Boolean(game.llm.nsfw),
+      noFallback: Boolean(game.llm.noFallback),
     }));
   } catch (error) {
     // Storage can fail in private modes; gameplay should still continue.
@@ -1487,6 +1489,7 @@ function loadLlmSettings() {
     game.llm.remoteModel = sanitizeLlmLine(saved.remoteModel, game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini');
     game.llm.remoteToken = sanitizeLlmLine(saved.remoteToken, '');
     game.llm.nsfw = Boolean(saved.nsfw);
+    game.llm.noFallback = Boolean(saved.noFallback);
   } catch (error) {
     // Ignore malformed storage and keep defaults.
   }
@@ -1510,6 +1513,7 @@ function applyLlmUiState() {
 
   if (optLlmSourceEl) optLlmSourceEl.disabled = !enabled;
   if (optLlmNsfwEl) optLlmNsfwEl.disabled = !isLocal;
+  if (optLlmNoFallbackEl) optLlmNoFallbackEl.disabled = !enabled;
   if (optLlmModelEl) optLlmModelEl.disabled = !isLocal || !game.llm.availableModels.length;
   if (optLlmLocalEndpointEl) optLlmLocalEndpointEl.disabled = !isLocal;
   if (optLlmManualModelEl) optLlmManualModelEl.disabled = !isLocal;
@@ -1952,7 +1956,9 @@ function parseJsonFromLlm(rawText) {
 
 function resolveLlmText(payload, options = {}) {
   const fallback = sanitizeLlmLine(payload.fallback, '...');
-  const allowFallback = options.allowFallback !== false;
+  const noFallbackChannels = new Set(['speech', 'thought', 'announcement']);
+  const defaultAllowFallback = !(game.llm.noFallback && noFallbackChannels.has(payload?.channel));
+  const allowFallback = options.allowFallback !== undefined ? options.allowFallback : defaultAllowFallback;
   const suppressMissLog = Boolean(options.suppressMissLog);
   if (!llmModeEnabled()) return fallback;
   const key = llmCacheKey(payload);
@@ -2079,6 +2085,7 @@ const game = {
     remoteModel: 'gpt-4.1-mini',
     remoteToken: '',
     nsfw: false,
+    noFallback: false,
     cache: new Map(),
     inFlight: new Set(),
     debugLog: [],
@@ -2680,6 +2687,7 @@ function applyStartupOptions() {
   const llmEnabled = Boolean(optLlmEnabledEl?.checked);
   const llmSource = String(optLlmSourceEl?.value || 'local');
   const llmNsfw = Boolean(optLlmNsfwEl?.checked);
+  const llmNoFallback = Boolean(optLlmNoFallbackEl?.checked);
   const llmModel = String(optLlmModelEl?.value || '').trim();
   const llmManualModel = String(optLlmManualModelEl?.value || '').trim();
   const llmLocalEndpoint = normalizeLocalEndpoint(optLlmLocalEndpointEl?.value || game.llm.localEndpoint);
@@ -2702,7 +2710,7 @@ function applyStartupOptions() {
     game.weather = weatherSetting;
   }
 
-  // LLM mode is optional and always falls back to built-in text if unavailable.
+  // LLM mode can optionally run in strict no-fallback mode where dialogue waits for model output.
   const providerChanged = game.llm.source !== llmSource
     || game.llm.selectedModel !== llmModel
     || game.llm.manualModelName !== llmManualModel
@@ -2710,7 +2718,8 @@ function applyStartupOptions() {
     || game.llm.remoteProvider !== llmRemoteProvider
     || game.llm.remoteModel !== llmRemoteModel
     || game.llm.remoteToken !== llmRemoteToken
-    || game.llm.nsfw !== llmNsfw;
+    || game.llm.nsfw !== llmNsfw
+    || game.llm.noFallback !== llmNoFallback;
   if (providerChanged) game.llm.cache.clear();
   game.llm.enabled = llmEnabled;
   game.llm.source = llmSource === 'remote' ? 'remote' : 'local';
@@ -2721,6 +2730,7 @@ function applyStartupOptions() {
   game.llm.remoteModel = llmRemoteModel || (game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini');
   game.llm.remoteToken = llmRemoteToken;
   game.llm.nsfw = llmNsfw;
+  game.llm.noFallback = llmNoFallback;
   persistLlmSettings();
 
   // Startup population changes alter seating demand; rebuild cached layouts.
@@ -3849,7 +3859,7 @@ function flushDeferredLlmDialogue(now = performance.now()) {
       if (cached) {
         deliverResolvedSpeech(entity, cached, pendingSpeech.addressee, pendingSpeech.opts, now);
         entity.pendingSpeech = null;
-      } else if (now - pendingSpeech.createdAt > 16000) {
+      } else if (now - pendingSpeech.createdAt > 24000) {
         pushLlmDebug(`🧼 Dropped stale deferred speech for ${entity.name} (no fallback used).`, 'warn');
         entity.pendingSpeech = null;
       }
@@ -3862,7 +3872,7 @@ function flushDeferredLlmDialogue(now = performance.now()) {
       if (cached) {
         deliverResolvedThought(entity, cached, pendingThought.durationMs, pendingThought.opts, now);
         entity.pendingThought = null;
-      } else if (now - pendingThought.createdAt > 16000) {
+      } else if (now - pendingThought.createdAt > 24000) {
         pushLlmDebug(`🧼 Dropped stale deferred thought for ${entity.name} (no fallback used).`, 'warn');
         entity.pendingThought = null;
       }
@@ -3903,7 +3913,7 @@ function say(entity, text, opts = {}) {
     fallback: String(text),
   };
 
-  const shouldDefer = llmModeEnabled() && opts.force !== true;
+  const shouldDefer = llmModeEnabled() && (game.llm.noFallback || opts.force !== true);
   const spokenText = resolveLlmText(payload, { allowFallback: !shouldDefer });
   if (!spokenText && shouldDefer) {
     const pendingKey = entity.pendingSpeech ? llmCacheKey(entity.pendingSpeech.payload) : '';
@@ -3937,7 +3947,7 @@ function think(entity, text, durationMs = 3200, opts = {}) {
     addresseeRole: '',
     fallback: String(text),
   };
-  const shouldDefer = llmModeEnabled();
+  const shouldDefer = llmModeEnabled() && game.llm.noFallback;
   const thoughtText = resolveLlmText(payload, { allowFallback: !shouldDefer });
   if (!thoughtText && shouldDefer) {
     const pendingKey = entity.pendingThought ? llmCacheKey(entity.pendingThought.payload) : '';
@@ -8729,7 +8739,9 @@ if (optLlmEnabledEl) {
     applyLlmUiState();
     persistLlmSettings();
     setLlmStatus(game.llm.enabled
-      ? '🤖 LLM mode enabled. First lines may use fallback text while cache warms up.'
+      ? (game.llm.noFallback
+        ? '🤖 LLM mode enabled (no fallback). NPC dialogue waits for model replies.'
+        : '🤖 LLM mode enabled. First lines may use fallback text while cache warms up.')
       : 'ℹ️ LLM mode disabled. Using original built-in text.');
     if (game.llm.enabled) {
       pushLlmDebug(`🟢 LLM enabled with ${llmProviderLabel()}.`);
@@ -8750,6 +8762,20 @@ if (optLlmNsfwEl) {
     setLlmStatus(game.llm.nsfw
       ? '🔞 NSFW prompt style enabled for local AI responses.'
       : '🧼 NSFW prompt style disabled. Using classroom-safe tone guidance.');
+  });
+}
+
+
+if (optLlmNoFallbackEl) {
+  optLlmNoFallbackEl.checked = Boolean(game.llm.noFallback);
+  optLlmNoFallbackEl.addEventListener('change', () => {
+    // No-fallback mode uses deferred LLM delivery so we clear cache to avoid mixed behaviour.
+    game.llm.noFallback = Boolean(optLlmNoFallbackEl.checked);
+    game.llm.cache.clear();
+    persistLlmSettings();
+    setLlmStatus(game.llm.noFallback
+      ? '🧵 No-fallback mode enabled. Dialogue waits for LLM replies.'
+      : '🧩 Fallback mode enabled. Built-in lines are used when cache misses.');
   });
 }
 

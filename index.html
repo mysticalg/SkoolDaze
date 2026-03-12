@@ -56,6 +56,10 @@
           🔞 NSFW / uncensored style
           <input id="optLlmNsfw" type="checkbox" />
         </label>
+        <label class="llm-toggle" title="When enabled, NPC speech/thought waits for model output and does not use built-in fallback lines.">
+          🧵 No fallback (LLM-only dialogue)
+          <input id="optLlmNoFallback" type="checkbox" />
+        </label>
         <label title="Use local Ollama models or remote cloud providers.">🌐 LLM source
           <select id="optLlmSource" disabled>
             <option value="local" selected>Local (Ollama)</option>
