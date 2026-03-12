@@ -3394,6 +3394,11 @@ function roomByName(name) {
 
 function roomCenter(name) {
   const r = roomByName(name);
+  if (!r) {
+    // Defensive fallback: unknown room keys can appear during transient reroutes.
+    // Return world center so callers keep running instead of crashing the main loop.
+    return { x: WORLD.w / 2, y: WORLD.h / 2 };
+  }
   return { x: r.x + r.w / 2, y: r.y + r.h / 2 };
 }
 
