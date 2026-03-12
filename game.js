@@ -4882,7 +4882,7 @@ function drawRoundedBubble(x, y, lines, style) {
   const {
     paddingX, paddingY, lineHeight, radius,
     fillColor, strokeColor, shadowColor, shadowBlur,
-    textColor, font, tailOffsetX = 10,
+    textColor, font, tailOffsetX = 0,
     bubblyTail = false,
   } = style;
 
@@ -4894,8 +4894,8 @@ function drawRoundedBubble(x, y, lines, style) {
   // Keep social bubbles fully visible even for pupils stood at classroom edges/corners.
   const left = Math.round(Math.max(4, Math.min(canvas.width - bubbleWidth - 4, unclampedLeft)));
   const top = Math.round(Math.max(4, Math.min(canvas.height - bubbleHeight - 16, unclampedTop)));
-  // Tail anchor follows speaker while respecting bubble bounds after clamping.
-  const rawTailX = Math.round(left + tailOffsetX + 4);
+  // Tail should point at the speaker head, with optional tiny nudge per bubble type.
+  const rawTailX = Math.round(x + tailOffsetX);
   const tailAnchorX = Math.max(left + 8, Math.min(left + bubbleWidth - 8, rawTailX));
 
   ctx.save();
