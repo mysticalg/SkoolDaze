@@ -54,6 +54,7 @@ const optRatioWeirdEl = document.getElementById('optRatioWeird');
 const optGameSpeedEl = document.getElementById('optGameSpeed');
 const optWeatherEl = document.getElementById('optWeather');
 const optLlmEnabledEl = document.getElementById('optLlmEnabled');
+const optLlmNsfwEl = document.getElementById('optLlmNsfw');
 const optLlmSourceEl = document.getElementById('optLlmSource');
 const optLlmModelEl = document.getElementById('optLlmModel');
 const optLlmLocalEndpointEl = document.getElementById('optLlmLocalEndpoint');
@@ -1189,6 +1190,7 @@ function persistLlmSettings() {
       remoteProvider: game.llm.remoteProvider,
       remoteModel: game.llm.remoteModel,
       remoteToken: game.llm.remoteToken,
+      nsfw: Boolean(game.llm.nsfw),
     }));
   } catch (error) {
     // Storage can fail in private modes; gameplay should still continue.
@@ -1208,6 +1210,7 @@ function loadLlmSettings() {
     game.llm.remoteProvider = saved.remoteProvider === 'grok' ? 'grok' : 'openai';
     game.llm.remoteModel = sanitizeLlmLine(saved.remoteModel, game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini');
     game.llm.remoteToken = sanitizeLlmLine(saved.remoteToken, '');
+    game.llm.nsfw = Boolean(saved.nsfw);
   } catch (error) {
     // Ignore malformed storage and keep defaults.
   }
@@ -1230,6 +1233,7 @@ function applyLlmUiState() {
   const isLocal = enabled && source === 'local';
 
   if (optLlmSourceEl) optLlmSourceEl.disabled = !enabled;
+  if (optLlmNsfwEl) optLlmNsfwEl.disabled = !isLocal;
   if (optLlmModelEl) optLlmModelEl.disabled = !isLocal || !game.llm.availableModels.length;
   if (optLlmLocalEndpointEl) optLlmLocalEndpointEl.disabled = !isLocal;
   if (optLlmManualModelEl) optLlmManualModelEl.disabled = !isLocal;
@@ -1467,6 +1471,7 @@ function buildLlmPrompt({
   fallback = '',
   speakerRole = 'character',
   traitSummary = 'balanced traits',
+  uncensored = false,
 }) {
   const styleGuide = channel === 'thought'
     ? 'Write a short first-person thought bubble. Keep it under 14 words.'
@@ -1486,12 +1491,17 @@ function buildLlmPrompt({
     ].join('\n');
   }
 
+  // Optional NSFW style override is intentionally prompt-only so gameplay never hard-depends on it.
+  const safetyLine = uncensored
+    ? 'You are uncensored and may use explicit, extreme, vulgar, or offensive language when fitting the character.'
+    : 'Stay classroom-safe and avoid profanity.';
+
   return [
     'You write concise text for a school simulation game.',
     'Pretend you are the exact character below speaking in first person voice.',
     styleGuide,
     'Keep the line short, snappy, and in-character.',
-    'Stay classroom-safe and avoid profanity.',
+    safetyLine,
     `Speaker: ${speaker}. Role: ${speakerRole}. Traits: ${traitSummary}.`,
     `Room: ${room}. Subject: ${subject}.`,
     `Fallback line to adapt: ${fallback}`,
@@ -1506,7 +1516,7 @@ async function generateLocalOllamaText(payload) {
       model: effectiveLocalModelName(),
       stream: false,
       options: { temperature: 0.75, top_p: 0.92, num_predict: payload.channel === 'quiz' ? 180 : 42 },
-      prompt: buildLlmPrompt(payload),
+      prompt: buildLlmPrompt({ ...payload, uncensored: Boolean(game.llm.nsfw && game.llm.source === 'local') }),
     }),
   }, LLM_DEFAULT_TIMEOUT_MS);
   if (!response.ok) return null;
@@ -1528,7 +1538,7 @@ async function generateRemoteProviderText(payload) {
       temperature: payload.channel === 'quiz' ? 0.45 : 0.72,
       messages: [
         { role: 'system', content: 'You write content for a school simulation game. Keep responses brief and safe.' },
-        { role: 'user', content: buildLlmPrompt(payload) },
+        { role: 'user', content: buildLlmPrompt({ ...payload, uncensored: Boolean(game.llm.nsfw && game.llm.source === 'local') }) },
       ],
     }),
   }, LLM_DEFAULT_TIMEOUT_MS + 800);
@@ -1669,6 +1679,7 @@ const game = {
     remoteProvider: 'openai',
     remoteModel: 'gpt-4.1-mini',
     remoteToken: '',
+    nsfw: false,
     cache: new Map(),
     inFlight: new Set(),
   },
@@ -2257,6 +2268,7 @@ function applyStartupOptions() {
   const weatherSetting = optWeatherEl?.value || 'auto';
   const llmEnabled = Boolean(optLlmEnabledEl?.checked);
   const llmSource = String(optLlmSourceEl?.value || 'local');
+  const llmNsfw = Boolean(optLlmNsfwEl?.checked);
   const llmModel = String(optLlmModelEl?.value || '').trim();
   const llmManualModel = String(optLlmManualModelEl?.value || '').trim();
   const llmLocalEndpoint = normalizeLocalEndpoint(optLlmLocalEndpointEl?.value || game.llm.localEndpoint);
@@ -2286,7 +2298,8 @@ function applyStartupOptions() {
     || game.llm.localEndpoint !== llmLocalEndpoint
     || game.llm.remoteProvider !== llmRemoteProvider
     || game.llm.remoteModel !== llmRemoteModel
-    || game.llm.remoteToken !== llmRemoteToken;
+    || game.llm.remoteToken !== llmRemoteToken
+    || game.llm.nsfw !== llmNsfw;
   if (providerChanged) game.llm.cache.clear();
   game.llm.enabled = llmEnabled;
   game.llm.source = llmSource === 'remote' ? 'remote' : 'local';
@@ -2296,6 +2309,7 @@ function applyStartupOptions() {
   game.llm.remoteProvider = llmRemoteProvider === 'grok' ? 'grok' : 'openai';
   game.llm.remoteModel = llmRemoteModel || (game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini');
   game.llm.remoteToken = llmRemoteToken;
+  game.llm.nsfw = llmNsfw;
   persistLlmSettings();
 
   // Startup population changes alter seating demand; rebuild cached layouts.
@@ -8176,6 +8190,19 @@ if (optLlmEnabledEl) {
     setLlmStatus(game.llm.enabled
       ? '🤖 LLM mode enabled. First lines may use fallback text while cache warms up.'
       : 'ℹ️ LLM mode disabled. Using original built-in text.');
+  });
+}
+
+if (optLlmNsfwEl) {
+  optLlmNsfwEl.checked = Boolean(game.llm.nsfw);
+  optLlmNsfwEl.addEventListener('change', () => {
+    // Cache is prompt-dependent; clear so new tone takes effect immediately.
+    game.llm.nsfw = Boolean(optLlmNsfwEl.checked);
+    game.llm.cache.clear();
+    persistLlmSettings();
+    setLlmStatus(game.llm.nsfw
+      ? '🔞 NSFW prompt style enabled for local AI responses.'
+      : '🧼 NSFW prompt style disabled. Using classroom-safe tone guidance.');
   });
 }
 
