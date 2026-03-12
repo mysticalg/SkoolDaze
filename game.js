@@ -117,8 +117,8 @@ const rooms = [
   // Reception-adjacent support spaces now sit in one contiguous block for easier wayfinding.
   { name: 'Toilets', x: 34, y: 66, w: 20, h: 10, floor: 'ground', type: 'hall' },
   { name: 'Janitor Room', x: 56, y: 66, w: 12, h: 10, floor: 'ground', type: 'hall' },
-  // Taller hall gives enough depth for full-school seating during assembly.
-  { name: 'Assembly Hall', x: 70, y: 60, w: 28, h: 16, floor: 'ground', type: 'hall' },
+  // Taller + wider hall improves assembly spacing and row alignment readability.
+  { name: 'Assembly Hall', x: 68, y: 58, w: 30, h: 18, floor: 'ground', type: 'hall' },
   // Dining hall sits beside assembly for fast lunchtime flow.
   { name: 'Dining Hall', x: 100, y: 66, w: 24, h: 10, floor: 'ground', type: 'hall' },
   { name: 'Geography', x: 8, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
@@ -221,7 +221,7 @@ const blackboards = [
   { room: 'Geography', x: 18, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
   { room: 'Art Room', x: 46, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
   { room: 'History', x: 74, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
-  { room: 'Assembly Hall', x: 84, y: 63, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
+  { room: 'Assembly Hall', x: 83, y: 61, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
   { room: 'Headmaster Office', x: 164, y: 40, text: 'DISCIPLINE', revealChars: 10, revealSpeed: 36, lastSfxAt: 0 },
 ];
 
@@ -1101,6 +1101,10 @@ const game = {
   preferredWeather: 'auto',
   weatherWeek: 1,
   weatherFx: [],
+  // Player anti-stuck telemetry helps detect wall embedding and auto-rescue Eric.
+  playerStuckMs: 0,
+  playerLastX: 0,
+  playerLastY: 0,
   // Daily dialogue memory prevents repeated barks from the same NPC in one day.
   dialogueDayKey: 1,
   ericSeatReservedToday: true,
@@ -1651,6 +1655,10 @@ function applyStartupOptions() {
   seedSwotGameTraders();
   assignFixedClassRosters();
   initTutorialRollCallState();
+  game.playerLastX = player.x;
+  game.playerLastY = player.y;
+  game.playerStuckMs = 0;
+
   assignDailyDutyTeacher();
 }
 
@@ -2327,13 +2335,15 @@ function getRoomSeatLayout(roomName) {
 
   if (roomName === 'Assembly Hall') {
     const studentCount = game.entities.filter((entity) => isStudentCharacter(entity)).length;
-    const cols = 10;
+    // Slightly wider seat grid keeps front rows aligned with the rest of assembly.
+    const cols = 12;
     const rows = Math.max(4, Math.ceil(studentCount / cols));
     const seats = [];
     const seatMinX = room.x + 2.1;
     const seatMaxX = room.x + room.w - 2.1;
-    const seatMinY = room.y + 5.2;
-    const seatMaxY = room.y + room.h - 1.4;
+    // Reserve extra top aisle space for teachers so first student row sits in line.
+    const seatMinY = room.y + 6.4;
+    const seatMaxY = room.y + room.h - 1.8;
     for (let row = 0; row < rows; row += 1) {
       for (let col = 0; col < cols; col += 1) {
         const x = seatMinX + (col / Math.max(1, cols - 1)) * (seatMaxX - seatMinX);
@@ -2395,6 +2405,16 @@ function getRoomSeatLayout(roomName) {
 function getSeatPosition(roomName, seatIndex, requester = null) {
   const layout = getRoomSeatLayout(roomName);
   if (!layout || !layout.seats.length) return null;
+
+  // Assembly uses a dedicated student ordering so front rows fill evenly.
+  if (roomName === 'Assembly Hall' && requester && isStudentCharacter(requester)) {
+    const assemblyStudents = game.entities
+      .filter((entity) => isStudentCharacter(entity))
+      .sort((a, b) => a.seatIndex - b.seatIndex);
+    const idx = Math.max(0, assemblyStudents.findIndex((entity) => entity === requester));
+    return layout.seats[idx % layout.seats.length] || layout.seats[0];
+  }
+
   const ericSlot = player.seatIndex % layout.seats.length;
   let slot = seatIndex % layout.seats.length;
 
@@ -2526,6 +2546,10 @@ function resetToSchoolMorning() {
     entity.knockoutCount = Math.max(0, (entity.knockoutCount || 0) - 1);
     entity.needsNurseUntil = 0;
   }
+
+  game.playerLastX = player.x;
+  game.playerLastY = player.y;
+  game.playerStuckMs = 0;
 
   assignDailyDutyTeacher();
   assignDailyTradingCards();
@@ -3305,6 +3329,58 @@ function moveEntityWithCollision(entity, deltaX, deltaY) {
   // Axis-separated fallback gives natural wall sliding and keeps controls responsive.
   if (isWalkablePoint(nextX, entity.y)) entity.x = nextX;
   if (isWalkablePoint(entity.x, nextY)) entity.y = nextY;
+}
+
+function nearestWalkablePoint(origin, candidates = []) {
+  const points = [origin, ...candidates].filter(Boolean);
+  for (const point of points) {
+    if (isWalkablePoint(point.x, point.y)) return point;
+
+    // Spiral-style local probe around each candidate to find nearest valid ground.
+    for (let radius = 0.45; radius <= 3; radius += 0.45) {
+      for (let a = 0; a < 360; a += 30) {
+        const rad = (a * Math.PI) / 180;
+        const test = { x: point.x + Math.cos(rad) * radius, y: point.y + Math.sin(rad) * radius };
+        if (isWalkablePoint(test.x, test.y)) return test;
+      }
+    }
+  }
+  return null;
+}
+
+function recoverPlayerIfWallStuck(dt) {
+  const moved = Math.hypot(player.x - game.playerLastX, player.y - game.playerLastY);
+  const pushingInput = Math.abs(player.vx) + Math.abs(player.vy) > 0.02;
+  const insideWalkable = isWalkablePoint(player.x, player.y);
+
+  if (!insideWalkable || (pushingInput && moved < 0.003)) {
+    game.playerStuckMs += dt;
+  } else {
+    game.playerStuckMs = Math.max(0, game.playerStuckMs - (dt * 2));
+  }
+
+  game.playerLastX = player.x;
+  game.playerLastY = player.y;
+
+  if (game.playerStuckMs < 1100) return;
+
+  const current = schedule[game.periodIndex];
+  const preferred = [
+    getSeatPosition(current.room, player.seatIndex, player),
+    roomCenter(current.room),
+    roomCenter('Ground Corridor'),
+  ];
+  const safe = nearestWalkablePoint({ x: player.x, y: player.y }, preferred);
+  if (!safe) return;
+
+  player.x = safe.x;
+  player.y = safe.y;
+  player.vx = 0;
+  player.vy = 0;
+  player.isSeated = false;
+  player.seatedRoom = null;
+  game.playerStuckMs = 0;
+  announce('🛟 Eric was stuck in a wall and got auto-unstuck.', { force: true });
 }
 
 function setPeriod(index) {
@@ -7005,6 +7081,7 @@ function loop(now) {
 
     moveEntityWithCollision(player, player.vx * dt * 0.011, player.vy * dt * 0.011);
     constrain(player);
+    recoverPlayerIfWallStuck(dt);
 
     // Update animation time for all entities so movement reads like retro sprites.
     for (const entity of game.entities) {
@@ -7154,5 +7231,14 @@ window.__skoolDazeDebug = {
     game.autoMode = Boolean(enabled);
     game.idleMs = 0;
     updateAutoStatus();
+  },
+  // Test hook: place Eric directly for automated stuck-recovery checks.
+  setPlayerPosition: (x, y) => {
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      player.x = x;
+      player.y = y;
+      player.vx = 0;
+      player.vy = 0;
+    }
   },
 };
