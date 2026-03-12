@@ -1108,6 +1108,36 @@ function randomHistorySnippet() {
   return game.schoolHistory[Math.floor(game.rng() * game.schoolHistory.length)];
 }
 
+function conversationThreadKey(a, b) {
+  const aName = typeof a === 'string' ? a : (a?.name || 'Unknown A');
+  const bName = typeof b === 'string' ? b : (b?.name || 'Unknown B');
+  return [aName, bName].sort().join('|');
+}
+
+function recordNpcConversationTurn(speaker, addressee, line) {
+  if (!speaker?.name || !addressee?.name || !line) return;
+  const key = conversationThreadKey(speaker, addressee);
+  const history = game.npcConversations[key] || [];
+  history.push({
+    by: speaker.name,
+    to: addressee.name,
+    text: sanitizeLlmLine(line),
+    at: game.timeMinutes,
+  });
+  // Keep only recent lines to avoid unbounded memory growth and prompt bloat.
+  game.npcConversations[key] = history.slice(-10);
+}
+
+function recentConversationContext(speaker, addressee) {
+  if (!speaker?.name || !addressee?.name) return '';
+  const key = conversationThreadKey(speaker, addressee);
+  const history = game.npcConversations[key] || [];
+  return history
+    .slice(-4)
+    .map((item) => `${item.by}→${item.to}: ${item.text}`)
+    .join(' | ');
+}
+
 function contextualResponseFor(entity, peer = null) {
   ensureDialogueSetup(entity);
   const relation = peer ? (entity.relationships?.[peer.name] ?? entity.relationships?.Eric ?? 0) : 0;
@@ -1183,6 +1213,9 @@ function tryEvolveQuirk(entity, now) {
 }
 
 function resolveLlmSocialDirective(actor, peer, fallbackIntent = 'ally') {
+  const threadContext = recentConversationContext(actor, peer);
+  const threadKey = peer ? conversationThreadKey(actor, peer) : '';
+  const threadTurn = threadKey ? ((game.npcConversations[threadKey] || []).length + 1) : 0;
   const payload = {
     channel: 'social',
     subject: roomSubjectName(entityRoom(actor)),
@@ -1192,6 +1225,8 @@ function resolveLlmSocialDirective(actor, peer, fallbackIntent = 'ally') {
     room: entityRoom(actor),
     addresseeName: peer?.name || '',
     addresseeRole: peer ? roleLabelForLlm(peer.role) : '',
+    conversationContext: threadContext,
+    conversationTurn: threadTurn,
     fallback: `intent=${fallbackIntent}; keep it short`,
   };
   const key = llmCacheKey(payload);
@@ -1280,6 +1315,11 @@ function updateEmergentSocialLife(now, currentPeriod) {
 
     if (directive?.line && game.rng() < 0.38) {
       say(entity, directive.line, { peer, durationMs: 3000 });
+      // Quick back-and-forth makes NPC conversations feel alive, not one-sided.
+      if (canUseDialogue(peer, now + 80, 'speech') && game.rng() < 0.34) {
+        const reply = contextualResponseFor(peer, entity);
+        say(peer, reply, { peer: entity, durationMs: 2800 });
+      }
     }
 
     if (bond >= 70 && game.rng() < 0.14) {
@@ -1690,8 +1730,10 @@ function llmCacheKey({
   traitSummary = 'balanced',
   addresseeName = '',
   addresseeRole = '',
+  conversationContext = '',
+  conversationTurn = 0,
 }) {
-  return `${llmProviderLabel()}|${channel}|${subject}|${speaker}|${speakerRole}|${traitSummary}|${room}|${addresseeName}|${addresseeRole}|${String(fallback).toLowerCase().slice(0, 120)}`;
+  return `${llmProviderLabel()}|${channel}|${subject}|${speaker}|${speakerRole}|${traitSummary}|${room}|${addresseeName}|${addresseeRole}|turn:${conversationTurn}|ctx:${String(conversationContext).toLowerCase().slice(0, 90)}|${String(fallback).toLowerCase().slice(0, 120)}`;
 }
 
 function summarizeTraitBundle(traits = {}) {
@@ -1719,6 +1761,8 @@ function buildLlmPrompt({
   traitSummary = 'balanced traits',
   addresseeName = '',
   addresseeRole = '',
+  conversationContext = '',
+  conversationTurn = 0,
   uncensored = false,
 }) {
   const styleGuide = channel === 'thought'
@@ -1744,6 +1788,9 @@ function buildLlmPrompt({
         : 'The answer must exactly match one of the choices. No markdown.',
       `Subject: ${subject}. Room: ${room}. Teacher context: ${speaker}.`,
       `Teacher role: ${speakerRole}. Traits snapshot: ${traitSummary}.`,
+      addresseeName ? `Directed at: ${addresseeName} (${addresseeRole || 'character'}).` : null,
+      conversationContext ? `Recent conversation: ${conversationContext}` : null,
+      conversationTurn ? `Conversation turn: ${conversationTurn}` : null,
       `Fallback question for reference: ${fallback}`,
       styleGuide,
     ].join('\n');
@@ -1768,6 +1815,8 @@ function buildLlmPrompt({
     safetyLine,
     `Speaker: ${speaker}. Role: ${speakerRole}. Traits: ${traitSummary}.`,
     addresseeName ? `Addressee: ${addresseeName}. Addressee role: ${addresseeRole || 'character'}.` : null,
+    conversationContext ? `Recent conversation thread: ${conversationContext}` : null,
+    conversationTurn ? `Conversation turn number: ${conversationTurn}` : null,
     addressingLine,
     `Room: ${room}. Subject: ${subject}.`,
     `Fallback line to adapt: ${fallback}`,
@@ -2114,6 +2163,7 @@ const game = {
   lockerCoverage: 0,
   lockerCapacity: 0,
   socialBonds: {},
+  npcConversations: {},
   socialGroups: [],
   socialGroupCounter: 1,
   lastSocialTickAt: 0,
@@ -3773,6 +3823,7 @@ function deliverResolvedSpeech(entity, resolvedText, addressee, opts = {}, now =
   const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 8;
   const shouldLogSpeech = opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange);
   if (shouldLogSpeech) pushFeedEvent(`${entity.name}: ${finalSpeech}`, 'speech');
+  if (addressee?.name) recordNpcConversationTurn(entity, addressee, finalSpeech);
   return true;
 }
 
@@ -3835,6 +3886,9 @@ function say(entity, text, opts = {}) {
   const silenceBias = clampScore(55 - ((entity.traits?.friendly || 40) * 0.28) - ((entity.traits?.funny || 40) * 0.18) + ((entity.traits?.discipline || 40) * 0.08), 8, 70);
   if (!opts.force && Math.random() < (silenceBias / 100)) return;
   const addressee = inferSpeechAddressee(entity, opts);
+  const threadContext = recentConversationContext(entity, addressee);
+  const threadKey = addressee ? conversationThreadKey(entity, addressee) : '';
+  const threadTurn = threadKey ? ((game.npcConversations[threadKey] || []).length + 1) : 0;
   const payload = {
     channel: 'speech',
     subject: roomSubjectName(entityRoom(entity)),
@@ -3844,6 +3898,8 @@ function say(entity, text, opts = {}) {
     room: entityRoom(entity),
     addresseeName: addressee?.name || '',
     addresseeRole: addressee ? roleLabelForLlm(addressee.role) : '',
+    conversationContext: threadContext,
+    conversationTurn: threadTurn,
     fallback: String(text),
   };
 
