@@ -5562,10 +5562,12 @@ resetToSchoolMorning();
 // Player input and actions
 // -----------------------------------------------------------------------------
 function handleInput(dt) {
-  // Slower default walk pace; hold Shift to run and spend extra stamina.
+  // Slightly trim Eric's manual pace so he blends into the morning classroom flow.
+  // Shift still grants a clear burst for emergencies, but default walking now tracks
+  // the average student corridor speed more closely.
   const baseSpeed = (player.personality.speed * game.energy) / 100;
   const running = Boolean(game.keys.Shift || game.keys.shift || game.keys.r);
-  const speed = baseSpeed * (running ? 1.65 : 0.76);
+  const speed = baseSpeed * (running ? 1.58 : 0.72);
   player.vx = 0;
   player.vy = 0;
 
