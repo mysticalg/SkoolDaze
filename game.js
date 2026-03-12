@@ -2248,6 +2248,11 @@ function updateBladder(dt) {
 }
 
 function distance(a, b) {
+  // Guard against transient null/undefined entities during spawn/reset frames.
+  // Returning Infinity keeps proximity checks safe without crashing the game loop.
+  if (!a || !b || typeof a.x !== 'number' || typeof a.y !== 'number' || typeof b.x !== 'number' || typeof b.y !== 'number') {
+    return Number.POSITIVE_INFINITY;
+  }
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 

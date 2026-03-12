@@ -40,7 +40,7 @@
   </header>
 
   <main>
-    <!-- Keep gameplay hints in the dedicated Controls panel; avoid browser hover popups over the canvas. -->
+    <!-- Keep gameplay hints in Help so all player-facing guidance is found in one consistent location. -->
     <section class="canvas-wrap">
       <canvas id="game" width="1280" height="700" aria-label="School game area"></canvas>
       <div id="entityTooltip" class="entity-tooltip" role="status" aria-live="polite" hidden></div>
@@ -85,26 +85,41 @@
         <li><span class="dot weird"></span> Weird kid</li>
       </ul>
 
-      <h3>Controls</h3>
-      <p title="Move around rooms and corridors."><strong>Move:</strong> Arrow Keys / WASD</p>
-      <p title="Close range punch."><strong>Punch:</strong> Z</p>
-      <p title="Long range projectile prank."><strong>Catapult:</strong> X</p>
-      <p title="Use nearby doors and stairs, plus read boards, fountains, and shield pickups."><strong>Interact:</strong> E (doors + stairs)</p>
-      <p title="Sit in the nearest classroom chair, press again to stand."><strong>Sit / Stand:</strong> Q</p>
-      <p title="Use near a vending machine to buy food or drink. Dispose of packaging in bins."><strong>Vending:</strong> C</p>
-      <p title="Throw carried rubbish. It can knock pupils over, but teachers may punish you if they see it."><strong>Throw rubbish:</strong> V</p>
-      <p title="Trade items and pocket money with nearby students or teachers. High barter skill can unlock freebies."><strong>Trade / Barter:</strong> T</p>
-      <p title="Use near toilet urinals to quickly reduce bladder pressure."><strong>Urinals:</strong> E (in toilets)</p>
-      <p title="Toggle computer control. It also enables automatically when you stop controlling Eric for a while."><strong>Auto:</strong> U (or leave Eric idle)</p>
-      <p title="Hold Shift (or R) while moving to run faster at a higher energy cost."><strong>Run:</strong> Shift / R + Move</p>
-      <p title="Pause game logic and rendering updates."><strong>Pause:</strong> P or ⏯️</p>
-      <p title="The view scrolls with Eric so you can navigate floors with stairs."><strong>🧭 Navigation:</strong> Follow corridors and use marked stairs between levels. Floor colors: Upper purple, Middle blue, Ground green.</p>
+      <p class="todo-help">💡 Full controls and legend are now in Help (❔) for a single, consistent guide.</p>
 
     </aside>
   </main>
 
   <dialog id="helpDialog">
     <h2>How this tribute works</h2>
+    <!-- Keep controls and character legend together so players can learn from one place. -->
+    <h3>🎮 Controls</h3>
+    <ul class="help-controls">
+      <li title="Move around rooms and corridors."><strong>🧭 Move:</strong> Arrow Keys / WASD</li>
+      <li title="Close range punch."><strong>👊 Punch:</strong> Z</li>
+      <li title="Long range projectile prank."><strong>🎯 Catapult:</strong> X</li>
+      <li title="Use nearby doors and stairs, plus read boards, fountains, and shield pickups."><strong>🚪 Interact:</strong> E (doors + stairs)</li>
+      <li title="Sit in the nearest classroom chair, press again to stand."><strong>🪑 Sit / Stand:</strong> Q</li>
+      <li title="Use near a vending machine to buy food or drink. Dispose of packaging in bins."><strong>🥤 Vending:</strong> C</li>
+      <li title="Throw carried rubbish. It can knock pupils over, but teachers may punish you if they see it."><strong>🗑️ Throw rubbish:</strong> V</li>
+      <li title="Trade items and pocket money with nearby students or teachers. High barter skill can unlock freebies."><strong>🤝 Trade / Barter:</strong> T</li>
+      <li title="Use near toilet urinals to quickly reduce bladder pressure."><strong>🚻 Urinals:</strong> E (in toilets)</li>
+      <li title="Toggle computer control. It also enables automatically when you stop controlling Eric for a while."><strong>🤖 Auto:</strong> U (or leave Eric idle)</li>
+      <li title="Hold Shift (or R) while moving to run faster at a higher energy cost."><strong>🏃 Run:</strong> Shift / R + Move</li>
+      <li title="Pause game logic and rendering updates."><strong>⏯️ Pause:</strong> P or top bar button</li>
+      <li title="The view scrolls with Eric so you can navigate floors with stairs."><strong>🧭 Navigation:</strong> Follow corridors and use marked stairs between levels. Floor colors: Upper purple, Middle blue, Ground green.</li>
+    </ul>
+
+    <h3>🧑‍🏫 Character legend</h3>
+    <ul class="help-legend">
+      <li title="The player character you control."><span class="dot player"></span> Eric (you)</li>
+      <li title="Teachers monitor lessons and discipline."><span class="dot teacher"></span> Teachers</li>
+      <li title="Aggressive students who start trouble."><span class="dot bully"></span> Bully</li>
+      <li title="Rule-focused students who may report behaviour."><span class="dot swot"></span> Swot</li>
+      <li title="Brave students who can intervene socially."><span class="dot hero"></span> Hero</li>
+      <li title="Unpredictable students with odd behaviour."><span class="dot weird"></span> Weird kid</li>
+    </ul>
+
     <p>
       This is an original HTML5 fan tribute inspired by classic school chaos gameplay.
       It includes bell schedules, lesson routines, personality-driven AI, discipline, and shield objectives.
@@ -119,7 +134,7 @@
       <li>Knockouts can be used tactically to reach difficult shields.</li>
       <li>Collect all shield letters to reveal the safe code.</li>
     </ul>
-    <button id="closeHelp">Close</button>
+    <button id="closeHelp" class="dialog-close" type="button" aria-label="Close Help dialog">✖ Close Help</button>
   </dialog>
 
   <dialog id="todoDialog" aria-labelledby="todoDialogTitle">
