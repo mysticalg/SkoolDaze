@@ -528,6 +528,10 @@ function isRegistrationPeriod(period) {
   return period.period === 'Registration';
 }
 
+// Tutor rooms host morning registration: each student stays in one fixed tutor group.
+const TUTOR_ROOMS = ['Science Lab', 'Upper Common', 'Physics Lab', 'Chem Prep', 'English', 'Music Room', 'Geography', 'History'];
+const CLASS_RESPONSE_LINES = ['Here sir.', 'Sir.', 'Here.', 'Yes sir.', 'Yes miss.', 'Here miss.', 'Present.', 'Yep, here.'];
+
 const floorMeta = {
   upper: { label: 'Upper', color: 'Purple' },
   middle: { label: 'Middle', color: 'Blue' },
@@ -1067,6 +1071,9 @@ const game = {
   hygiene: 100,
   warnedNeedToilet: false,
   registrationTaken: false,
+  // Fixed timetables/rosters: stable classmates per subject and tutor across days.
+  fixedClassRosters: {},
+  tutorialRollCall: {},
   litter: [],
   playerCarryingTrash: false,
   playerHeldItem: null,
@@ -1640,11 +1647,15 @@ function applyStartupOptions() {
   roomSeatCache.clear();
   createLockerPlanForStudents(game.entities);
   seedSwotGameTraders();
+  assignFixedClassRosters();
+  initTutorialRollCallState();
   assignDailyDutyTeacher();
 }
 
 createLockerPlanForStudents(game.entities);
 seedSwotGameTraders();
+assignFixedClassRosters();
+initTutorialRollCallState();
 
 function initialiseNpcRelationships() {
   for (const entity of game.entities) {
@@ -2429,6 +2440,7 @@ function resetToSchoolMorning() {
   game.timeMinutes = 8 * 60 + 20;
   game.periodElapsed = 0;
   game.registrationTaken = false;
+  initTutorialRollCallState();
   game.drinksToday = 0;
   game.dailyToiletVisits = 0;
   game.warnedNeedToilet = false;
@@ -3109,7 +3121,7 @@ function updateClassQuestionSystem(now = performance.now()) {
   resolveClassQuestionAttempt(quiz, responder, spokenAnswer, correct);
 }
 function maybeStartClassQuestion(current, now) {
-  if (!isSupervisedPeriod(current)) return;
+  if (!isSupervisedPeriod(current) || isRegistrationPeriod(current) || isAssemblyPeriod(current)) return;
   if (game.quizActive) return;
   if (now - (game.lastClassQuestionAt || 0) < 28000) return;
   const teacher = assignedTeacherEntityForPeriod(current);
@@ -3866,34 +3878,132 @@ function lessonClassroomCandidates(currentPeriod) {
   return candidates.length ? candidates : fallbackClassrooms;
 }
 
-function chooseLessonRoomForStudent(student, currentPeriod) {
-  const candidates = lessonClassroomCandidates(currentPeriod);
-  // Reserve one spare chair per classroom when possible so students can re-seat if displaced.
-  let availableRooms = candidates.filter((roomName) => roomHasSpareSeat(roomName, student));
-  if (!availableRooms.length) {
-    availableRooms = candidates.filter((roomName) => roomHasOpenSeat(roomName, student));
-  }
-  if (!availableRooms.length) return currentPeriod.room;
+function assignFixedClassRosters() {
+  // Build deterministic class/tutor rosters so students meet the same classmates each day.
+  const students = game.entities.filter((entity) => isStudentCharacter(entity));
+  const registrationRosters = {};
+  TUTOR_ROOMS.forEach((room) => { registrationRosters[room] = []; });
 
-  // Keep classes balanced by selecting the room with the lowest occupancy ratio.
-  let bestRoom = availableRooms[0];
-  let bestRatio = Infinity;
-  let bestCommitted = Infinity;
-  for (const roomName of availableRooms) {
-    const layout = getRoomSeatLayout(roomName);
-    if (!layout || !layout.seats.length) continue;
-    const committed = studentsCommittedToRoom(roomName, student);
-    const effectiveCapacity = Math.max(1, layout.seats.length - LESSON_SPARE_SEATS_PER_ROOM);
-    const ratio = committed / effectiveCapacity;
-    if (ratio < bestRatio || (Math.abs(ratio - bestRatio) < 0.0001 && committed < bestCommitted)) {
-      bestRatio = ratio;
-      bestCommitted = committed;
-      bestRoom = roomName;
+  for (const student of students) {
+    if (student === player) {
+      student.tutorRoom = 'Science Lab';
+    } else {
+      const idx = styleSeedFromName(`${student.name}:tutor`) % TUTOR_ROOMS.length;
+      student.tutorRoom = TUTOR_ROOMS[idx];
+    }
+    registrationRosters[student.tutorRoom] = registrationRosters[student.tutorRoom] || [];
+    registrationRosters[student.tutorRoom].push(student.name);
+    student.fixedLessonRooms = student.fixedLessonRooms || {};
+  }
+
+  const fixedBySubject = {};
+  const lessonSubjects = [...new Set(schedule
+    .filter((period) => period.mode === 'lesson' && !isRegistrationPeriod(period) && !isAssemblyPeriod(period))
+    .map((period) => period.room))];
+
+  for (const subjectRoom of lessonSubjects) {
+    const pseudoPeriod = { room: subjectRoom };
+    const candidates = lessonClassroomCandidates(pseudoPeriod).slice(0, 6);
+    const rosterMap = {};
+    candidates.forEach((room) => { rosterMap[room] = []; });
+
+    const ordered = [...students].sort((a, b) => styleSeedFromName(`${a.name}:${subjectRoom}`) - styleSeedFromName(`${b.name}:${subjectRoom}`));
+    for (const student of ordered) {
+      let bestRoom = candidates[0] || subjectRoom;
+      let bestScore = Infinity;
+      for (const roomName of candidates) {
+        const layout = getRoomSeatLayout(roomName);
+        const capacity = Math.max(4, (layout?.seats?.length || 8) - LESSON_SPARE_SEATS_PER_ROOM);
+        const occupancy = rosterMap[roomName]?.length || 0;
+        // Prefer rooms with spare seats and lower occupancy, with stable deterministic tie-breaks.
+        const overflowPenalty = occupancy >= capacity ? 1000 : 0;
+        const tieBreaker = (styleSeedFromName(`${student.name}:${roomName}`) % 17) / 100;
+        const score = (occupancy / capacity) + overflowPenalty + tieBreaker;
+        if (score < bestScore) {
+          bestScore = score;
+          bestRoom = roomName;
+        }
+      }
+      rosterMap[bestRoom] = rosterMap[bestRoom] || [];
+      rosterMap[bestRoom].push(student.name);
+      student.fixedLessonRooms[subjectRoom] = bestRoom;
+    }
+
+    fixedBySubject[subjectRoom] = rosterMap;
+  }
+
+  game.fixedClassRosters = {
+    Registration: registrationRosters,
+    ...fixedBySubject,
+  };
+}
+
+function chooseLessonRoomForStudent(student, currentPeriod) {
+  if (!student) return currentPeriod.room;
+  if (isRegistrationPeriod(currentPeriod)) {
+    return student.tutorRoom || currentPeriod.room;
+  }
+  if (isAssemblyPeriod(currentPeriod)) return 'Assembly Hall';
+  if (student.fixedLessonRooms?.[currentPeriod.room]) {
+    return student.fixedLessonRooms[currentPeriod.room];
+  }
+  return currentPeriod.room;
+}
+
+function initTutorialRollCallState() {
+  const rooms = game.fixedClassRosters?.Registration || {};
+  const state = {};
+  for (const [roomName, roster] of Object.entries(rooms)) {
+    if (!roster.length) continue;
+    state[roomName] = { index: 0, waitingForReply: false, nextAt: 0 };
+  }
+  game.tutorialRollCall = state;
+}
+
+function updateTutorialRollCall(now = performance.now()) {
+  const rooms = game.fixedClassRosters?.Registration || {};
+  if (!Object.keys(rooms).length) return;
+
+  let completedRooms = 0;
+  for (const [roomName, roster] of Object.entries(rooms)) {
+    if (!roster.length) {
+      completedRooms += 1;
+      continue;
+    }
+    const roll = game.tutorialRollCall[roomName] || { index: 0, waitingForReply: false, nextAt: 0 };
+    game.tutorialRollCall[roomName] = roll;
+    if (roll.index >= roster.length) {
+      completedRooms += 1;
+      continue;
+    }
+    if (now < (roll.nextAt || 0)) continue;
+
+    const teacherName = assignedTeacherForRoom(roomName);
+    const teacher = game.entities.find((entity) => entity.role === 'teacher' && entity.name === teacherName && entityRoom(entity) === roomName);
+    const studentName = roster[roll.index];
+    const student = game.entities.find((entity) => entity.name === studentName && entityRoom(entity) === roomName);
+    if (!teacher || !student) continue;
+
+    if (!roll.waitingForReply) {
+      say(teacher, `${student.name}?`, { durationMs: 2300 });
+      announce(`📘 ${teacher.name} calls register in ${roomName}: "${student.name}?"`, { source: teacher, range: 10, force: true });
+      roll.waitingForReply = true;
+      roll.nextAt = now + 900 + (game.rng() * 450);
+    } else {
+      const line = CLASS_RESPONSE_LINES[Math.floor(game.rng() * CLASS_RESPONSE_LINES.length)];
+      say(student, line, { durationMs: 2100 });
+      roll.waitingForReply = false;
+      roll.index += 1;
+      roll.nextAt = now + 600 + (game.rng() * 400);
     }
   }
 
-  return bestRoom;
+  if (!game.registrationTaken && completedRooms === Object.keys(rooms).length && completedRooms > 0) {
+    game.registrationTaken = true;
+    announce('📘 Tutorial registration complete: every tutor has called the full class list.', { force: true });
+  }
 }
+
 
 function toggleSeat() {
   const currentRoom = entityRoom(player);
@@ -4382,6 +4492,10 @@ function chooseTarget(entity, currentPeriod) {
 
 function isTeacherPresentForPeriod(currentPeriod) {
   if (!isSupervisedPeriod(currentPeriod)) return true;
+  if (isRegistrationPeriod(currentPeriod)) {
+    // Registration uses multiple tutor rooms, so any active tutor roll-call counts as staffed.
+    return game.entities.some((entity) => entity.role === 'teacher' && entity.knockedUntil < performance.now());
+  }
   // Count attendance by room presence so lessons don't stall when teachers pace near the board.
   return game.entities.some((entity) => (
     entity.role === 'teacher'
@@ -4647,6 +4761,10 @@ function updateAI(dt) {
     }
   } else {
     game.lessonNoiseLevel = Math.min(1, game.lessonNoiseLevel + dt * 0.0005);
+  }
+
+  if (isRegistrationPeriod(current)) {
+    updateTutorialRollCall(now);
   }
 
   maybeStartClassQuestion(current, now);
@@ -5365,11 +5483,6 @@ function updateSchedule(dt) {
     announce(`⏱️ ${current.period} resumed after waiting for teacher to get seated.`);
   }
   game.timeMinutes += deltaMins;
-
-  if (isRegistrationPeriod(current) && !game.registrationTaken && game.periodElapsed > 8) {
-    game.registrationTaken = true;
-    announce('📘 Registration complete: all students marked present by tutors.');
-  }
 
   if (isRegistrationPeriod(current) && !game.ericSeatReservedToday && game.periodElapsed < 2.5) {
     const blocker = ericSeatOccupant(current.room);
