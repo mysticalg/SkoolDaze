@@ -10171,6 +10171,23 @@ closeInteractionPanelBtn.onclick = () => {
   game.selectedInteractionTarget = null;
 };
 
+function closeTransientMenus() {
+  // Keep floating overlays in sync with browser chrome focus changes so
+  // auxiliary menus never linger after their parent bar/dialog is dismissed.
+  if (interactionPanelEl) interactionPanelEl.hidden = true;
+  game.selectedInteractionTarget = null;
+  if (entityTooltipEl) entityTooltipEl.hidden = true;
+
+  if (todoDialog?.open) todoDialog.close();
+  if (helpDialog?.open) helpDialog.close();
+  if (splashSettingsDialog?.open && startOverlayEl?.hidden) splashSettingsDialog.close();
+}
+
+window.addEventListener('blur', closeTransientMenus);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') closeTransientMenus();
+});
+
 
 if (openSplashSettingsBtn && splashSettingsDialog) {
   openSplashSettingsBtn.addEventListener('click', () => splashSettingsDialog.showModal());
