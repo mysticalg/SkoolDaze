@@ -1246,6 +1246,27 @@ function ollamaEndpointCandidates(primary = OLLAMA_DEFAULT_ENDPOINT) {
   return Array.from(new Set(candidates));
 }
 
+function extractOllamaModelNames(payload) {
+  // Ollama API shapes can vary by endpoint version; normalize to a flat model list.
+  const tags = Array.isArray(payload?.models) ? payload.models : [];
+  const direct = tags.map((entry) => String(entry?.name || entry?.model || '').trim()).filter(Boolean);
+  if (direct.length) return Array.from(new Set(direct));
+
+  const running = Array.isArray(payload?.processes) ? payload.processes : [];
+  const runningNames = running.map((entry) => String(entry?.name || entry?.model || '').trim()).filter(Boolean);
+  return Array.from(new Set(runningNames));
+}
+
+function classifyOllamaError(error) {
+  const text = String(error?.message || error || '').toLowerCase();
+  const networkLike = error?.name === 'TypeError' || text.includes('failed to fetch') || text.includes('networkerror');
+  if (!networkLike) return 'other';
+
+  // Browser CORS/mixed-content failures often surface as generic network errors.
+  if (window.location.protocol === 'https:') return 'mixed-content-or-cors';
+  return 'network-or-cors';
+}
+
 function updateLlmModelSelect(models = []) {
   if (!optLlmModelEl) return;
   optLlmModelEl.innerHTML = '';
@@ -1278,10 +1299,24 @@ async function refreshOllamaModels({ silent = false } = {}) {
 
   for (const baseUrl of candidates) {
     try {
-      const response = await fetchWithTimeout(`${baseUrl}/api/tags`, {}, 1800);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = await response.json();
-      const models = Array.from(new Set((payload?.models || []).map((entry) => String(entry?.name || '').trim()).filter(Boolean)));
+      const tagsResponse = await fetchWithTimeout(`${baseUrl}/api/tags`, {}, 1800);
+      if (!tagsResponse.ok) throw new Error(`HTTP ${tagsResponse.status}`);
+      const tagsPayload = await tagsResponse.json();
+      let models = extractOllamaModelNames(tagsPayload);
+
+      // Fallback: if tags is empty, probe running processes to surface actively loaded models.
+      if (!models.length) {
+        try {
+          const psResponse = await fetchWithTimeout(`${baseUrl}/api/ps`, {}, 1400);
+          if (psResponse.ok) {
+            const psPayload = await psResponse.json();
+            models = extractOllamaModelNames(psPayload);
+          }
+        } catch (psError) {
+          // Non-fatal: empty /api/ps should not block detection from /api/tags.
+        }
+      }
+
       game.llm.localEndpoint = baseUrl;
       game.llm.availableModels = models;
       if (!game.llm.selectedModel && models.length) game.llm.selectedModel = models[0];
@@ -1292,7 +1327,7 @@ async function refreshOllamaModels({ silent = false } = {}) {
       if (!silent) {
         setLlmStatus(models.length
           ? `✅ Found ${models.length} local model(s) via ${baseUrl}.`
-          : `⚠️ Connected to Ollama (${baseUrl}), but no local models are installed.`, !models.length);
+          : `⚠️ Connected to Ollama (${baseUrl}), but no local models were returned by /api/tags or /api/ps.`, true);
       }
       return;
     } catch (error) {
@@ -1304,10 +1339,12 @@ async function refreshOllamaModels({ silent = false } = {}) {
   updateLlmModelSelect([]);
   if (optLlmLocalEndpointEl) optLlmLocalEndpointEl.value = game.llm.localEndpoint;
   if (!silent) {
-    const httpsHint = window.location.protocol === 'https:'
-      ? ' Browser note: HTTPS pages cannot call insecure http://localhost endpoints in many browsers. Open the game from a local http:// URL.'
+    const errorType = classifyOllamaError(lastError);
+    const originHint = `Current page origin: ${window.location.origin}.`;
+    const corsHint = errorType === 'mixed-content-or-cors' || errorType === 'network-or-cors'
+      ? ` If Ollama is running, allow this origin in Ollama (OLLAMA_ORIGINS) and ensure HTTP pages call HTTP Ollama endpoints. ${originHint}`
       : '';
-    setLlmStatus(`⚠️ Could not reach Ollama at ${candidates.join(', ')}.${httpsHint} Using built-in text.`, true);
+    setLlmStatus(`⚠️ Could not reach Ollama at ${candidates.join(', ')}.${corsHint} Using built-in text.`, true);
   }
 }
 

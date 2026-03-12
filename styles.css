@@ -142,7 +142,8 @@ body {
   justify-content: flex-start;
 }
 
-#optLlmRemoteModel {
+#optLlmRemoteModel,
+#optLlmLocalEndpoint {
   width: 100%;
 }
 
