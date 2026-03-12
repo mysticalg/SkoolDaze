@@ -5094,6 +5094,12 @@ function clearClassQuestionUi() {
   if (classQuestionChoicesEl) classQuestionChoicesEl.innerHTML = '';
 }
 
+function markEntityHandRaised(entity, now = performance.now(), durationMs = 2200) {
+  if (!entity) return;
+  // Briefly render a raised-hand icon so class participation is visible on sprites.
+  entity.handRaisedUntil = now + durationMs;
+}
+
 function teacherFeedbackLine(teacher, student, correct) {
   const studentName = student?.name || 'Student';
   if (correct) {
@@ -5116,6 +5122,7 @@ function teacherFeedbackLine(teacher, student, correct) {
 
 function resolveClassQuestionAttempt(quiz, student, attemptText, forcedCorrect = false) {
   if (!quiz || quiz.resolved) return;
+  markEntityHandRaised(student);
   const normalized = normalizeAnswerText(attemptText);
   const isCorrect = forcedCorrect || normalized === quiz.answer;
   quiz.resolved = true;
@@ -6733,8 +6740,10 @@ function chooseTarget(entity, currentPeriod) {
 
   if (isStartDayPeriod(currentPeriod)) {
     if (entity.role === 'teacher') {
-      // Teachers now stage inside registration rooms before students arrive.
-      return teacherBoardSpot(teacherRegistrationRoom(entity.name));
+      // Morning lineup rule: teachers hold by the field divider until first bell.
+      const teachers = teachersInRoster().sort((a, b) => a.seatIndex - b.seatIndex);
+      const teacherIndex = Math.max(0, teachers.findIndex((candidate) => candidate === entity));
+      return teacherGateLinePosition(teacherIndex);
     }
     return gateQueuePosition(entity);
   }
@@ -7438,6 +7447,7 @@ function updateAI(dt) {
 
     // Witty teacher comeback when a student asks a silly question.
     if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < 0.00024) {
+      markEntityHandRaised(entity, now, 2000);
       const sillyQuestions = ['🙃 Sir, can we do homework in our dreams?', '😅 Miss, is zero afraid of minus numbers?', '🤔 If I eat my notes, do I absorb the lesson?', '🧪 If we mix maths and music, do we get algebra beats?', '📏 Can I measure effort with a ruler and hand that in?', '🛰️ If I answer in space-voice, is it still correct?', '🍟 Is lunch technically a science experiment?', '🎭 If I act confident, do I get confidence marks?', '🦆 Is a duck in uniform allowed in assembly?', '📚 If I highlight everything, does that count as revision?', '🧠 Can my future self come sit this test for me?', '⏰ Can we have a two-minute break every two minutes?'];
       say(entity, sillyQuestions[Math.floor(game.rng() * sillyQuestions.length)], { durationMs: 3600 });
       const classTeacher = game.entities.find((candidate) => (
@@ -9063,6 +9073,13 @@ function drawEntities() {
     if (entity.carryingTrash) {
       ctx.fillStyle = '#f4a261';
       ctx.fillRect(px + 8, py - 14, 4, 4);
+    }
+
+    if ((entity.handRaisedUntil || 0) > nowBubble) {
+      // Raised hand icon makes question/answer participation readable during lessons.
+      ctx.font = '12px monospace';
+      ctx.fillStyle = '#fef08a';
+      ctx.fillText('✋', px + 10, py - 30);
     }
 
     // Each person gets mini vitals bars (energy + bladder) like Eric.
