@@ -8968,6 +8968,9 @@ function drawEntities() {
       const writingFrame = isWriting ? Math.floor((now / 90) % 4) : 0;
 
       const strikeDir = entity.facing >= 0 ? 1 : -1;
+      // Side-facing sprite direction is intentionally inverted from legacy strikeDir
+      // so horizontal travel direction matches the visible profile orientation.
+      const sideFacingRight = entity.facing < 0;
       const appearance = entity.appearance || {};
       const useUniform = isStudentCharacter(entity);
       const isFemaleStudent = useUniform && (entity.sex || appearance.sex) === 'female';
@@ -9012,7 +9015,7 @@ function drawEntities() {
       const earSize = appearance.earSize || 1;
       ctx.fillStyle = skinTone;
       if (facingSide) {
-        const earX = entity.facing >= 0 ? px - Math.floor(headW / 2) - 1 : px + Math.floor(headW / 2);
+        const earX = sideFacingRight ? px - Math.floor(headW / 2) - 1 : px + Math.floor(headW / 2);
         ctx.fillRect(earX, py - 21 + bob - heightShift, earSize, 2);
       } else {
         ctx.fillRect(px - Math.floor(headW / 2) - 1, py - 21 + bob - heightShift, earSize, 2);
@@ -9034,9 +9037,9 @@ function drawEntities() {
         const noseH = appearance.noseType === 'button' ? 1 : appearance.noseType === 'long' ? 2 : 1;
         if (facingSide) {
           // Side profile nose extends toward the facing direction.
-          const noseX = entity.facing >= 0 ? px + Math.floor(headW / 2) - 1 : px - Math.floor(headW / 2);
+          const noseX = sideFacingRight ? px + Math.floor(headW / 2) - 1 : px - Math.floor(headW / 2);
           ctx.fillRect(noseX, py - 20 + bob - heightShift, 2, 1);
-          if (noseH > 1) ctx.fillRect(noseX + (entity.facing >= 0 ? 1 : 0), py - 19 + bob - heightShift, 1, 1);
+          if (noseH > 1) ctx.fillRect(noseX + (sideFacingRight ? 1 : 0), py - 19 + bob - heightShift, 1, 1);
         } else {
           const noseX = appearance.noseType === 'long' ? px : px - 1;
           ctx.fillRect(noseX, py - 20 + bob - heightShift, 1, noseH);
@@ -9052,7 +9055,7 @@ function drawEntities() {
         if (isBlinking) {
           ctx.fillStyle = '#2f2f2f';
           if (facingSide) {
-            const eyeX = entity.facing >= 0 ? px + 1 : px - 2;
+            const eyeX = sideFacingRight ? px + 1 : px - 2;
             ctx.fillRect(eyeX, eyeY, 2, 1);
           } else {
             ctx.fillRect(px - eyeSpread - 2, eyeY, 3, 1);
@@ -9063,7 +9066,7 @@ function drawEntities() {
             // Eyeshadow accent for female variants keeps faces distinct.
             ctx.fillStyle = makeupStyle === 'bold' ? '#b565d9' : '#8aa0ff';
             if (facingSide) {
-              const eyeX = entity.facing >= 0 ? px + 1 : px - 2;
+              const eyeX = sideFacingRight ? px + 1 : px - 2;
               ctx.fillRect(eyeX, eyeY - 1, 2, 1);
             } else {
               ctx.fillRect(px - eyeSpread - 2, eyeY - 1, 2, 1);
@@ -9071,7 +9074,7 @@ function drawEntities() {
             }
           }
           if (facingSide) {
-            const eyeX = entity.facing >= 0 ? px + 1 : px - 2;
+            const eyeX = sideFacingRight ? px + 1 : px - 2;
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(eyeX, eyeY, 1, 1);
             ctx.fillStyle = appearance.eyeColor || '#1d3557';
@@ -9104,7 +9107,7 @@ function drawEntities() {
       const activeEmote = now < (entity.emoteUntil || 0) ? entity.emote : null;
       if (!facingBack) {
         ctx.fillStyle = isFemaleStudent && makeupStyle !== 'none' ? '#c93b65' : '#4a1e1e';
-        const mouthX = facingSide ? (entity.facing >= 0 ? px + 1 : px - 2) : px - 1;
+        const mouthX = facingSide ? (sideFacingRight ? px + 1 : px - 2) : px - 1;
         if (isSpeaking) ctx.fillRect(mouthX, py - 18 + bob - heightShift, 2, 2);
         else ctx.fillRect(mouthX, py - 18 + bob - heightShift, 2, 1);
         if (activeEmote === 'cry') {
@@ -9131,8 +9134,8 @@ function drawEntities() {
         // Side-on torso is slimmer so profile direction is obvious at a glance.
         const sideTorsoW = Math.max(6, Math.floor(chestW * 0.45));
         const sideHipsW = Math.max(6, Math.floor(hipsW * 0.5));
-        const sideTorsoX = entity.facing >= 0 ? px - 1 : px - sideTorsoW + 1;
-        const sideHipX = entity.facing >= 0 ? px - 1 : px - sideHipsW + 1;
+        const sideTorsoX = sideFacingRight ? px - 1 : px - sideTorsoW + 1;
+        const sideHipX = sideFacingRight ? px - 1 : px - sideHipsW + 1;
         ctx.fillRect(sideTorsoX, py - 18 + bob - heightShift, sideTorsoW, 5);
         ctx.fillRect(sideHipX, py - 13 + bob - heightShift, sideHipsW, 7);
       } else {
@@ -9146,7 +9149,7 @@ function drawEntities() {
         ctx.fillStyle = '#ffffff';
         if (facingSide) {
           // Side profile: shirt seam only (no tie visible from side-on request).
-          const shirtX = entity.facing >= 0 ? px : px - 2;
+          const shirtX = sideFacingRight ? px : px - 2;
           ctx.fillRect(shirtX, py - 18 + bob - heightShift, 2, 5);
         } else {
           ctx.fillRect(px - 2, py - 18 + bob - heightShift, 4, 4);
@@ -9158,10 +9161,10 @@ function drawEntities() {
           ctx.fillStyle = blazerColor;
           if (facingSide) {
             const sideBlazerW = Math.max(6, Math.floor(hipsW * 0.5));
-            const sideBlazerX = entity.facing >= 0 ? px - 1 : px - sideBlazerW + 1;
+            const sideBlazerX = sideFacingRight ? px - 1 : px - sideBlazerW + 1;
             ctx.fillRect(sideBlazerX, py - 17 + bob - heightShift, sideBlazerW, 8);
             ctx.fillStyle = shirtColor;
-            const seamX = entity.facing >= 0 ? px : px - 1;
+            const seamX = sideFacingRight ? px : px - 1;
             ctx.fillRect(seamX, py - 16 + bob - heightShift, 1, 5);
           } else {
             ctx.fillRect(px - Math.floor(hipsW / 2), py - 17 + bob - heightShift, hipsW, 8);
@@ -9172,7 +9175,7 @@ function drawEntities() {
           ctx.fillStyle = '#234a97';
           if (facingSide) {
             const sideTrimW = Math.max(6, Math.floor(hipsW * 0.5));
-            const sideTrimX = entity.facing >= 0 ? px - 1 : px - sideTrimW + 1;
+            const sideTrimX = sideFacingRight ? px - 1 : px - sideTrimW + 1;
             ctx.fillRect(sideTrimX, py - 10 + bob - heightShift, sideTrimW, 2);
           } else {
             ctx.fillRect(px - Math.floor(hipsW / 2), py - 10 + bob - heightShift, hipsW, 2);
@@ -9219,11 +9222,11 @@ function drawEntities() {
       }
       if (facingSide) {
         // Side profile uses one central visible arm; depth implied by a darker near-edge stripe.
-        const centerArmX = entity.facing >= 0 ? px : px - armW;
+        const centerArmX = sideFacingRight ? px : px - armW;
         const centerArmY = Math.round((leftArmYOffset + rightArmYOffset) / 2);
         ctx.fillRect(centerArmX, centerArmY, armW, armL);
         ctx.fillStyle = '#d6ae8f';
-        const nearEdgeX = entity.facing >= 0 ? centerArmX + Math.max(0, armW - 1) : centerArmX;
+        const nearEdgeX = sideFacingRight ? centerArmX + Math.max(0, armW - 1) : centerArmX;
         ctx.fillRect(nearEdgeX, centerArmY + 1, 1, Math.max(2, armL - 2));
         ctx.fillStyle = skinTone;
       } else {
@@ -9262,17 +9265,17 @@ function drawEntities() {
         const expressiveLegKick = legKick + emoteLegDelta;
         if (facingSide) {
           // Side walking profile: both legs are near center with asymmetric stride lengths.
-          const sideLegBaseX = entity.facing >= 0 ? px - 1 : px - legW;
+          const sideLegBaseX = sideFacingRight ? px - 1 : px - legW;
           const nearLegY = py - 6 + (expressiveLegKick * 0.75) - heightShift;
           const farLegY = py - 6 - (expressiveLegKick * 0.45) - heightShift;
           const nearLegLen = Math.max(5, legL + Math.round(Math.abs(expressiveLegKick) * 0.25));
           const farLegLen = Math.max(4, legL - 1);
           ctx.fillRect(sideLegBaseX, nearLegY, legW, nearLegLen);
           ctx.fillStyle = useUniform ? '#0e1626' : '#1a253f';
-          ctx.fillRect(sideLegBaseX - (entity.facing >= 0 ? 1 : -1), farLegY + 1, Math.max(1, legW - 1), farLegLen);
+          ctx.fillRect(sideLegBaseX - (sideFacingRight ? 1 : -1), farLegY + 1, Math.max(1, legW - 1), farLegLen);
           ctx.fillStyle = '#000000';
           ctx.fillRect(sideLegBaseX, nearLegY + nearLegLen, legW, 2);
-          ctx.fillRect(sideLegBaseX - (entity.facing >= 0 ? 1 : -1), farLegY + farLegLen + 1, Math.max(1, legW - 1), 1);
+          ctx.fillRect(sideLegBaseX - (sideFacingRight ? 1 : -1), farLegY + farLegLen + 1, Math.max(1, legW - 1), 1);
         } else if (isFemaleStudent) {
           const standingSkirtDrop = skirtLength === 'long' ? 8 : 5;
           ctx.fillStyle = '#1f3f85';
