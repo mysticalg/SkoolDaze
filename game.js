@@ -34,6 +34,18 @@ const interactionTitleEl = document.getElementById('interactionTitle');
 const interactionMetaEl = document.getElementById('interactionMeta');
 const interactionOptionsEl = document.getElementById('interactionOptions');
 const closeInteractionPanelBtn = document.getElementById('closeInteractionPanel');
+const filterActionsEl = document.getElementById('filterActions');
+const filterSpeechEl = document.getElementById('filterSpeech');
+const startOverlayEl = document.getElementById('startOverlay');
+const startGameBtn = document.getElementById('startGameBtn');
+const optStudentCountEl = document.getElementById('optStudentCount');
+const optTeacherCountEl = document.getElementById('optTeacherCount');
+const optRatioBullyEl = document.getElementById('optRatioBully');
+const optRatioHeroEl = document.getElementById('optRatioHero');
+const optRatioSwotEl = document.getElementById('optRatioSwot');
+const optRatioWeirdEl = document.getElementById('optRatioWeird');
+const optGameSpeedEl = document.getElementById('optGameSpeed');
+const optWeatherEl = document.getElementById('optWeather');
 document.getElementById('closeHelp').onclick = () => helpDialog.close();
 helpBtn.onclick = () => helpDialog.showModal();
 
@@ -100,7 +112,8 @@ const rooms = [
   // Reception-adjacent support spaces now sit in one contiguous block for easier wayfinding.
   { name: 'Toilets', x: 34, y: 66, w: 20, h: 10, floor: 'ground', type: 'hall' },
   { name: 'Janitor Room', x: 56, y: 66, w: 12, h: 10, floor: 'ground', type: 'hall' },
-  { name: 'Assembly Hall', x: 70, y: 66, w: 28, h: 10, floor: 'ground', type: 'hall' },
+  // Taller hall gives enough depth for full-school seating during assembly.
+  { name: 'Assembly Hall', x: 70, y: 60, w: 28, h: 16, floor: 'ground', type: 'hall' },
   // Dining hall sits beside assembly for fast lunchtime flow.
   { name: 'Dining Hall', x: 100, y: 66, w: 24, h: 10, floor: 'ground', type: 'hall' },
   { name: 'Geography', x: 8, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
@@ -203,7 +216,7 @@ const blackboards = [
   { room: 'Geography', x: 18, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
   { room: 'Art Room', x: 46, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
   { room: 'History', x: 74, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
-  { room: 'Assembly Hall', x: 91, y: 69, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
+  { room: 'Assembly Hall', x: 84, y: 63, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
   { room: 'Headmaster Office', x: 164, y: 40, text: 'DISCIPLINE', revealChars: 10, revealSpeed: 36, lastSfxAt: 0 },
 ];
 
@@ -401,6 +414,20 @@ function buildScheduleForDay(dayCount = 1) {
 
 let schedule = buildScheduleForDay(1);
 const TARGET_DAY_REAL_SECONDS = 15 * 60;
+const DEFAULT_GAME_SPEED_MULTIPLIER = 1;
+const ROLE_VISUALS = {
+  bully: '#ff5f88',
+  hero: '#ffd58e',
+  swot: '#8effd3',
+  weird: '#c58eff',
+};
+// NPC stamina tuning:
+// - movement drain is 4x slower than the previous build so students do not crash before lunch.
+// - a gentle day-fatigue baseline still brings most pupils to ~30 energy by home time.
+const NPC_BASE_DRAIN_PER_SECOND = 0.0475;
+const NPC_RUNNING_EXTRA_DRAIN_PER_SECOND = 0.145;
+const NPC_LUNCH_RECOVER_PER_SECOND = 0.16;
+const NPC_END_OF_DAY_ENERGY_TARGET = 30;
 const TOTAL_DAY_GAME_MINUTES = schedule.reduce((sum, period) => sum + period.mins, 0);
 
 // Period helpers keep schedule checks readable when timetable labels change.
@@ -920,7 +947,8 @@ const TARGET_ATTENDANCE_PERCENT = 95;
 const game = {
   timeMinutes: 8 * 60 + 20,
   // Minutes advanced per real-time second so the full school day lasts ~15 real minutes.
-  timeScale: TOTAL_DAY_GAME_MINUTES / TARGET_DAY_REAL_SECONDS,
+  timeScale: (TOTAL_DAY_GAME_MINUTES / TARGET_DAY_REAL_SECONDS) * DEFAULT_GAME_SPEED_MULTIPLIER,
+  speedMultiplier: DEFAULT_GAME_SPEED_MULTIPLIER,
   periodIndex: 0,
   periodElapsed: 0,
   periodHoldMinutes: 0,
@@ -934,6 +962,8 @@ const game = {
   pellets: [],
   keys: {},
   announcements: [],
+  eventLog: [],
+  eventFilters: { action: true, speech: true },
   rng: Math.random,
   quizActive: null,
   lastLateTick: 0,
@@ -961,9 +991,13 @@ const game = {
   dutyTeacherName: null,
   dutyPatrolIndex: -1,
   lastDutyPatrolAt: 0,
+  assemblyNextSpeechAt: 0,
+  assemblyHymnAt: 0,
+  assemblyUsedThoughts: new Set(),
   // Dinner lady lunchtime behaviour state for field supervision + interventions.
   dinnerLadyLastWhistleAt: 0,
   weather: 'sunny',
+  preferredWeather: 'auto',
   weatherWeek: 1,
   weatherFx: [],
   // Daily dialogue memory prevents repeated barks from the same NPC in one day.
@@ -1447,6 +1481,76 @@ function seedSwotGameTraders() {
   }
 }
 
+function allNonPlayerStudents() {
+  return game.entities.filter((entity) => entity !== player && STUDENT_ROLES.has(entity.role));
+}
+
+function applyTeacherCount(desiredCount) {
+  // Always keep the headmaster; trim or keep other teachers by current order for predictable setup.
+  const teachers = game.entities.filter((entity) => entity.role === 'teacher');
+  const clamped = Math.max(1, Math.min(teachers.length, Math.round(desiredCount || teachers.length)));
+  const keepNames = new Set(teachers.slice(0, clamped).map((teacher) => teacher.name));
+  game.entities = game.entities.filter((entity) => entity.role !== 'teacher' || keepNames.has(entity.name));
+}
+
+function applyStudentMix(studentCount, ratios) {
+  const students = allNonPlayerStudents();
+  const maxCount = students.length;
+  const desired = Math.max(8, Math.min(maxCount, Math.round(studentCount || students.length)));
+  const activeStudents = students.slice(0, desired);
+  const inactiveNames = new Set(students.slice(desired).map((entity) => entity.name));
+  game.entities = game.entities.filter((entity) => !inactiveNames.has(entity.name));
+
+  const weighted = [
+    { role: 'bully', weight: Math.max(0, Number(ratios.bully) || 0) },
+    { role: 'hero', weight: Math.max(0, Number(ratios.hero) || 0) },
+    { role: 'swot', weight: Math.max(0, Number(ratios.swot) || 0) },
+    { role: 'weird', weight: Math.max(0, Number(ratios.weird) || 0) },
+  ];
+  const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0) || 1;
+  const roleBag = [];
+  for (const entry of weighted) {
+    const slots = Math.round((entry.weight / totalWeight) * desired);
+    for (let i = 0; i < slots; i += 1) roleBag.push(entry.role);
+  }
+  while (roleBag.length < desired) roleBag.push('hero');
+
+  activeStudents.forEach((student, index) => {
+    const role = roleBag[index] || 'hero';
+    student.role = role;
+    student.color = ROLE_VISUALS[role] || student.color;
+    student.personality = { ...(personalities[role] || personalities.hero) };
+  });
+}
+
+function applyStartupOptions() {
+  const desiredStudents = Number(optStudentCountEl?.value || 30);
+  const desiredTeachers = Number(optTeacherCountEl?.value || 9);
+  const speedMultiplier = Math.max(0.5, Math.min(2, Number(optGameSpeedEl?.value || 1)));
+  const weatherSetting = optWeatherEl?.value || 'auto';
+
+  applyTeacherCount(desiredTeachers);
+  applyStudentMix(desiredStudents, {
+    bully: Number(optRatioBullyEl?.value || 25),
+    hero: Number(optRatioHeroEl?.value || 25),
+    swot: Number(optRatioSwotEl?.value || 25),
+    weird: Number(optRatioWeirdEl?.value || 25),
+  });
+
+  game.speedMultiplier = speedMultiplier;
+  game.timeScale = (TOTAL_DAY_GAME_MINUTES / TARGET_DAY_REAL_SECONDS) * game.speedMultiplier;
+  game.preferredWeather = weatherSetting;
+  if (weatherSetting !== 'auto' && weatherModes[weatherSetting]) {
+    game.weather = weatherSetting;
+  }
+
+  // Startup population changes alter seating demand; rebuild cached layouts.
+  roomSeatCache.clear();
+  createLockerPlanForStudents(game.entities);
+  seedSwotGameTraders();
+  assignDailyDutyTeacher();
+}
+
 createLockerPlanForStudents(game.entities);
 seedSwotGameTraders();
 
@@ -1527,27 +1631,52 @@ function roomCenter(name) {
 }
 
 function gateQueuePosition(entity) {
-  const gates = roomByName('School Gates');
-  // Spread pupils into lanes near the gate so they do not pile on one pixel.
-  const lane = entity.seatIndex % 7;
-  const row = Math.floor(entity.seatIndex / 7) % 3;
+  const field = roomByName('P.E. Field');
+  // Start-of-day student columns (area 2 from the user's marked screenshot).
+  const lane = entity.seatIndex % 5;
+  const row = Math.floor(entity.seatIndex / 5) % 14;
   return {
-    x: gates.x + 2 + lane * 2.05,
-    y: gates.y + 3 + row * 1.9,
+    x: field.x + field.w - 18 + lane * 2.2,
+    y: field.y + 3 + row * 1.55,
   };
 }
 
 function teacherGateLinePosition(teacherIndex) {
   const field = roomByName('P.E. Field');
-  // Keep teachers inside playable space with a compact grid on the field edge.
-  // This avoids overflow beyond School Gates when staff count increases.
-  const cols = 4;
+  // Start-of-day teacher area (area 1 from screenshot) sits left of student columns.
+  const cols = 3;
   const col = teacherIndex % cols;
   const row = Math.floor(teacherIndex / cols);
   return {
-    x: field.x + 4 + col * 2.8,
-    y: field.y + 3 + row * 1.9,
+    x: field.x + 12 + col * 2.8,
+    y: field.y + 4 + row * 2,
   };
+}
+
+function isAssemblyPeriod(period = schedule[game.periodIndex]) {
+  return period?.period === 'Assembly';
+}
+
+function assemblyHeadmasterSpot() {
+  const hall = roomByName('Assembly Hall');
+  return { x: hall.x + (hall.w / 2), y: hall.y + 3.5 };
+}
+
+function assemblyTeacherLineSpot(lineIndex, totalTeachers = 1) {
+  const headmaster = assemblyHeadmasterSpot();
+  const spread = Math.max(1, totalTeachers - 1);
+  const xOffset = (lineIndex - ((spread - 1) / 2)) * 2.15;
+  // Behind headmaster = slightly closer to hall's top wall.
+  return { x: headmaster.x + xOffset, y: headmaster.y - 1.45 };
+}
+
+function randomHeadmasterAssemblyThought() {
+  // Procedural generator yields 1000+ quirky combinations without hardcoding giant arrays.
+  const openers = ['Thought for the day', 'Morning mystery', 'Assembly alert', 'Brain sparkle', 'Philosophy detour'];
+  const subjects = ['left socks', 'teacups', 'gravity', 'homework dragons', 'corridor echoes', 'cheese sandwiches', 'invisible llamas', 'time-travelling pencils', 'detention clocks', 'chalk dust'];
+  const actions = ['predict your future', 'whisper in Latin', 'demand applause', 'solve maths', 'start a conga line', 'argue with pigeons', 'judge handwriting', 'invent volcanoes', 'challenge the moon', 'open secret portals'];
+  const outcomes = ['so stay curious', 'therefore stand tall', 'which is why we queue politely', 'and that, children, is science', 'so sing louder than your doubts', 'hence no running indoors', 'thus knowledge wins'];
+  return `🧠 ${openers[Math.floor(game.rng() * openers.length)]}: if ${subjects[Math.floor(game.rng() * subjects.length)]} can ${actions[Math.floor(game.rng() * actions.length)]}, ${outcomes[Math.floor(game.rng() * outcomes.length)]}.`;
 }
 
 function hasArrivedForCurrentPeriod(entity, currentPeriod = schedule[game.periodIndex]) {
@@ -1650,6 +1779,7 @@ function entityFloor(entity) {
 }
 
 function updateFloorStatus() {
+  if (!floorStatusEl) return;
   const meta = floorMeta[entityFloor(player)] || floorMeta.ground;
   const toiletState = game.toiletsBlocked ? '⛔ Blocked/Flooded' : '✅ Open';
   floorStatusEl.textContent = `🧭 Floor: ${meta.label} (${meta.color}) | 🚽 Dirt: ${Math.round(game.toiletDirt)}% | ${toiletState}`;
@@ -1674,6 +1804,11 @@ function updateWeatherHud() {
 }
 
 function pickWeeklyWeather() {
+  if (game.preferredWeather && game.preferredWeather !== 'auto' && weatherModes[game.preferredWeather]) {
+    game.weather = game.preferredWeather;
+    updateWeatherHud()
+    return;
+  }
   const week = Math.floor((game.dayCount - 1) / 7) + 1;
   if (game.weatherWeek === week) return;
   game.weatherWeek = week;
@@ -2081,8 +2216,39 @@ function tryUseStairs(entity, desiredFloor = null, options = {}) {
 
 function getRoomSeatLayout(roomName) {
   const room = roomByName(roomName);
-  if (!room || room.type !== 'classroom') return null;
+  const supportsSeating = room && (room.type === 'classroom' || roomName === 'Assembly Hall');
+  if (!supportsSeating) return null;
   if (roomSeatCache.has(roomName)) return roomSeatCache.get(roomName);
+
+  if (roomName === 'Assembly Hall') {
+    const studentCount = game.entities.filter((entity) => isStudentCharacter(entity)).length;
+    const cols = 10;
+    const rows = Math.max(4, Math.ceil(studentCount / cols));
+    const seats = [];
+    const seatMinX = room.x + 2.1;
+    const seatMaxX = room.x + room.w - 2.1;
+    const seatMinY = room.y + 5.2;
+    const seatMaxY = room.y + room.h - 1.4;
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 0; col < cols; col += 1) {
+        const x = seatMinX + (col / Math.max(1, cols - 1)) * (seatMaxX - seatMinX);
+        const y = seatMinY + (row / Math.max(1, rows - 1)) * (seatMaxY - seatMinY);
+        seats.push({ x, y, row, col });
+      }
+    }
+    const layout = {
+      room: roomName,
+      cols,
+      rows,
+      seats,
+      boardX: room.x + room.w / 2,
+      boardY: room.y + 2.1,
+      teacherDesk: { ...assemblyHeadmasterSpot() },
+      teacherSeat: { ...assemblyHeadmasterSpot() },
+    };
+    roomSeatCache.set(roomName, layout);
+    return layout;
+  }
 
   // Keep table count based on room geometry (existing layout), not student population.
   const usableW = Math.max(8, room.w - 8);
@@ -2167,7 +2333,7 @@ function getTeacherSeatPosition(roomName) {
 function resetToSchoolMorning() {
   // New morning: everyone starts outside school gates before being led inside.
   schedule = buildScheduleForDay(game.dayCount);
-  game.timeScale = schedule.reduce((sum, period) => sum + period.mins, 0) / TARGET_DAY_REAL_SECONDS;
+  game.timeScale = (schedule.reduce((sum, period) => sum + period.mins, 0) / TARGET_DAY_REAL_SECONDS) * game.speedMultiplier;
   game.timeMinutes = 8 * 60 + 20;
   game.periodElapsed = 0;
   game.registrationTaken = false;
@@ -2193,6 +2359,9 @@ function resetToSchoolMorning() {
   game.playerComputerPlayUntil = 0;
   game.playerComputerStationId = null;
   game.ericSeatReservedToday = true;
+  game.assemblyNextSpeechAt = 0;
+  game.assemblyHymnAt = 0;
+  game.assemblyUsedThoughts = new Set();
 
   if (game.dayCount > 1 && game.dayCount % TOILET_BLOCK_INTERVAL_DAYS === 0) {
     game.toiletsBlocked = true;
@@ -2210,8 +2379,9 @@ function resetToSchoolMorning() {
       entity.refusesEricUntilDay = 0;
     }
     if (entity === player) {
-      entity.x = gate.x + gate.w / 2;
-      entity.y = gate.y + gate.h - 4;
+      const playerLine = gateQueuePosition(player);
+      entity.x = playerLine.x;
+      entity.y = playerLine.y;
       entity.arrivedForDay = true;
       entity.arrivalJoinMins = 0;
     } else if (entity.role === 'teacher') {
@@ -2236,9 +2406,10 @@ function resetToSchoolMorning() {
       entity.arrivalJoinMins = Infinity;
       entity.target = { ...bay };
     } else {
-      // Students appear at random moments during the 30-second arrival phase.
-      entity.x = schoolExit.x + 2.2 + game.rng() * 2.2;
-      entity.y = gate.y + 4 + game.rng() * (gate.h - 6);
+      // Students phase into area-2 lineup columns with slight jitter to avoid stacking.
+      const queuePos = gateQueuePosition(entity);
+      entity.x = queuePos.x + (game.rng() - 0.5) * 0.9;
+      entity.y = queuePos.y + (game.rng() - 0.5) * 0.7;
       entity.arrivedForDay = false;
       entity.arrivalJoinMins = game.rng() * Math.max(0.01, schedule[0].mins * 0.92);
       entity.target = null;
@@ -2262,7 +2433,7 @@ function resetToSchoolMorning() {
   updateBladderHud();
   updateHygieneHud();
   updateWeatherHud();
-  announce('🌅 New school day: students gather at the gates ready for registration.');
+  announce('🌅 New school day: teachers line up in Area 1, students form columns in Area 2.');
   announce(`🗄️ Lockers ready: ${game.lockerCapacity} total, ${game.lockerCoverage}% of students issued keys.`, { force: true });
   if (game.dutyTeacherName) {
     announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
@@ -2414,6 +2585,11 @@ function say(entity, text, opts = {}) {
   if (!opts.force && !markDialogueUsed(entity, spokenText, 'speech')) return;
   entity.speech = { text: spokenText, kind: opts.kind || 'speech', until: now + (opts.durationMs || 2600) };
   entity.lastSpokeAt = now;
+
+  // Mirror audible speech into the side feed so players can review chatter they may miss on-screen.
+  const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 8;
+  const shouldLogSpeech = opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange);
+  if (shouldLogSpeech) pushFeedEvent(`${entity.name}: ${spokenText}`, 'speech');
 }
 
 function think(entity, text, durationMs = 3200) {
@@ -2602,6 +2778,22 @@ function drawRoundedBubble(x, y, lines, style) {
   });
 }
 
+function renderEventFeed() {
+  if (!eventsEl) return;
+  const visible = game.eventLog
+    .filter((entry) => game.eventFilters[entry.type] !== false)
+    .slice(0, 14);
+  eventsEl.innerHTML = visible
+    .map((entry) => `<div class="event-line ${entry.type}">[${entry.time}] ${entry.message}</div>`)
+    .join('');
+}
+
+function pushFeedEvent(message, type = 'action', timeMins = game.timeMinutes) {
+  game.eventLog.unshift({ message: String(message), type, time: formatTime(timeMins) });
+  game.eventLog = game.eventLog.slice(0, 64);
+  renderEventFeed();
+}
+
 function announce(message, options = {}) {
   const {
     source = null,
@@ -2618,7 +2810,7 @@ function announce(message, options = {}) {
 
   game.announcements.unshift(`[${formatTime(game.timeMinutes)}] ${message}`);
   game.announcements = game.announcements.slice(0, 12);
-  eventsEl.innerHTML = game.announcements.map((line) => `<div>${line}</div>`).join('');
+  pushFeedEvent(message, 'action');
 }
 
 function getSfxContext() {
@@ -2868,13 +3060,33 @@ function setPeriod(index) {
   });
 
   if (isStartDayPeriod(current)) {
-    announce('👨‍🏫 Teachers line the students up at the gates and lead them inside.');
+    announce('👨‍🏫 Teachers line up in Area 1 while students form columns in Area 2 on the field.');
   }
 
   game.bellRingingUntil = performance.now() + 3000;
   announce(`🔔 Bell! ${current.period} in ${current.room}`);
   if (current.period === 'Lunch Break') {
     announce('🍽️ Lunch service is open in the dining hall for 30 minutes.');
+  }
+  if (isAssemblyPeriod(current)) {
+    const headmaster = game.entities.find((entity) => entity.role === 'teacher' && entity.name === 'Mr Wacker');
+    game.assemblyNextSpeechAt = performance.now() + 1400;
+    game.assemblyHymnAt = performance.now() + 10000;
+    game.assemblyUsedThoughts = new Set();
+    announce('🎤 Assembly begins: all students to seats, teachers behind the Headmaster.');
+    if (headmaster) {
+      say(headmaster, '📢 Good morning! Sit smartly for today\'s thought and hymn.', { force: true, durationMs: 3600 });
+    }
+    // Keep the player aligned with assembly expectations too.
+    const playerSeat = getSeatPosition('Assembly Hall', player.seatIndex, player);
+    if (playerSeat) {
+      player.x = playerSeat.x;
+      player.y = playerSeat.y;
+      player.vx = 0;
+      player.vy = 0;
+      player.isSeated = true;
+      player.seatedRoom = 'Assembly Hall';
+    }
   }
   if (current.period === 'Home Time') {
     announce('🏠 Home time! Students may leave through the school gates.');
@@ -3878,10 +4090,19 @@ function chooseTarget(entity, currentPeriod) {
   const shouldAttend = game.rng() < p.diligence;
 
   if (isStartDayPeriod(currentPeriod)) {
+    if (entity.role === 'teacher') {
+      const teacherIndex = teachersInRoster().findIndex((teacher) => teacher.name === entity.name);
+      return teacherGateLinePosition(Math.max(0, teacherIndex));
+    }
     return gateQueuePosition(entity);
   }
 
   if (currentPeriod.mode === 'lesson') {
+    if (isAssemblyPeriod(currentPeriod)) {
+      if (entity.role === 'teacher' && entity.name === 'Mr Wacker') return assemblyHeadmasterSpot();
+      if (entity.role === 'teacher') return assemblyTeacherLineSpot(Math.max(0, teachersInRoster().findIndex((teacher) => teacher.name === entity.name) - 1), teachersInRoster().length);
+      return getSeatPosition('Assembly Hall', entity.seatIndex, entity) || roomCenter('Assembly Hall');
+    }
     if (entity.role === 'teacher') return teacherBoardSpot(currentPeriod.room);
     // Students always aim for seats during lessons so classes look orderly.
     return getSeatPosition(currentPeriod.room, entity.seatIndex, entity) || roomCenter(currentPeriod.room);
@@ -3976,6 +4197,15 @@ function updateAttendanceHud(currentPeriod = schedule[game.periodIndex]) {
   attendanceEl.title = `Present ${metrics.presentCount}/${metrics.total}, seated ${metrics.seatedCount}/${metrics.total}. Target attendance: ${TARGET_ATTENDANCE_PERCENT}%+.`;
 }
 
+function schoolDayProgress() {
+  // Convert the current timetable position into a stable 0..1 value for day-based systems.
+  const elapsedMinsBeforePeriod = schedule
+    .slice(0, game.periodIndex)
+    .reduce((sum, period) => sum + period.mins, 0);
+  const elapsedMins = Math.min(TOTAL_DAY_GAME_MINUTES, elapsedMinsBeforePeriod + game.periodElapsed);
+  return Math.max(0, Math.min(1, elapsedMins / TOTAL_DAY_GAME_MINUTES));
+}
+
 function updateNpcVitals(entity, dt, isRunning) {
   // `dt` is provided in milliseconds, so convert once to keep stamina math in
   // real-world seconds. Without this conversion NPCs lose almost all energy in
@@ -4003,9 +4233,9 @@ function updateNpcVitals(entity, dt, isRunning) {
   }
 
   // School-day tuned stamina: normal walking causes light drain so pupils tire by lunch.
-  const baseDrainPerSecond = 0.19;
-  const runningExtraDrainPerSecond = 0.58;
-  const recoverPerSecond = 0.16;
+  const baseDrainPerSecond = NPC_BASE_DRAIN_PER_SECOND;
+  const runningExtraDrainPerSecond = NPC_RUNNING_EXTRA_DRAIN_PER_SECOND;
+  const recoverPerSecond = NPC_LUNCH_RECOVER_PER_SECOND;
   const period = schedule[game.periodIndex];
   const isLunch = period.period === 'Lunch Break';
   const inFoodZone = entityRoom(entity) === 'P.E. Field' || entityRoom(entity) === 'Reception';
@@ -4018,6 +4248,13 @@ function updateNpcVitals(entity, dt, isRunning) {
 
   const drainRate = baseDrainPerSecond + (isRunning ? runningExtraDrainPerSecond : 0);
   entity.energy = Math.max(16, entity.energy - dtSeconds * drainRate);
+
+  // Keep end-of-day fatigue believable: students should usually finish around ~30%.
+  // This softly nudges energy toward a line from 100 at the start of day to 30 at home time.
+  const dayProgress = schoolDayProgress();
+  const baselineEnergy = 100 - ((100 - NPC_END_OF_DAY_ENERGY_TARGET) * dayProgress);
+  entity.energy = Math.max(16, Math.min(entity.energy, baselineEnergy));
+
   const emotionDrift = entity.mood === 'furious' || entity.mood === 'angry' ? -0.9 : 0.35;
   entity.emotion = Math.max(0, Math.min(100, entity.emotion + (emotionDrift * dtSeconds)));
 }
@@ -4130,6 +4367,30 @@ function updateAI(dt) {
   const teacherPresent = isTeacherPresentForPeriod(current);
   const assignedTeacherName = assignedTeacherForRoom(current.room);
   const now = performance.now();
+  const headmaster = game.entities.find((entity) => entity.role === 'teacher' && entity.name === 'Mr Wacker');
+
+  if (isAssemblyPeriod(current) && headmaster && now >= game.assemblyNextSpeechAt) {
+    let thought = randomHeadmasterAssemblyThought();
+    let safety = 0;
+    while (game.assemblyUsedThoughts.has(thought) && safety < 8) {
+      thought = randomHeadmasterAssemblyThought();
+      safety += 1;
+    }
+    game.assemblyUsedThoughts.add(thought);
+    say(headmaster, thought, { force: true, durationMs: 4200 });
+    announce(`🧑‍🏫 Headmaster thought: ${thought}`, { force: true });
+    game.assemblyNextSpeechAt = now + 8500;
+  }
+
+  if (isAssemblyPeriod(current) && headmaster && now >= game.assemblyHymnAt) {
+    say(headmaster, '🎵 Hymn time! Voices up, hearts steady, no mumbling in row three!', { force: true, durationMs: 4200 });
+    for (const singer of game.entities) {
+      if (!isStudentCharacter(singer) && singer.role !== 'teacher') continue;
+      if (entityRoom(singer) !== 'Assembly Hall') continue;
+      if (game.rng() < 0.28) say(singer, '🎶 La-la-laaa...', { durationMs: 2400, force: true });
+    }
+    game.assemblyHymnAt = now + 18000;
+  }
 
   if (supervised) {
     if (now > game.lessonQuietUntil) {
@@ -4194,7 +4455,11 @@ function updateAI(dt) {
 
     // Keep students in supervised, staffed classrooms instead of empty rooms.
     if (inLesson && isStudent) {
-      entity.lessonRoom = chooseLessonRoomForStudent(entity, current);
+      if (isAssemblyPeriod(current)) {
+        entity.lessonRoom = 'Assembly Hall';
+      } else {
+        entity.lessonRoom = chooseLessonRoomForStudent(entity, current);
+      }
       // Registration keeps Eric's desk free most mornings; if not free, player can choose how to react.
       const reserveEricSeat = isRegistrationPeriod(current) && game.ericSeatReservedToday;
       const assignedSeat = getSeatPosition(entity.lessonRoom, entity.seatIndex, entity);
@@ -4209,10 +4474,21 @@ function updateAI(dt) {
       }
     } else if (inLesson && entity.role === 'teacher') {
       entity.lessonRoom = null;
-      // Dedicated teacher handles the active lesson; others return to their own classrooms.
-      const isAssignedTeacher = !assignedTeacherName || entity.name === assignedTeacherName;
-      const destinationRoom = isAssignedTeacher ? current.room : teacherHomeRoom(entity.name);
-      entity.target = teacherBoardSpot(destinationRoom);
+      if (isAssemblyPeriod(current)) {
+        if (entity.name === 'Mr Wacker') {
+          entity.target = assemblyHeadmasterSpot();
+        } else {
+          const allTeachers = teachersInRoster();
+          const lineOrder = allTeachers.filter((teacher) => teacher.name !== 'Mr Wacker');
+          const lineIndex = Math.max(0, lineOrder.findIndex((teacher) => teacher.name === entity.name));
+          entity.target = assemblyTeacherLineSpot(lineIndex, allTeachers.length);
+        }
+      } else {
+        // Dedicated teacher handles the active lesson; others return to their own classrooms.
+        const isAssignedTeacher = !assignedTeacherName || entity.name === assignedTeacherName;
+        const destinationRoom = isAssignedTeacher ? current.room : teacherHomeRoom(entity.name);
+        entity.target = teacherBoardSpot(destinationRoom);
+      }
     } else if (entity.role === 'nurse' || entity.role === 'dinnerLady') {
       entity.lessonRoom = null;
       entity.target = chooseTarget(entity, current);
@@ -5211,41 +5487,10 @@ function drawWorld() {
     }
   }
 
-  // Floor orientation strip in a modern full-color treatment.
-  const floorStripX = 6;
-  const floorStripY = 6;
-  const floorStripW = 190;
-  const floorStripH = 52;
-  ctx.fillStyle = 'rgba(15,20,38,0.82)';
-  ctx.fillRect(floorStripX, floorStripY, floorStripW, floorStripH);
-  ctx.strokeStyle = PALETTE.mint;
-  ctx.strokeRect(floorStripX, floorStripY, floorStripW, floorStripH);
-  ctx.font = 'bold 11px monospace';
-  ctx.fillStyle = '#d8cbff';
-  ctx.fillText('UPPER FLOOR', 12, 20);
-  ctx.fillStyle = '#b9ddff';
-  ctx.fillText('MIDDLE FLOOR', 12, 36);
-  ctx.fillStyle = '#bdf6c4';
-  ctx.fillText('GROUND FLOOR', 12, 52);
-  ctx.fillStyle = '#ffd67a';
-  ctx.fillText('LOWER FLOOR', 110, 52);
-
-  // Draw a focus box around Eric's current floor so floor awareness is instant while moving.
-  const floorHighlightBoxes = {
-    upper: { x: 10, y: 10, w: 88, h: 14 },
-    middle: { x: 10, y: 26, w: 92, h: 14 },
-    ground: { x: 10, y: 42, w: 92, h: 14 },
-    lower: { x: 108, y: 42, w: 84, h: 14 },
-  };
-  const floorBox = floorHighlightBoxes[entityFloor(player)] || floorHighlightBoxes.ground;
-  ctx.strokeStyle = '#ffe27a';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(floorBox.x, floorBox.y, floorBox.w, floorBox.h);
-
-  // In-canvas analog clock sits beside the floor strip and matches the strip height.
-  const clockPanelX = floorStripX + floorStripW + 5;
-  const clockPanelY = floorStripY;
-  const clockPanelSize = floorStripH;
+  // Keep analog time in the play window and place weather beside it for quick at-a-glance info.
+  const clockPanelX = 6;
+  const clockPanelY = 6;
+  const clockPanelSize = 52;
   const clockCenterX = clockPanelX + (clockPanelSize / 2);
   const clockCenterY = clockPanelY + (clockPanelSize / 2);
   const totalMinutes = game.timeMinutes % (24 * 60);
@@ -5291,6 +5536,22 @@ function drawWorld() {
   ctx.beginPath();
   ctx.arc(clockCenterX, clockCenterY, 1.8, 0, Math.PI * 2);
   ctx.fill();
+
+  const weatherMeta = weatherModes[game.weather] || weatherModes.sunny;
+  const weatherPanelX = clockPanelX + clockPanelSize + 6;
+  const weatherPanelY = clockPanelY;
+  const weatherPanelW = 96;
+  const weatherPanelH = clockPanelSize;
+  fillDitherRect(weatherPanelX, weatherPanelY, weatherPanelW, weatherPanelH, '#1f2f4d', '#294165', 3);
+  ctx.strokeStyle = '#5f8fbe';
+  ctx.strokeRect(weatherPanelX, weatherPanelY, weatherPanelW, weatherPanelH);
+  ctx.fillStyle = '#d9ebff';
+  ctx.font = 'bold 8px monospace';
+  ctx.fillText('WEATHER', weatherPanelX + 8, weatherPanelY + 12);
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText(weatherMeta.icon, weatherPanelX + 8, weatherPanelY + 32);
+  ctx.font = 'bold 9px monospace';
+  ctx.fillText(weatherMeta.label.toUpperCase(), weatherPanelX + 28, weatherPanelY + 32);
 
   // Vending machines and bins are rendered as interactable landmarks.
   for (const vm of vendingMachines) {
@@ -6374,6 +6635,19 @@ window.addEventListener('keyup', (event) => {
 
 pauseBtn.onclick = togglePause;
 
+if (filterActionsEl) {
+  filterActionsEl.addEventListener('change', () => {
+    game.eventFilters.action = filterActionsEl.checked;
+    renderEventFeed();
+  });
+}
+if (filterSpeechEl) {
+  filterSpeechEl.addEventListener('change', () => {
+    game.eventFilters.speech = filterSpeechEl.checked;
+    renderEventFeed();
+  });
+}
+
 toggleNamesBtn.onclick = () => {
   game.showNpcNames = !game.showNpcNames;
   updateNameToggleButton();
@@ -6387,20 +6661,27 @@ closeInteractionPanelBtn.onclick = () => {
   game.selectedInteractionTarget = null;
 };
 
-assignDailyDutyTeacher();
-announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
-if (game.dutyTeacherName) {
-  announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
+function startGameFromSplash() {
+  applyStartupOptions();
+  if (startOverlayEl) startOverlayEl.hidden = true;
+  assignDailyDutyTeacher();
+  announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
+  if (game.dutyTeacherName) {
+    announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
+  }
+  updateMission();
+  updateAutoStatus();
+  updateCharismaHud();
+  updateBladderHud();
+  updateHygieneHud();
+  updateWeatherHud();
+  updateTodo();
+  updateNameToggleButton();
+  renderEventFeed();
+  requestAnimationFrame(loop);
 }
-updateMission();
-updateAutoStatus();
-updateCharismaHud();
-updateBladderHud();
-updateHygieneHud();
-updateWeatherHud();
-updateTodo();
-updateNameToggleButton();
-requestAnimationFrame(loop);
+
+if (startGameBtn) startGameBtn.addEventListener('click', startGameFromSplash);
 
 // Lightweight debug hooks help automated validation without changing gameplay UI.
 window.__skoolDazeDebug = {
