@@ -50,6 +50,10 @@ const filterThoughtsEl = document.getElementById('filterThoughts');
 const filterWorldEl = document.getElementById('filterWorld');
 const startOverlayEl = document.getElementById('startOverlay');
 const startGameBtn = document.getElementById('startGameBtn');
+const startupLoadingEl = document.getElementById('startupLoading');
+const startupLoadingLabelEl = document.getElementById('startupLoadingLabel');
+const startupLoadingPctEl = document.getElementById('startupLoadingPct');
+const startupLoadingBarEl = document.getElementById('startupLoadingBar');
 const openSplashSettingsBtn = document.getElementById('openSplashSettings');
 const splashSettingsDialog = document.getElementById('splashSettingsDialog');
 const closeSplashSettingsBtn = document.getElementById('closeSplashSettings');
@@ -9917,35 +9921,78 @@ if (splashSettingsDialog) {
   });
 }
 
+
+function setStartupLoadingProgress(percent = 0, label = '⏳ Preparing school day…') {
+  const clamped = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+  if (startupLoadingEl) startupLoadingEl.hidden = false;
+  if (startupLoadingLabelEl) startupLoadingLabelEl.textContent = label;
+  if (startupLoadingPctEl) startupLoadingPctEl.textContent = `${clamped}%`;
+  if (startupLoadingBarEl) startupLoadingBarEl.style.width = `${clamped}%`;
+  const track = startupLoadingBarEl?.parentElement;
+  if (track) track.setAttribute('aria-valuenow', String(clamped));
+}
+
+function hideStartupLoadingProgress() {
+  if (startupLoadingEl) startupLoadingEl.hidden = true;
+  if (startupLoadingBarEl) startupLoadingBarEl.style.width = '0%';
+  if (startupLoadingPctEl) startupLoadingPctEl.textContent = '0%';
+  if (startupLoadingLabelEl) startupLoadingLabelEl.textContent = '⏳ Preparing school day…';
+}
+
 async function startGameFromSplash() {
-  persistSplashSettings();
-  applyStartupOptions();
-  if (llmModeEnabled()) {
-    await preloadLlmWorldSetup();
-    initialiseFullRelationshipMesh();
-    initialiseNpcRelationships();
+  if (startGameBtn) {
+    startGameBtn.disabled = true;
+    startGameBtn.textContent = '⏳ Starting…';
   }
-  if (splashSettingsDialog?.open) splashSettingsDialog.close();
-  if (startOverlayEl) startOverlayEl.hidden = true;
-  assignDailyDutyTeacher();
-  announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
-  if (llmModeEnabled()) {
-    primeLlmSessionContext();
-    announce(`🤖 LLM mode active via ${llmProviderLabel()}. live responses enabled (no response reuse).`, { force: true, feedType: 'world' });
+  // Show feedback immediately so players see startup progress before any LLM preload work begins.
+  setStartupLoadingProgress(4, '🧰 Applying startup settings…');
+  await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+
+  try {
+    persistSplashSettings();
+    applyStartupOptions();
+    setStartupLoadingProgress(22, '🏫 School setup complete. Checking AI mode…');
+
+    if (llmModeEnabled()) {
+      setStartupLoadingProgress(36, '🤖 Warming up AI world setup…');
+      await preloadLlmWorldSetup();
+      setStartupLoadingProgress(82, '🤝 Building social links…');
+      initialiseFullRelationshipMesh();
+      initialiseNpcRelationships();
+    } else {
+      setStartupLoadingProgress(82, '🧠 AI off. Skipping model preload.');
+    }
+
+    setStartupLoadingProgress(94, '✅ Finalising UI and bell schedule…');
+    if (splashSettingsDialog?.open) splashSettingsDialog.close();
+    if (startOverlayEl) startOverlayEl.hidden = true;
+    assignDailyDutyTeacher();
+    announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
+    if (llmModeEnabled()) {
+      primeLlmSessionContext();
+      announce(`🤖 LLM mode active via ${llmProviderLabel()}. live responses enabled (no response reuse).`, { force: true, feedType: 'world' });
+    }
+    if (game.dutyTeacherName) {
+      announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
+    }
+    updateMission();
+    updateAutoStatus();
+    updateCharismaHud();
+    updateBladderHud();
+    updateHygieneHud();
+    updateWeatherHud();
+    updateTodo();
+    updateNameToggleButton();
+    renderEventFeed();
+    setStartupLoadingProgress(100, '🚪 School day ready. Opening campus…');
+    requestAnimationFrame(loop);
+  } finally {
+    hideStartupLoadingProgress();
+    if (startGameBtn) {
+      startGameBtn.disabled = false;
+      startGameBtn.textContent = '▶️ Start school day';
+    }
   }
-  if (game.dutyTeacherName) {
-    announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
-  }
-  updateMission();
-  updateAutoStatus();
-  updateCharismaHud();
-  updateBladderHud();
-  updateHygieneHud();
-  updateWeatherHud();
-  updateTodo();
-  updateNameToggleButton();
-  renderEventFeed();
-  requestAnimationFrame(loop);
 }
 
 

@@ -130,6 +130,40 @@ body {
   backdrop-filter: blur(3px);
 }
 
+.startup-loading {
+  margin-top: 0.5rem;
+  border: 1px solid #3f5f89;
+  border-radius: 10px;
+  background: #0d2038;
+  padding: 0.5rem 0.6rem;
+}
+
+.startup-loading-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  font-size: 0.78rem;
+  color: #d8ecff;
+}
+
+.startup-loading-track {
+  margin-top: 0.35rem;
+  width: 100%;
+  height: 0.56rem;
+  border-radius: 999px;
+  border: 1px solid #547fb1;
+  background: #0a1526;
+  overflow: hidden;
+}
+
+.startup-loading-bar {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, #57a4ff, #95d7ff);
+  transition: width 180ms ease-out;
+}
+
 .settings-footer-actions {
   margin-top: 0.55rem;
 }

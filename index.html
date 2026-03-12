@@ -17,6 +17,15 @@
         <button id="openSplashSettings" class="secondary-btn splash-settings-btn" type="button" title="Open startup settings window">⚙️ Open Settings</button>
         <button id="startGameBtn" class="start-btn" type="button" title="Start the school day with current settings">▶️ Start school day</button>
       </div>
+      <div id="startupLoading" class="startup-loading" hidden aria-live="polite" aria-label="Startup loading progress">
+        <div class="startup-loading-head">
+          <span id="startupLoadingLabel">⏳ Preparing school day…</span>
+          <span id="startupLoadingPct">0%</span>
+        </div>
+        <div class="startup-loading-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Game startup progress">
+          <div id="startupLoadingBar" class="startup-loading-bar"></div>
+        </div>
+      </div>
       <p class="todo-help">💡 Tip: percentages are normalized automatically if they do not add up to 100.</p>
 
       <dialog id="splashSettingsDialog" class="splash-settings-dialog" aria-labelledby="splashSettingsTitle">
