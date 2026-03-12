@@ -688,8 +688,8 @@ const personalities = {
 };
 
 // Dialogue pacing keeps chatter readable and prevents instant back-to-back spam.
-const MIN_DIALOGUE_INTERVAL_MS = 5600;
-const CLASSROOM_DIALOGUE_INTERVAL_MS = 9400;
+const MIN_DIALOGUE_INTERVAL_MS = 7600;
+const CLASSROOM_DIALOGUE_INTERVAL_MS = 13200;
 const INTERACTION_COOLDOWN_HOURS = 3;
 
 // Everyday school items can move through student pockets via trading and bartering.
@@ -1296,7 +1296,12 @@ function refreshCliquesFromBonds() {
 function updateEmergentSocialLife(now, currentPeriod) {
   if (now - (game.lastSocialTickAt || 0) < 2400) return;
   game.lastSocialTickAt = now;
-  const roaming = game.entities.filter((entity) => isStudentCharacter(entity) && entity.role !== 'player' && entity.knockedUntil < now);
+  const roaming = game.entities.filter((entity) => (
+    isStudentCharacter(entity)
+    && entity.role !== 'player'
+    && entity.knockedUntil < now
+    && isEntityVisibleToPlayer(entity)
+  ));
   let processed = 0;
   for (const entity of roaming) {
     if (processed >= 5) break;
@@ -2029,7 +2034,9 @@ function primeLlmSessionContext() {
 function warmupLlmCache() {
   if (!llmModeEnabled()) return;
   primeLlmSessionContext();
-  const sampleEntities = game.entities.filter((entity) => entity.role !== 'player').slice(0, 8);
+  const sampleEntities = game.entities
+    .filter((entity) => entity.role !== 'player' && isEntityVisibleToPlayer(entity))
+    .slice(0, 4);
   sampleEntities.forEach((entity) => {
     ensureDialogueSetup(entity);
     queueLlmText({
@@ -3752,6 +3759,16 @@ function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+
+function isEntityVisibleToPlayer(entity, { margin = 1.5 } = {}) {
+  if (!entity || entity === player) return true;
+  // NPC chatter is only simulated for visible same-room actors to keep LLM queue pressure low.
+  if (entityRoom(entity) !== entityRoom(player)) return false;
+  const withinX = entity.x >= (CAMERA.x - margin) && entity.x <= (CAMERA.x + CAMERA.w + margin);
+  const withinY = entity.y >= (CAMERA.y - margin) && entity.y <= (CAMERA.y + CAMERA.h + margin);
+  return withinX && withinY;
+}
+
 function canPlayerHearSpeaker(source, range) {
   if (!source) return true;
   const sameRoom = entityRoom(source) === entityRoom(player);
@@ -3771,6 +3788,8 @@ function canUseDialogue(entity, now, channel = 'speech') {
   if (channel === 'speech' && entity?.name !== 'Mr Wacker' && isHeadmasterAddressActive(now) && entityRoom(entity) === 'Assembly Hall') {
     return false;
   }
+  // Off-screen or out-of-room NPCs stay silent and follow routines to avoid queue saturation.
+  if (entity?.role !== 'player' && (channel === 'speech' || channel === 'thought') && !isEntityVisibleToPlayer(entity)) return false;
   const lastAt = channel === 'thought' ? (entity.lastThoughtAt || 0) : (entity.lastSpokeAt || 0);
   const inClassroom = channel === 'speech' && isSupervisedPeriod(schedule[game.periodIndex]) && entityRoom(entity) === schedule[game.periodIndex].room;
   const minInterval = inClassroom ? CLASSROOM_DIALOGUE_INTERVAL_MS : MIN_DIALOGUE_INTERVAL_MS;
@@ -3891,6 +3910,8 @@ function ensureAddressedNameInSpeech(line, addresseeName) {
 function say(entity, text, opts = {}) {
   if (!entity || !text) return;
   const now = performance.now();
+  // Keep off-screen NPCs silent to reduce LLM queue pressure and maintain local readability.
+  if (entity.role !== 'player' && !isEntityVisibleToPlayer(entity) && !opts.allowOffscreenSpeech) return;
   if (!opts.force && !canUseDialogue(entity, now, 'speech')) return;
   // Some pupils are naturally quiet; they often skip optional chatter.
   const silenceBias = clampScore(55 - ((entity.traits?.friendly || 40) * 0.28) - ((entity.traits?.funny || 40) * 0.18) + ((entity.traits?.discipline || 40) * 0.08), 8, 70);
@@ -3935,6 +3956,7 @@ function say(entity, text, opts = {}) {
 function think(entity, text, durationMs = 3200, opts = {}) {
   if (!entity || !text) return;
   const now = performance.now();
+  if (entity.role !== 'player' && !isEntityVisibleToPlayer(entity) && !opts.allowOffscreenSpeech) return;
   if (!canUseDialogue(entity, now, 'thought')) return;
   const payload = {
     channel: 'thought',
@@ -6477,7 +6499,7 @@ function updateAI(dt) {
       : (inLesson ? (entity.lessonRoom || current.room) : current.room);
     const inAssignedClassroom = inLesson && isStudent && entityRoom(entity) === expectedRoomNow;
     const walkingToClass = inLesson && isStudent && !inAssignedClassroom;
-    if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home' || walkingToClass) && isStudent && game.rng() < 0.011) {
+    if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home' || walkingToClass) && isStudent && game.rng() < 0.0045) {
       ensureDialogueSetup(entity);
       const hallwayChatter = entity.dialogue.hallwayChatter || ['😆 Wait up, I am coming too!'];
       const line = pickFreshLine(entity, hallwayChatter, 'speech');
@@ -6501,7 +6523,7 @@ function updateAI(dt) {
     }
 
     // Teacher occasionally hushes the class, then students slowly get noisy again.
-    if (inLesson && entity.role === 'teacher' && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.lessonNoiseLevel > 0.38 && game.rng() < 0.003) {
+    if (inLesson && entity.role === 'teacher' && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.lessonNoiseLevel > 0.38 && game.rng() < 0.0013) {
       ensureDialogueSetup(entity);
       const quietCalls = [
         `🤨 ${entity.name}: posture check — settle down.`,
@@ -6514,7 +6536,7 @@ function updateAI(dt) {
     }
 
     // Witty teacher comeback when a student asks a silly question.
-    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < 0.00055) {
+    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < 0.00024) {
       const sillyQuestions = ['🙃 Sir, can we do homework in our dreams?', '😅 Miss, is zero afraid of minus numbers?', '🤔 If I eat my notes, do I absorb the lesson?', '🧪 If we mix maths and music, do we get algebra beats?', '📏 Can I measure effort with a ruler and hand that in?', '🛰️ If I answer in space-voice, is it still correct?', '🍟 Is lunch technically a science experiment?', '🎭 If I act confident, do I get confidence marks?', '🦆 Is a duck in uniform allowed in assembly?', '📚 If I highlight everything, does that count as revision?', '🧠 Can my future self come sit this test for me?', '⏰ Can we have a two-minute break every two minutes?'];
       say(entity, sillyQuestions[Math.floor(game.rng() * sillyQuestions.length)], { durationMs: 3600 });
       const classTeacher = game.entities.find((candidate) => (
@@ -6575,7 +6597,7 @@ function updateAI(dt) {
     }
 
     // Break-time social bubbles make playground time feel alive.
-    if (current.mode === 'break' && isStudent && (!dinnerLadyWatchingField || entityRoom(entity) !== 'Dining Hall') && game.rng() < 0.016) {
+    if (current.mode === 'break' && isStudent && (!dinnerLadyWatchingField || entityRoom(entity) !== 'Dining Hall') && game.rng() < 0.007) {
       ensureDialogueSetup(entity);
       const recent = randomHistorySnippet();
       if (recent && game.rng() < 0.52) {
@@ -6597,7 +6619,7 @@ function updateAI(dt) {
     }
 
     // Weather drives break-time choices and social reactions.
-    if (current.mode === 'break' && !isLunchtimePeriod(current) && isStudent && game.rng() < 0.011) {
+    if (current.mode === 'break' && !isLunchtimePeriod(current) && isStudent && game.rng() < 0.0045) {
       if (game.weather === 'rain') {
         entity.target = roomCenter('Assembly Hall');
         if (isOutside) think(entity, '🌧️ No thanks, staying inside today.');
