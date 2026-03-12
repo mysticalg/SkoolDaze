@@ -1119,6 +1119,188 @@ function contextualResponseFor(entity, peer = null) {
   return base;
 }
 
+
+
+function socialBondKey(aName, bName) {
+  return [String(aName || ''), String(bName || '')].sort().join('|');
+}
+
+function getSocialBond(a, b) {
+  if (!a || !b) return 0;
+  const key = socialBondKey(a.name, b.name);
+  return game.socialBonds[key] || 0;
+}
+
+function setSocialBond(a, b, delta) {
+  if (!a || !b || a === b) return 0;
+  const key = socialBondKey(a.name, b.name);
+  const next = clampScore((game.socialBonds[key] || 0) + delta, -100, 100);
+  game.socialBonds[key] = next;
+  return next;
+}
+
+function ensureSocialProfile(entity) {
+  if (!entity || !isStudentCharacter(entity) || entity.role === 'player') return;
+  if (entity.socialProfile) return;
+  const quirkPool = [
+    'collects gossip like trading cards',
+    'quotes films at awkward times',
+    'acts brave then panics quietly',
+    "takes notes on everyone's drama",
+    'always volunteers then regrets it',
+    'laughs before finishing the joke',
+    'starts tiny rumours for fun',
+    'tries to keep rival groups apart',
+  ];
+  entity.socialProfile = {
+    evolvingQuirks: [pickForEntity(entity, quirkPool, 9)],
+    socialStreak: 0,
+    cliqueId: '',
+    lastEvolvedAt: 0,
+  };
+}
+
+function tryEvolveQuirk(entity, now) {
+  ensureSocialProfile(entity);
+  if (!entity?.socialProfile) return;
+  if (now - (entity.socialProfile.lastEvolvedAt || 0) < 90000) return;
+  if (game.rng() >= 0.08) return;
+  const growthPool = [
+    'started mediating arguments',
+    'became obsessed with strategy games',
+    'turned into a corridor storyteller',
+    'joined the lunchtime prank crew',
+    'became weirdly protective of friends',
+    'keeps a secret list of IOUs',
+  ];
+  const trait = pickForEntity(entity, growthPool, game.dayCount + entity.socialProfile.socialStreak);
+  if (!entity.socialProfile.evolvingQuirks.includes(trait)) {
+    entity.socialProfile.evolvingQuirks.push(trait);
+    entity.socialProfile.evolvingQuirks = entity.socialProfile.evolvingQuirks.slice(-3);
+    entity.socialProfile.lastEvolvedAt = now;
+    announce(`🧬 ${entity.name} evolved socially: ${trait}.`, { force: true, feedType: 'world' });
+  }
+}
+
+function resolveLlmSocialDirective(actor, peer, fallbackIntent = 'ally') {
+  const payload = {
+    channel: 'social',
+    subject: roomSubjectName(entityRoom(actor)),
+    speaker: actor.name,
+    speakerRole: roleLabelForLlm(actor.role),
+    traitSummary: summarizeTraitBundle(actor.traits),
+    room: entityRoom(actor),
+    addresseeName: peer?.name || '',
+    addresseeRole: peer ? roleLabelForLlm(peer.role) : '',
+    fallback: `intent=${fallbackIntent}; keep it short`,
+  };
+  const key = llmCacheKey(payload);
+  if (!llmModeEnabled()) return null;
+  const cached = game.llm.cache.get(key);
+  if (!cached) {
+    queueLlmText(payload);
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(cached);
+    const allowed = new Set(['ally', 'tease', 'avoid', 'follow', 'defend']);
+    const intent = allowed.has(parsed.intent) ? parsed.intent : fallbackIntent;
+    const bondDelta = clampScore(Number(parsed.bondDelta || 0), -3, 3);
+    const line = sanitizeLlmLine(parsed.line || `${peer?.name || 'mate'}, stay sharp.`);
+    return { intent, bondDelta, line };
+  } catch (error) {
+    pushLlmDebug(`⚠️ Social directive parse failed for ${actor?.name || 'npc'}.`, 'warn');
+    return null;
+  }
+}
+
+function refreshCliquesFromBonds() {
+  const students = game.entities.filter((e) => isStudentCharacter(e) && e.role !== 'player');
+  const adjacency = new Map(students.map((s) => [s.name, []]));
+  for (let i = 0; i < students.length; i += 1) {
+    for (let j = i + 1; j < students.length; j += 1) {
+      const bond = getSocialBond(students[i], students[j]);
+      if (bond >= 38) {
+        adjacency.get(students[i].name).push(students[j]);
+        adjacency.get(students[j].name).push(students[i]);
+      }
+    }
+  }
+  const visited = new Set();
+  game.socialGroups = [];
+  for (const student of students) {
+    if (visited.has(student.name)) continue;
+    const queue = [student.name];
+    const members = [];
+    visited.add(student.name);
+    while (queue.length) {
+      const name = queue.shift();
+      members.push(name);
+      for (const peer of adjacency.get(name) || []) {
+        if (visited.has(peer.name)) continue;
+        visited.add(peer.name);
+        queue.push(peer.name);
+      }
+    }
+    if (members.length >= 3) {
+      const id = `group-${game.socialGroupCounter++}`;
+      game.socialGroups.push({ id, members, createdDay: game.dayCount });
+      members.forEach((name) => {
+        const entity = game.entities.find((candidate) => candidate.name === name);
+        ensureSocialProfile(entity);
+        if (entity?.socialProfile) entity.socialProfile.cliqueId = id;
+      });
+    }
+  }
+}
+
+function updateEmergentSocialLife(now, currentPeriod) {
+  if (now - (game.lastSocialTickAt || 0) < 2400) return;
+  game.lastSocialTickAt = now;
+  const roaming = game.entities.filter((entity) => isStudentCharacter(entity) && entity.role !== 'player' && entity.knockedUntil < now);
+  for (const entity of roaming) {
+    ensureSocialProfile(entity);
+    tryEvolveQuirk(entity, now);
+    const peer = roaming.find((candidate) => candidate !== entity && entityRoom(candidate) === entityRoom(entity) && distance(candidate, entity) < 2.9);
+    if (!peer) continue;
+    const warmth = ((entity.traits?.friendly || 50) - (peer.traits?.aggression || 50)) / 50;
+    const fallbackIntent = warmth >= 0 ? 'ally' : 'tease';
+    const directive = resolveLlmSocialDirective(entity, peer, fallbackIntent);
+    const intent = directive?.intent || fallbackIntent;
+    const baseDelta = intent === 'ally' ? 2 : intent === 'defend' ? 3 : intent === 'follow' ? 1 : intent === 'avoid' ? -1 : -2;
+    const delta = clampScore(baseDelta + (directive?.bondDelta || 0), -4, 4);
+    const bond = setSocialBond(entity, peer, delta);
+    entity.socialProfile.socialStreak = Math.max(0, (entity.socialProfile.socialStreak || 0) + (delta > 0 ? 1 : -1));
+
+    if (directive?.line && game.rng() < 0.38) {
+      say(entity, directive.line, { peer, durationMs: 3000 });
+    }
+
+    if (bond >= 70 && game.rng() < 0.14) {
+      think(entity, `🤝 ${peer.name} has my back today.`, 2500, { logToFeed: true });
+    } else if (bond <= -70 && game.rng() < 0.14) {
+      think(entity, `⚡ ${peer.name} is trouble. Keep distance.`, 2500, { logToFeed: true });
+    }
+  }
+
+  if (game.rng() < 0.18) refreshCliquesFromBonds();
+
+  if (game.socialGroups.length && game.rng() < 0.12) {
+    const spotlight = game.socialGroups[Math.floor(game.rng() * game.socialGroups.length)];
+    const room = currentPeriod?.room || 'School';
+    const leader = game.entities.find((entity) => entity.name === spotlight.members[0]);
+    const summary = resolveLlmText({
+      channel: 'announcement',
+      subject: roomSubjectName(room),
+      speaker: leader?.name || 'Narrator',
+      speakerRole: leader ? roleLabelForLlm(leader.role) : 'narrator',
+      traitSummary: leader ? summarizeTraitBundle(leader.traits) : 'neutral',
+      room,
+      fallback: `🧩 Social group active: ${spotlight.members.slice(0, 3).join(', ')} moving together.`,
+    });
+    pushFeedEvent(summary, 'world');
+  }
+}
 const JANITOR_IDLE_ROOM = 'Janitor Room';
 const LITTER_CLEANUP_DELAY_MS = 20000;
 const TOILET_DIRT_PER_USE = 4;
@@ -1528,15 +1710,23 @@ function buildLlmPrompt({
     ? 'Write a short first-person thought bubble. Keep it under 14 words.'
     : channel === 'quiz'
       ? 'Write ONE school class question with 4 choices and a correct answer as JSON.'
+      : channel === 'social'
+        ? 'Return ONLY JSON social directive: {"intent":"ally|tease|avoid|follow|defend","bondDelta":-3..3,"line":"short line"}.'
       : channel === 'announcement'
         ? 'Write a short school PA/news style line. Keep it under 14 words.'
         : 'Write a short in-world school dialogue line. Keep it under 14 words.';
 
-  if (channel === 'quiz') {
+  if (channel === 'quiz' || channel === 'social') {
     return [
-      'You are writing classroom quiz content for a playful British school game.',
-      'Respond ONLY as JSON: {"q":"...","choices":["A","B","C","D"],"answer":"..."}.',
-      'The answer must exactly match one of the choices. No markdown.',
+      channel === 'social'
+        ? 'You are coordinating NPC social behaviour for a playful British school simulation.'
+        : 'You are writing classroom quiz content for a playful British school game.',
+      channel === 'social'
+        ? 'Respond ONLY as JSON: {"intent":"ally|tease|avoid|follow|defend","bondDelta":-3..3,"line":"..."}.'
+        : 'Respond ONLY as JSON: {"q":"...","choices":["A","B","C","D"],"answer":"..."}.',
+      channel === 'social'
+        ? 'Keep line under 12 words and in-character. No markdown.'
+        : 'The answer must exactly match one of the choices. No markdown.',
       `Subject: ${subject}. Room: ${room}. Teacher context: ${speaker}.`,
       `Teacher role: ${speakerRole}. Traits snapshot: ${traitSummary}.`,
       `Fallback question for reference: ${fallback}`,
@@ -1872,6 +2062,10 @@ const game = {
   collectables: [],
   lockerCoverage: 0,
   lockerCapacity: 0,
+  socialBonds: {},
+  socialGroups: [],
+  socialGroupCounter: 1,
+  lastSocialTickAt: 0,
 };
 
 // Restore last-used AI provider settings (including saved remote auth token) on load.
@@ -2014,6 +2208,8 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     posture: null,
     dialogueProfile: null,
     dialogue: null,
+    // Social profile stores evolving quirks, clique membership, and momentum over time.
+    socialProfile: null,
     // Wrong-room excuse throttle keeps corridor chatter readable.
     lastWrongRoomExcuseAt: 0,
     // Facial animation timers keep eyes/mouth lively without expensive sprite swaps.
@@ -5793,6 +5989,8 @@ function updateAI(dt) {
 
   maybeStartClassQuestion(current, now);
   updateClassQuestionSystem(now);
+  // Emergent social simulation gives NPCs evolving bonds, rivalries, and group behaviour.
+  updateEmergentSocialLife(now, current);
 
   for (const entity of game.entities) {
     if (entity === player) continue;
@@ -7971,7 +8169,9 @@ function updateEntityTooltip(event) {
     const pocketItems = (hovered.inventory || []).slice(0, 3).join(', ');
     const moreItems = (hovered.inventory || []).length > 3 ? ` +${hovered.inventory.length - 3}` : '';
     const relationText = hovered.role === 'player' ? 'self' : relationshipLabel(hovered.relationships?.Eric || 0);
-    entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>📍 ${room} | 🤝 ${relationText}<br>⚡ Energy ${tooltipBar(hovered.energy, '#ffd166')}<br>🚻 Bladder ${tooltipBar(hovered.bladder, '#ff9f1c')}<br>🧼 Hygiene ${tooltipBar(hovered.hygiene || 0, '#72efdd')}<br>❤️ HP ${tooltipBar(hovered.hp, '#ef476f')}<br>🧠 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>💷 £${Math.round(hovered.money || 0)} | 🤝 Trade ${Math.round(hovered.traits?.trading || 0)} | 🗣️ Barter ${Math.round(hovered.traits?.barter || 0)}<br>📝 Notes: ${hovered.title || hovered.profile?.title || 'No public notes yet'}<br>🎒 ${pocketItems || 'nothing useful'}${moreItems}`;
+    const socialTag = hovered.socialProfile?.cliqueId ? ` | 🧑‍🤝‍🧑 ${hovered.socialProfile.cliqueId}` : '';
+    const quirkTag = hovered.socialProfile?.evolvingQuirks?.length ? hovered.socialProfile.evolvingQuirks.slice(-1)[0] : 'settling in';
+    entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>📍 ${room} | 🤝 ${relationText}${socialTag}<br>⚡ Energy ${tooltipBar(hovered.energy, '#ffd166')}<br>🚻 Bladder ${tooltipBar(hovered.bladder, '#ff9f1c')}<br>🧼 Hygiene ${tooltipBar(hovered.hygiene || 0, '#72efdd')}<br>❤️ HP ${tooltipBar(hovered.hp, '#ef476f')}<br>🧠 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>💷 £${Math.round(hovered.money || 0)} | 🤝 Trade ${Math.round(hovered.traits?.trading || 0)} | 🗣️ Barter ${Math.round(hovered.traits?.barter || 0)}<br>🧬 Social quirk: ${quirkTag}<br>📝 Notes: ${hovered.title || hovered.profile?.title || 'No public notes yet'}<br>🎒 ${pocketItems || 'nothing useful'}${moreItems}`;
     positionTooltip(pointer, 118, 260);
     entityTooltipEl.hidden = false;
     return;
