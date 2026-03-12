@@ -1978,7 +1978,7 @@ function buildLlmPrompt({
           : channel === 'trade'
             ? 'Respond ONLY as JSON: {"target":"name","give":"item","take":"item","reason":"..."}.'
             : channel === 'preload'
-              ? 'Respond ONLY as JSON: {"roles":{},"traits":{},"inventory":{},"names":{},"relationships":[]}. Keys in roles/traits/inventory/names are character names. names maps currentName->newName. Inventories may contain many (up to 200) brand-new school-appropriate items per character, including phones/camera usage.'
+              ? 'Respond ONLY as JSON: {"roles":{},"traits":{},"inventory":{},"names":{},"relationships":[]}. Keys in roles/traits/inventory/names are character names. names must include EVERY non-player student and teacher with mapping currentName->newName. Inventories may contain many (up to 200) brand-new school-appropriate items per character, including phones/camera usage.'
               : 'Respond ONLY as JSON: {"q":"...","choices":["A","B","C","D"],"answer":"..."}.',
       channel === 'hymn'
         ? 'Each field should be one short singable line (under 14 words). No markdown.'
@@ -2386,16 +2386,64 @@ function applyLlmWorldPreloadConfig(config = {}) {
   const inventoryMap = config.inventory || {};
   const nameMap = config.names || {};
 
+  // Normalize names for tolerant matching because models may alter casing/punctuation in keys.
+  const normalizeNameKey = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+  // Convert many likely LLM name payload shapes into a single entity->suggestedName lookup.
+  function buildNameSuggestionMap(originalNameByEntity) {
+    const suggestionByEntity = new Map();
+    const entityByOriginalName = new Map();
+    for (const entity of game.entities) {
+      entityByOriginalName.set(normalizeNameKey(originalNameByEntity.get(entity) || entity.name), entity);
+    }
+
+    // Shape A (ideal): names = { "Old Name": "New Name" }
+    if (nameMap && typeof nameMap === 'object' && !Array.isArray(nameMap)) {
+      for (const [current, suggested] of Object.entries(nameMap)) {
+        if (current === 'students' || current === 'teachers') continue;
+        const entity = entityByOriginalName.get(normalizeNameKey(current));
+        if (!entity) continue;
+        if (typeof suggested === 'string') suggestionByEntity.set(entity, suggested);
+      }
+
+      // Shape B (common drift): names.students / names.teachers arrays.
+      const teacherCandidates = Array.isArray(nameMap.teachers) ? nameMap.teachers : [];
+      const studentCandidates = Array.isArray(nameMap.students) ? nameMap.students : [];
+      if (teacherCandidates.length || studentCandidates.length) {
+        const unassignedTeachers = game.entities.filter((entity) => entity.role === 'teacher' && !suggestionByEntity.has(entity));
+        const unassignedStudents = game.entities.filter((entity) => STUDENT_ROLES.has(entity.role) && entity.role !== 'player' && !suggestionByEntity.has(entity));
+        unassignedTeachers.forEach((entity, index) => {
+          if (typeof teacherCandidates[index] === 'string') suggestionByEntity.set(entity, teacherCandidates[index]);
+        });
+        unassignedStudents.forEach((entity, index) => {
+          if (typeof studentCandidates[index] === 'string') suggestionByEntity.set(entity, studentCandidates[index]);
+        });
+      }
+    }
+
+    // Shape C (also common): names = [{ current:"Old", new:"New" }, ...]
+    if (Array.isArray(nameMap)) {
+      for (const row of nameMap) {
+        const current = row?.current || row?.from || row?.oldName;
+        const suggested = row?.new || row?.to || row?.name;
+        const entity = entityByOriginalName.get(normalizeNameKey(current));
+        if (entity && typeof suggested === 'string') suggestionByEntity.set(entity, suggested);
+      }
+    }
+
+    return suggestionByEntity;
+  }
+
   const originalNameByEntity = new Map();
   for (const entity of game.entities) originalNameByEntity.set(entity, entity.name);
 
   if (game.llm.npcNames) {
+    const suggestionByEntity = buildNameSuggestionMap(originalNameByEntity);
     // LLM may suggest duplicate/invalid names; sanitize and enforce uniqueness in one pass.
     const usedNames = new Set(game.entities.map((entity) => entity.role === 'player' ? entity.name : null).filter(Boolean));
     for (const entity of game.entities) {
       if (entity.role === 'player') continue;
-      const currentName = originalNameByEntity.get(entity) || entity.name;
-      const suggested = sanitizeLlmLine(nameMap[currentName], '').slice(0, 26);
+      const suggested = sanitizeLlmLine(suggestionByEntity.get(entity), '').slice(0, 26);
       if (!suggested) continue;
       let finalName = suggested;
       let suffix = 2;
