@@ -1423,11 +1423,15 @@ function gateQueuePosition(entity) {
 }
 
 function teacherGateLinePosition(teacherIndex) {
-  const gates = roomByName('School Gates');
-  // Teachers stand ready on the front line during arrival.
+  const field = roomByName('P.E. Field');
+  // Keep teachers inside playable space with a compact grid on the field edge.
+  // This avoids overflow beyond School Gates when staff count increases.
+  const cols = 4;
+  const col = teacherIndex % cols;
+  const row = Math.floor(teacherIndex / cols);
   return {
-    x: gates.x + 3 + teacherIndex * 2.8,
-    y: gates.y + 2,
+    x: field.x + 4 + col * 2.8,
+    y: field.y + 3 + row * 1.9,
   };
 }
 
@@ -1686,6 +1690,9 @@ function chooseAutoDestination() {
 }
 
 function roomAtPosition(pos) {
+  // AI routing can briefly clear or corrupt targets while tasks are swapped.
+  // Treat invalid coordinates as "no room" instead of crashing the game loop.
+  if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) return null;
   const eps = 0.12;
   return rooms.find((r) => (
     pos.x >= r.x + eps
