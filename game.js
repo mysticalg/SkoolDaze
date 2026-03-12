@@ -50,6 +50,9 @@ const filterThoughtsEl = document.getElementById('filterThoughts');
 const filterWorldEl = document.getElementById('filterWorld');
 const startOverlayEl = document.getElementById('startOverlay');
 const startGameBtn = document.getElementById('startGameBtn');
+const openSplashSettingsBtn = document.getElementById('openSplashSettings');
+const splashSettingsDialog = document.getElementById('splashSettingsDialog');
+const closeSplashSettingsBtn = document.getElementById('closeSplashSettings');
 const optStudentCountEl = document.getElementById('optStudentCount');
 const optTeacherCountEl = document.getElementById('optTeacherCount');
 const optRatioBullyEl = document.getElementById('optRatioBully');
@@ -58,10 +61,12 @@ const optRatioSwotEl = document.getElementById('optRatioSwot');
 const optRatioWeirdEl = document.getElementById('optRatioWeird');
 const optGameSpeedEl = document.getElementById('optGameSpeed');
 const optWeatherEl = document.getElementById('optWeather');
+const optNpcChatterDelayEl = document.getElementById('optNpcChatterDelay');
 const optLlmEnabledEl = document.getElementById('optLlmEnabled');
 const optLlmNsfwEl = document.getElementById('optLlmNsfw');
 const optLlmNoFallbackEl = document.getElementById('optLlmNoFallback');
 const optLlmSourceEl = document.getElementById('optLlmSource');
+const optLlmPrePromptEl = document.getElementById('optLlmPrePrompt');
 const optLlmModelEl = document.getElementById('optLlmModel');
 const optLlmLocalEndpointEl = document.getElementById('optLlmLocalEndpoint');
 const optLlmTimeoutEl = document.getElementById('optLlmTimeout');
@@ -1173,7 +1178,59 @@ function setSocialBond(a, b, delta) {
   const key = socialBondKey(a.name, b.name);
   const next = clampScore((game.socialBonds[key] || 0) + delta, -100, 100);
   game.socialBonds[key] = next;
+  a.relationships = a.relationships || {};
+  b.relationships = b.relationships || {};
+  a.relationships[b.name] = Math.round(next);
+  b.relationships[a.name] = Math.round(next);
   return next;
+}
+
+function topRelationshipSummary(entity, limit = 3) {
+  if (!entity) return 'none';
+  const ranked = Object.entries(entity.relationships || {})
+    .filter(([name]) => name && name !== entity.name)
+    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+    .slice(0, limit)
+    .map(([name, score]) => `${name}:${Math.round(score)}`);
+  return ranked.length ? ranked.join(', ') : 'none';
+}
+
+function strongestBondForEntity(entity) {
+  if (!entity) return null;
+  let best = null;
+  let bestScore = 0;
+  for (const candidate of game.entities) {
+    if (!candidate || candidate === entity) continue;
+    const score = getSocialBond(entity, candidate);
+    if (Math.abs(score) > Math.abs(bestScore)) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best ? { peer: best, score: bestScore } : null;
+}
+
+function initialiseFullRelationshipMesh() {
+  const cast = game.entities.filter((entity) => entity && entity.name);
+  for (let i = 0; i < cast.length; i += 1) {
+    const actor = cast[i];
+    actor.relationships = actor.relationships || {};
+    if (actor.role !== 'player' && typeof actor.relationships.Eric !== 'number') {
+      actor.relationships.Eric = 0;
+    }
+    for (let j = i + 1; j < cast.length; j += 1) {
+      const peer = cast[j];
+      const seeded = Math.round((((actor.traits?.friendly || 50) + (peer.traits?.friendly || 50)) / 4)
+        - (((actor.traits?.aggression || 50) + (peer.traits?.aggression || 50)) / 5)
+        + ((Math.random() * 24) - 12));
+      const key = socialBondKey(actor.name, peer.name);
+      if (typeof game.socialBonds[key] !== 'number') game.socialBonds[key] = clampScore(seeded, -100, 100);
+      const bond = game.socialBonds[key];
+      actor.relationships[peer.name] = Math.round(bond);
+      peer.relationships = peer.relationships || {};
+      peer.relationships[actor.name] = Math.round(bond);
+    }
+  }
 }
 
 function ensureSocialProfile(entity) {
@@ -1229,6 +1286,8 @@ function resolveLlmSocialDirective(actor, peer, fallbackIntent = 'ally') {
     speaker: actor.name,
     speakerRole: roleLabelForLlm(actor.role),
     traitSummary: summarizeTraitBundle(actor.traits),
+    socialSummary: `${actor.name} relationships: ${topRelationshipSummary(actor)}; ${peer?.name || 'peer'} reputation with Eric:${Math.round(peer?.ericReputation || 0)}`,
+    interestSummary: `${summarizeInterests(actor)} | ${summarizeInterests(peer)}`,
     room: entityRoom(actor),
     addresseeName: peer?.name || '',
     addresseeRole: peer ? roleLabelForLlm(peer.role) : '',
@@ -1418,6 +1477,13 @@ function summarizeForLlmDebug(text, maxLen = 120) {
   return `${cleaned.slice(0, maxLen - 1)}…`;
 }
 
+
+function llmActorLabel(payload = {}) {
+  const from = payload?.speaker || 'Unknown';
+  const to = payload?.addresseeName ? ` → ${payload.addresseeName}` : '';
+  return `${from}${to}`;
+}
+
 function renderLlmDebugLog() {
   if (!llmDebugLogEl) return;
   const visible = (game.llm.debugLog || []).slice(0, 90);
@@ -1474,6 +1540,12 @@ function effectiveLlmMaxInFlight() {
   return Math.max(LLM_MIN_INFLIGHT, Math.min(LLM_MAX_INFLIGHT_LIMIT, Number(game.llm.maxInFlight) || LLM_MAX_INFLIGHT));
 }
 
+
+function sanitizeLlmPrePrompt(value = '') {
+  // Keep user pre-prompt compact so requests stay fast and avoid queue spikes.
+  return sanitizeLlmLine(value, '').slice(0, 260);
+}
+
 function llmProviderLabel() {
   if (game.llm.source === 'remote') {
     return `${game.llm.remoteProvider}:${game.llm.remoteModel || 'default'}`;
@@ -1495,6 +1567,7 @@ function persistLlmSettings() {
       remoteToken: game.llm.remoteToken,
       nsfw: Boolean(game.llm.nsfw),
       noFallback: Boolean(game.llm.noFallback),
+      prePrompt: sanitizeLlmPrePrompt(game.llm.prePrompt),
     }));
   } catch (error) {
     // Storage can fail in private modes; gameplay should still continue.
@@ -1517,6 +1590,7 @@ function loadLlmSettings() {
     game.llm.remoteToken = sanitizeLlmLine(saved.remoteToken, '');
     game.llm.nsfw = Boolean(saved.nsfw);
     game.llm.noFallback = Boolean(saved.noFallback);
+    game.llm.prePrompt = sanitizeLlmPrePrompt(saved.prePrompt || '');
   } catch (error) {
     // Ignore malformed storage and keep defaults.
   }
@@ -1541,6 +1615,7 @@ function applyLlmUiState() {
   if (optLlmSourceEl) optLlmSourceEl.disabled = !enabled;
   if (optLlmNsfwEl) optLlmNsfwEl.disabled = !isLocal;
   if (optLlmNoFallbackEl) optLlmNoFallbackEl.disabled = !enabled;
+  if (optLlmPrePromptEl) optLlmPrePromptEl.disabled = !enabled;
   if (optLlmModelEl) optLlmModelEl.disabled = !isLocal || !game.llm.availableModels.length;
   if (optLlmLocalEndpointEl) optLlmLocalEndpointEl.disabled = !isLocal;
   if (optLlmTimeoutEl) optLlmTimeoutEl.disabled = !enabled;
@@ -1758,12 +1833,14 @@ function llmCacheKey({
   fallback = '',
   speakerRole = 'character',
   traitSummary = 'balanced',
+  socialSummary = '',
+  interestSummary = '',
   addresseeName = '',
   addresseeRole = '',
   conversationContext = '',
   conversationTurn = 0,
 }) {
-  return `${llmProviderLabel()}|${channel}|${subject}|${speaker}|${speakerRole}|${traitSummary}|${room}|${addresseeName}|${addresseeRole}|turn:${conversationTurn}|ctx:${String(conversationContext).toLowerCase().slice(0, 90)}|${String(fallback).toLowerCase().slice(0, 120)}`;
+  return `${llmProviderLabel()}|${channel}|${subject}|${speaker}|${speakerRole}|${traitSummary}|social:${String(socialSummary).toLowerCase().slice(0, 90)}|interests:${String(interestSummary).toLowerCase().slice(0, 70)}|${room}|${addresseeName}|${addresseeRole}|turn:${conversationTurn}|ctx:${String(conversationContext).toLowerCase().slice(0, 90)}|${String(fallback).toLowerCase().slice(0, 120)}`;
 }
 
 function summarizeTraitBundle(traits = {}) {
@@ -1772,6 +1849,15 @@ function summarizeTraitBundle(traits = {}) {
   return keys
     .map((key) => `${key}:${Math.round(Number(traits?.[key] || 0))}`)
     .join(', ');
+}
+
+
+function summarizeInterests(entity) {
+  const publicNotes = [];
+  if (entity?.profile?.prefers?.length) publicNotes.push(...entity.profile.prefers.slice(0, 2));
+  if (entity?.dialogueProfile?.preferredTopic) publicNotes.push(entity.dialogueProfile.preferredTopic);
+  if (entity?.socialProfile?.evolvingQuirks?.length) publicNotes.push(entity.socialProfile.evolvingQuirks[0]);
+  return publicNotes.filter(Boolean).slice(0, 3).join(', ') || 'school life';
 }
 
 function roleLabelForLlm(role = '') {
@@ -1791,6 +1877,8 @@ function buildLlmPrompt({
   traitSummary = 'balanced traits',
   addresseeName = '',
   addresseeRole = '',
+  socialSummary = '',
+  interestSummary = '',
   conversationContext = '',
   conversationTurn = 0,
   uncensored = false,
@@ -1803,22 +1891,34 @@ function buildLlmPrompt({
         ? 'Return ONLY JSON hymn content with verse+chorus and silly remix verse+chorus.'
       : channel === 'social'
         ? 'Return ONLY JSON social directive: {"intent":"ally|tease|avoid|follow|defend","bondDelta":-3..3,"line":"short line"}.'
+      : channel === 'trade'
+        ? 'Return ONLY JSON trade directive: {"target":"name","give":"item","take":"item","reason":"short reason"}.'
+      : channel === 'preload'
+        ? 'Return ONLY JSON world preload data for roles, traits, inventory, and social setup.'
       : channel === 'announcement'
         ? 'Write a short school PA/news style line. Keep it under 14 words.'
         : 'Write a short in-world school dialogue line. Keep it under 14 words.';
 
-  if (channel === 'quiz' || channel === 'social' || channel === 'hymn') {
+  if (channel === 'quiz' || channel === 'social' || channel === 'hymn' || channel === 'trade' || channel === 'preload') {
     return [
       channel === 'hymn'
         ? 'You are writing a short British school assembly hymn about Jesus for children.'
         : channel === 'social'
           ? 'You are coordinating NPC social behaviour for a playful British school simulation.'
-          : 'You are writing classroom quiz content for a playful British school game.',
+          : channel === 'trade'
+            ? 'You are selecting sensible NPC trading decisions for a school simulation.'
+            : channel === 'preload'
+              ? 'You are preloading a school simulation world with coherent personalities and social links.'
+              : 'You are writing classroom quiz content for a playful British school game.',
       channel === 'hymn'
         ? 'Respond ONLY as JSON: {"verse":"...","chorus":"...","sillyVerse":"...","sillyChorus":"..."}.'
         : channel === 'social'
           ? 'Respond ONLY as JSON: {"intent":"ally|tease|avoid|follow|defend","bondDelta":-3..3,"line":"..."}.'
-          : 'Respond ONLY as JSON: {"q":"...","choices":["A","B","C","D"],"answer":"..."}.',
+          : channel === 'trade'
+            ? 'Respond ONLY as JSON: {"target":"name","give":"item","take":"item","reason":"..."}.'
+            : channel === 'preload'
+              ? 'Respond ONLY as JSON: {"roles":{},"traits":{},"inventory":{},"relationships":[]}. Keys in roles/traits/inventory are character names.'
+              : 'Respond ONLY as JSON: {"q":"...","choices":["A","B","C","D"],"answer":"..."}.',
       channel === 'hymn'
         ? 'Each field should be one short singable line (under 14 words). No markdown.'
         : channel === 'social'
@@ -1826,6 +1926,9 @@ function buildLlmPrompt({
           : 'The answer must exactly match one of the choices. No markdown.',
       `Subject: ${subject}. Room: ${room}. Teacher context: ${speaker}.`,
       `Teacher role: ${speakerRole}. Traits snapshot: ${traitSummary}.`,
+      game.llm.prePrompt ? `Player pre-prompt: ${game.llm.prePrompt}` : null,
+      socialSummary ? `Reputation/relationships: ${socialSummary}` : null,
+      interestSummary ? `Common interests: ${interestSummary}` : null,
       addresseeName ? `Directed at: ${addresseeName} (${addresseeRole || 'character'}).` : null,
       conversationContext ? `Recent conversation: ${conversationContext}` : null,
       conversationTurn ? `Conversation turn: ${conversationTurn}` : null,
@@ -1852,6 +1955,7 @@ function buildLlmPrompt({
 
   return [
     primer,
+    game.llm.prePrompt ? `Player pre-prompt: ${game.llm.prePrompt}` : null,
     'You write concise text for a school simulation game.',
     'Pretend you are the exact character below speaking in first person voice.',
     styleGuide,
@@ -1859,6 +1963,8 @@ function buildLlmPrompt({
     safetyLine,
     `Speaker: ${speaker}. Role: ${speakerRole}. Traits: ${traitSummary}.`,
     addresseeName ? `Addressee: ${addresseeName}. Addressee role: ${addresseeRole || 'character'}.` : null,
+    socialSummary ? `Reputation/relationship context: ${socialSummary}` : null,
+    interestSummary ? `Shared interests and quirks: ${interestSummary}` : null,
     conversationContext ? `Recent conversation thread: ${conversationContext}` : null,
     conversationTurn ? `Conversation turn number: ${conversationTurn}` : null,
     addressingLine,
@@ -1868,7 +1974,7 @@ function buildLlmPrompt({
 }
 
 async function generateLocalOllamaText(payload) {
-  pushLlmDebug(`📤 Local request queued [${payload.channel}] model=${effectiveLocalModelName()} speaker=${payload.speaker}`);
+  pushLlmDebug(`📤 Local request queued [${payload.channel}] ${llmActorLabel(payload)} model=${effectiveLocalModelName()}`);
   const response = await fetchWithTimeout(`${game.llm.localEndpoint}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1885,13 +1991,13 @@ async function generateLocalOllamaText(payload) {
   }
   const data = await response.json();
   const output = sanitizeLlmLine(data?.response);
-  pushLlmDebug(`✅ Local response [${payload.channel}] ${summarizeForLlmDebug(output)}`);
+  pushLlmDebug(`✅ Local response [${payload.channel}] ${llmActorLabel(payload)} (cached, shown when used): ${summarizeForLlmDebug(output)}`);
   return output;
 }
 
 async function generateRemoteProviderText(payload) {
   const provider = game.llm.remoteProvider;
-  pushLlmDebug(`📤 Remote request queued [${payload.channel}] provider=${provider} model=${game.llm.remoteModel} speaker=${payload.speaker}`);
+  pushLlmDebug(`📤 Remote request queued [${payload.channel}] ${llmActorLabel(payload)} provider=${provider} model=${game.llm.remoteModel}`);
   const endpoint = provider === 'grok' ? `${GROK_API_BASE}/chat/completions` : `${OPENAI_API_BASE}/chat/completions`;
   const response = await fetchWithTimeout(endpoint, {
     method: 'POST',
@@ -1920,7 +2026,7 @@ async function generateRemoteProviderText(payload) {
   const data = await response.json();
   const text = data?.choices?.[0]?.message?.content;
   const output = sanitizeLlmLine(text);
-  pushLlmDebug(`✅ Remote response [${payload.channel}] ${summarizeForLlmDebug(output)}`);
+  pushLlmDebug(`✅ Remote response [${payload.channel}] ${llmActorLabel(payload)} (cached, shown when used): ${summarizeForLlmDebug(output)}`);
   return output;
 }
 
@@ -1934,7 +2040,7 @@ async function generateLlmText(payload) {
   } catch (error) {
     const msg = String(error?.message || '').toLowerCase();
     if (msg.includes('aborted') || msg.includes('timeout')) {
-      pushLlmDebug(`⏱️ LLM request timed out [${payload.channel}] after ${llmTimeoutForPayload(payload)}ms.`, 'warn');
+      pushLlmDebug(`⏱️ LLM request timed out [${payload.channel}] ${llmActorLabel(payload)} after ${llmTimeoutForPayload(payload)}ms.`, 'warn');
       return { text: null, reason: 'timeout' };
     }
     pushLlmDebug(`❌ LLM generation error: ${error?.message || 'unknown error'}`, 'error');
@@ -1980,11 +2086,11 @@ function queueLlmText(payload, options = {}) {
   generateLlmText(payload).then((result) => {
     if (result?.text) {
       game.llm.cache.set(key, result.text);
-      pushLlmDebug(`💾 Cached [${payload.channel}] key=${summarizeForLlmDebug(key, 64)}`);
+      pushLlmDebug(`💾 Cached [${payload.channel}] ${llmActorLabel(payload)} key=${summarizeForLlmDebug(key, 64)}`);
     } else if (result?.reason === 'timeout') {
       // Timeout already logged with channel-specific detail; avoid duplicate spam lines.
     } else if (result?.reason !== 'disabled') {
-      pushLlmDebug(`⚠️ Empty LLM output, fallback kept [${payload.channel}]`, 'warn');
+      pushLlmDebug(`⚠️ Empty LLM output [${payload.channel}] ${llmActorLabel(payload)}; fallback kept.`, 'warn');
     }
   }).finally(() => {
     game.llm.inFlight.delete(key);
@@ -2105,10 +2211,10 @@ function resolveLlmText(payload, options = {}) {
   if (!llmModeEnabled()) return fallback;
   const key = llmCacheKey(payload);
   if (game.llm.cache.has(key)) {
-    pushLlmDebug(`🎯 Cache hit [${payload.channel}] speaker=${payload.speaker}`);
+    pushLlmDebug(`🎯 Cache hit [${payload.channel}] ${llmActorLabel(payload)}.`);
     return game.llm.cache.get(key);
   }
-  if (!suppressMissLog) pushLlmDebug(`🪫 Cache miss [${payload.channel}] speaker=${payload.speaker}; ${allowFallback ? 'fallback used.' : 'queued for deferred delivery.'}`,'warn');
+  if (!suppressMissLog) pushLlmDebug(`🪫 Cache miss [${payload.channel}] ${llmActorLabel(payload)}; ${allowFallback ? 'fallback used immediately.' : 'waiting for cached LLM line.'}`,'warn');
   queueLlmText(payload);
   return allowFallback ? fallback : null;
 }
@@ -2197,6 +2303,86 @@ function warmupLlmCache() {
   });
 }
 
+
+async function requestLlmJson(payload) {
+  if (!llmModeEnabled()) return null;
+  const result = await generateLlmText(payload);
+  if (!result?.text) return null;
+  return parseJsonFromLlm(result.text);
+}
+
+function applyLlmWorldPreloadConfig(config = {}) {
+  if (!config || typeof config !== 'object') return;
+  const roleMap = config.roles || {};
+  const traitsMap = config.traits || {};
+  const inventoryMap = config.inventory || {};
+  const castNames = new Set(game.entities.map((entity) => entity.name));
+
+  for (const entity of game.entities) {
+    const llmRole = String(roleMap[entity.name] || '').toLowerCase();
+    if (STUDENT_ROLES.has(entity.role) && ['bully', 'hero', 'swot', 'weird'].includes(llmRole)) {
+      entity.role = llmRole;
+      entity.color = ROLE_VISUALS[llmRole] || entity.color;
+      entity.personality = { ...(personalities[llmRole] || personalities.hero) };
+    }
+
+    if (traitsMap[entity.name] && typeof traitsMap[entity.name] === 'object') {
+      entity.traits = buildTraitProfile(entity.role, traitsMap[entity.name]);
+    }
+
+    if (Array.isArray(inventoryMap[entity.name]) && inventoryMap[entity.name].length) {
+      entity.inventory = inventoryMap[entity.name].slice(0, 8).map((item) => sanitizeLlmLine(item, '')).filter(Boolean);
+    }
+  }
+
+  if (Array.isArray(config.relationships)) {
+    for (const row of config.relationships) {
+      const from = String(row?.from || '');
+      const to = String(row?.to || '');
+      const score = clampScore(Number(row?.score || 0), -100, 100);
+      if (!castNames.has(from) || !castNames.has(to) || from === to) continue;
+      const a = game.entities.find((entity) => entity.name === from);
+      const b = game.entities.find((entity) => entity.name === to);
+      if (!a || !b) continue;
+      const key = socialBondKey(a.name, b.name);
+      game.socialBonds[key] = score;
+      a.relationships = a.relationships || {};
+      b.relationships = b.relationships || {};
+      a.relationships[b.name] = Math.round(score);
+      b.relationships[a.name] = Math.round(score);
+    }
+  }
+}
+
+async function preloadLlmWorldSetup() {
+  if (!llmModeEnabled()) return;
+  if (game.llm.worldPreloadedForProvider === llmProviderLabel()) return;
+  const castSummary = game.entities
+    .slice(0, 60)
+    .map((entity) => `${entity.name}:${entity.role}`)
+    .join(', ');
+  const payload = {
+    channel: 'preload',
+    subject: 'World Setup',
+    speaker: 'Narrator',
+    speakerRole: 'narrator',
+    traitSummary: 'Generate coherent role archetypes, trait values, inventories and relationship scores.',
+    socialSummary: 'Set pairwise relationship scores in range -100..100.',
+    interestSummary: 'Include interests that influence dialogue and friendship choices.',
+    room: 'School',
+    fallback: `Cast roster: ${castSummary}`,
+  };
+  pushLlmDebug('🧩 Requesting LLM world preload for traits, roles, inventory and relationships.');
+  const parsed = await requestLlmJson(payload);
+  if (parsed) {
+    applyLlmWorldPreloadConfig(parsed);
+    game.llm.worldPreloadedForProvider = llmProviderLabel();
+    pushLlmDebug('✅ LLM world preload applied.');
+  } else {
+    pushLlmDebug('⚠️ LLM world preload unavailable; keeping deterministic setup.', 'warn');
+  }
+}
+
 const game = {
   timeMinutes: SCHOOL_DAY_START_MINUTES,
   // Minutes advanced per real-time second so the full school day lasts ~15 real minutes.
@@ -2210,6 +2396,9 @@ const game = {
   energy: 100,
   charisma: 50,
   missionComplete: false,
+  // Global NPC chatter throttle keeps social bubbles readable and prevents spam bursts.
+  npcChatterDelayMs: 1000,
+  lastNpcChatterAt: -Infinity,
   safeCombo: '',
   entities: [],
   pellets: [],
@@ -2231,10 +2420,12 @@ const game = {
     remoteToken: '',
     nsfw: false,
     noFallback: false,
+    prePrompt: '',
     cache: new Map(),
     inFlight: new Set(),
     debugLog: [],
     sessionPrimedForProvider: '',
+    worldPreloadedForProvider: '',
     backlog: [],
   },
   rng: Math.random,
@@ -2798,6 +2989,12 @@ function allNonPlayerStudents() {
 }
 
 
+
+function normalizedNpcChatterDelay(value) {
+  // Clamp chatter delay to keep simulation responsive while still user-configurable.
+  return Math.max(100, Math.min(10000, Number(value) || 1000));
+}
+
 function persistSplashSettings() {
   try {
     localStorage.setItem(SPLASH_STORAGE_KEY, JSON.stringify({
@@ -2809,6 +3006,7 @@ function persistSplashSettings() {
       ratioHero: Number(optRatioHeroEl?.value || 25),
       ratioSwot: Number(optRatioSwotEl?.value || 25),
       ratioWeird: Number(optRatioWeirdEl?.value || 25),
+      npcChatterDelay: normalizedNpcChatterDelay(optNpcChatterDelayEl?.value || 1000),
     }));
   } catch (error) {
     // Ignore storage failures so startup still works in private browsing contexts.
@@ -2828,6 +3026,7 @@ function loadSplashSettings() {
     if (optRatioHeroEl && Number.isFinite(Number(saved.ratioHero))) optRatioHeroEl.value = String(Math.max(0, Math.min(100, Number(saved.ratioHero))));
     if (optRatioSwotEl && Number.isFinite(Number(saved.ratioSwot))) optRatioSwotEl.value = String(Math.max(0, Math.min(100, Number(saved.ratioSwot))));
     if (optRatioWeirdEl && Number.isFinite(Number(saved.ratioWeird))) optRatioWeirdEl.value = String(Math.max(0, Math.min(100, Number(saved.ratioWeird))));
+    if (optNpcChatterDelayEl && Number.isFinite(Number(saved.npcChatterDelay))) optNpcChatterDelayEl.value = String(normalizedNpcChatterDelay(saved.npcChatterDelay));
   } catch (error) {
     // Ignore malformed splash settings and use HTML defaults.
   }
@@ -2876,10 +3075,12 @@ function applyStartupOptions() {
   const desiredTeachers = Number(optTeacherCountEl?.value || 9);
   const speedMultiplier = Math.max(0.5, Math.min(2, Number(optGameSpeedEl?.value || 1)));
   const weatherSetting = optWeatherEl?.value || 'auto';
+  const npcChatterDelayMs = normalizedNpcChatterDelay(optNpcChatterDelayEl?.value || game.npcChatterDelayMs || 1000);
   const llmEnabled = Boolean(optLlmEnabledEl?.checked);
   const llmSource = String(optLlmSourceEl?.value || 'local');
   const llmNsfw = Boolean(optLlmNsfwEl?.checked);
   const llmNoFallback = Boolean(optLlmNoFallbackEl?.checked);
+  const llmPrePrompt = sanitizeLlmPrePrompt(optLlmPrePromptEl?.value || game.llm.prePrompt || '');
   const llmModel = String(optLlmModelEl?.value || '').trim();
   const llmLocalEndpoint = normalizeLocalEndpoint(optLlmLocalEndpointEl?.value || game.llm.localEndpoint);
   const llmTimeoutMs = Math.max(LLM_MIN_TIMEOUT_MS, Math.min(LLM_MAX_TIMEOUT_MS, Number(optLlmTimeoutEl?.value || game.llm.timeoutMs || LLM_DEFAULT_TIMEOUT_MS)));
@@ -2897,6 +3098,7 @@ function applyStartupOptions() {
   });
 
   game.speedMultiplier = speedMultiplier;
+  game.npcChatterDelayMs = npcChatterDelayMs;
   game.timeScale = (TOTAL_DAY_GAME_MINUTES / TARGET_DAY_REAL_SECONDS) * game.speedMultiplier;
   game.preferredWeather = weatherSetting;
   if (weatherSetting !== 'auto' && weatherModes[weatherSetting]) {
@@ -2913,8 +3115,12 @@ function applyStartupOptions() {
     || game.llm.remoteModel !== llmRemoteModel
     || game.llm.remoteToken !== llmRemoteToken
     || game.llm.nsfw !== llmNsfw
-    || game.llm.noFallback !== llmNoFallback;
-  if (providerChanged) game.llm.cache.clear();
+    || game.llm.noFallback !== llmNoFallback
+    || game.llm.prePrompt !== llmPrePrompt;
+  if (providerChanged) {
+    game.llm.cache.clear();
+    game.llm.worldPreloadedForProvider = '';
+  }
   game.llm.enabled = llmEnabled;
   game.llm.source = llmSource === 'remote' ? 'remote' : 'local';
   game.llm.selectedModel = llmModel;
@@ -2926,6 +3132,7 @@ function applyStartupOptions() {
   game.llm.remoteToken = llmRemoteToken;
   game.llm.nsfw = llmNsfw;
   game.llm.noFallback = llmNoFallback;
+  game.llm.prePrompt = llmPrePrompt;
   persistLlmSettings();
 
   // Startup population changes alter seating demand; rebuild cached layouts.
@@ -2955,6 +3162,7 @@ function initialiseNpcRelationships() {
   }
 }
 
+initialiseFullRelationshipMesh();
 initialiseNpcRelationships();
 for (const entity of game.entities) ensureDialogueSetup(entity);
 
@@ -4035,6 +4243,12 @@ function canUseDialogue(entity, now, channel = 'speech') {
   }
   // Off-screen or out-of-room NPCs stay silent and follow routines to avoid queue saturation.
   if (entity?.role !== 'player' && (channel === 'speech' || channel === 'thought') && !isEntityVisibleToPlayer(entity)) return false;
+
+  // Global chatter limiter: any NPC speech/thought must wait for the configured cooldown.
+  if (entity?.role !== 'player' && (channel === 'speech' || channel === 'thought')) {
+    if ((now - (game.lastNpcChatterAt || -Infinity)) < normalizedNpcChatterDelay(game.npcChatterDelayMs)) return false;
+  }
+
   const lastAt = channel === 'thought' ? (entity.lastThoughtAt || 0) : (entity.lastSpokeAt || 0);
   const inClassroom = channel === 'speech' && isSupervisedPeriod(schedule[game.periodIndex]) && entityRoom(entity) === schedule[game.periodIndex].room;
   const minInterval = inClassroom ? CLASSROOM_DIALOGUE_INTERVAL_MS : MIN_DIALOGUE_INTERVAL_MS;
@@ -4091,9 +4305,11 @@ function deliverResolvedSpeech(entity, resolvedText, addressee, opts = {}, now =
   const finalSpeech = entity.role === 'student' && addressee?.name
     ? ensureAddressedNameInSpeech(resolvedText, addressee.name)
     : sanitizeLlmLine(resolvedText, '...');
+  if (entity.role !== 'player' && !opts.bypassGlobalChatterLimit && (now - (game.lastNpcChatterAt || -Infinity)) < normalizedNpcChatterDelay(game.npcChatterDelayMs)) return false;
   if (!opts.force && !markDialogueUsed(entity, finalSpeech, 'speech')) return false;
   entity.speech = { text: finalSpeech, kind: opts.kind || 'speech', until: now + (opts.durationMs || 2600) };
   entity.lastSpokeAt = now;
+  if (entity.role !== 'player') game.lastNpcChatterAt = now;
   const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 8;
   const shouldLogSpeech = opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange);
   if (shouldLogSpeech) pushFeedEvent(`${entity.name}: ${finalSpeech}`, 'speech');
@@ -4103,9 +4319,11 @@ function deliverResolvedSpeech(entity, resolvedText, addressee, opts = {}, now =
 
 function deliverResolvedThought(entity, resolvedText, durationMs = 3200, opts = {}, now = performance.now()) {
   const thoughtText = sanitizeLlmLine(resolvedText, '...');
+  if (entity.role !== 'player' && !opts.bypassGlobalChatterLimit && (now - (game.lastNpcChatterAt || -Infinity)) < normalizedNpcChatterDelay(game.npcChatterDelayMs)) return false;
   if (!markDialogueUsed(entity, thoughtText, 'thought')) return false;
   entity.thought = { text: thoughtText, until: now + durationMs };
   entity.lastThoughtAt = now;
+  if (entity.role !== 'player') game.lastNpcChatterAt = now;
   const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 7.2;
   if (opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange)) {
     pushFeedEvent(`💭 ${entity.name}: ${thoughtText}`, 'thought');
@@ -4121,11 +4339,18 @@ function flushDeferredLlmDialogue(now = performance.now()) {
       const key = llmCacheKey(pendingSpeech.payload);
       const cached = game.llm.cache.get(key);
       if (cached) {
-        deliverResolvedSpeech(entity, cached, pendingSpeech.addressee, pendingSpeech.opts, now);
-        entity.pendingSpeech = null;
+        const delivered = deliverResolvedSpeech(entity, cached, pendingSpeech.addressee, pendingSpeech.opts, now);
+        if (delivered) {
+          pushLlmDebug(`🗣️ Delivered deferred speech bubble for ${llmActorLabel(pendingSpeech.payload)}.`, 'info');
+          entity.pendingSpeech = null;
+        }
       } else if (now - pendingSpeech.createdAt > 24000) {
-        pushLlmDebug(`🧼 Dropped stale deferred speech for ${entity.name} (no fallback used).`, 'warn');
-        entity.pendingSpeech = null;
+        // Do not silently drop deferred lines; deliver fallback so players always see who spoke.
+        const deliveredFallback = deliverResolvedSpeech(entity, pendingSpeech.payload?.fallback || '...', pendingSpeech.addressee, { ...pendingSpeech.opts, force: true }, now);
+        if (deliveredFallback) {
+          pushLlmDebug(`♻️ Deferred speech timed out; fallback delivered for ${llmActorLabel(pendingSpeech.payload)}.`, 'warn');
+          entity.pendingSpeech = null;
+        }
       }
     }
 
@@ -4134,11 +4359,18 @@ function flushDeferredLlmDialogue(now = performance.now()) {
       const key = llmCacheKey(pendingThought.payload);
       const cached = game.llm.cache.get(key);
       if (cached) {
-        deliverResolvedThought(entity, cached, pendingThought.durationMs, pendingThought.opts, now);
-        entity.pendingThought = null;
+        const delivered = deliverResolvedThought(entity, cached, pendingThought.durationMs, pendingThought.opts, now);
+        if (delivered) {
+          pushLlmDebug(`💭 Delivered deferred thought bubble for ${pendingThought.payload?.speaker || entity.name}.`, 'info');
+          entity.pendingThought = null;
+        }
       } else if (now - pendingThought.createdAt > 24000) {
-        pushLlmDebug(`🧼 Dropped stale deferred thought for ${entity.name} (no fallback used).`, 'warn');
-        entity.pendingThought = null;
+        // Keep no-fallback mode readable: if AI stalls too long, show the fallback thought instead of dropping it.
+        const deliveredFallback = deliverResolvedThought(entity, pendingThought.payload?.fallback || '...', pendingThought.durationMs, { ...pendingThought.opts, force: true }, now);
+        if (deliveredFallback) {
+          pushLlmDebug(`♻️ Deferred thought timed out; fallback delivered for ${pendingThought.payload?.speaker || entity.name}.`, 'warn');
+          entity.pendingThought = null;
+        }
       }
     }
   }
@@ -4173,6 +4405,8 @@ function say(entity, text, opts = {}) {
     speaker: entity.name,
     speakerRole: roleLabelForLlm(entity.role),
     traitSummary: summarizeTraitBundle(entity.traits),
+    socialSummary: `${entity.name} relationships: ${topRelationshipSummary(entity)}; Eric reputation:${Math.round(entity.ericReputation || 0)}`,
+    interestSummary: `${summarizeInterests(entity)}${addressee ? ` | ${summarizeInterests(addressee)}` : ''}`,
     room: entityRoom(entity),
     addresseeName: addressee?.name || '',
     addresseeRole: addressee ? roleLabelForLlm(addressee.role) : '',
@@ -4211,6 +4445,8 @@ function think(entity, text, durationMs = 3200, opts = {}) {
     speaker: entity.name,
     speakerRole: roleLabelForLlm(entity.role),
     traitSummary: summarizeTraitBundle(entity.traits),
+    socialSummary: `${entity.name} relationships: ${topRelationshipSummary(entity)}; Eric reputation:${Math.round(entity.ericReputation || 0)}`,
+    interestSummary: summarizeInterests(entity),
     room: entityRoom(entity),
     addresseeName: '',
     addresseeRole: '',
@@ -4233,6 +4469,31 @@ function think(entity, text, durationMs = 3200, opts = {}) {
   deliverResolvedThought(entity, thoughtText || String(text), durationMs, opts, now);
 }
 
+function chooseTradeItemsWithLlm(actor, partner) {
+  if (!llmModeEnabled() || !actor?.inventory?.length || !partner?.inventory?.length) return null;
+  const payload = {
+    channel: 'trade',
+    subject: roomSubjectName(entityRoom(actor)),
+    speaker: actor.name,
+    speakerRole: roleLabelForLlm(actor.role),
+    traitSummary: summarizeTraitBundle(actor.traits),
+    socialSummary: `${actor.name} relationships:${topRelationshipSummary(actor)}; ${partner.name} relationships:${topRelationshipSummary(partner)}`,
+    interestSummary: `${summarizeInterests(actor)} | ${summarizeInterests(partner)}`,
+    room: entityRoom(actor),
+    addresseeName: partner.name,
+    addresseeRole: roleLabelForLlm(partner.role),
+    fallback: `actor inventory=${(actor.inventory || []).join(', ')}; partner inventory=${(partner.inventory || []).join(', ')}`,
+  };
+  const raw = resolveLlmText(payload, { allowFallback: false, suppressMissLog: true });
+  if (!raw) return null;
+  const parsed = parseJsonFromLlm(raw);
+  if (!parsed) return null;
+  const giveIdx = actor.inventory.findIndex((item) => String(item).toLowerCase() === String(parsed.give || '').toLowerCase());
+  const takeIdx = partner.inventory.findIndex((item) => String(item).toLowerCase() === String(parsed.take || '').toLowerCase());
+  if (giveIdx < 0 || takeIdx < 0) return null;
+  return { giveIdx, takeIdx };
+}
+
 function tradeChanceFor(actor, partner, isPlayerInitiated = false) {
   const actorTrading = actor.traits?.trading || 40;
   const actorBarter = actor.traits?.barter || 35;
@@ -4251,8 +4512,9 @@ function tryTrade(actor, partner, { isPlayerInitiated = false } = {}) {
   if (!actor.inventory?.length || !partner.inventory?.length) return false;
 
   if (Math.random() > tradeChanceFor(actor, partner, isPlayerInitiated)) return false;
-  const actorOfferIndex = Math.floor(Math.random() * actor.inventory.length);
-  const partnerOfferIndex = Math.floor(Math.random() * partner.inventory.length);
+  const llmChoice = !isPlayerInitiated ? chooseTradeItemsWithLlm(actor, partner) : null;
+  const actorOfferIndex = llmChoice?.giveIdx ?? Math.floor(Math.random() * actor.inventory.length);
+  const partnerOfferIndex = llmChoice?.takeIdx ?? Math.floor(Math.random() * partner.inventory.length);
   const actorOffer = actor.inventory[actorOfferIndex];
   const partnerOffer = partner.inventory[partnerOfferIndex];
   const price = 1 + Math.floor(Math.random() * 4);
@@ -5468,18 +5730,36 @@ function studentsCommittedToRoom(roomName, ignoreEntity = null) {
 }
 
 function nearestTradePartner(entity, range = 2.3) {
-  let best = null;
-  let bestDist = Infinity;
+  const nearby = [];
   for (const candidate of game.entities) {
     if (candidate === entity || candidate.knockedUntil > performance.now()) continue;
     if (candidate.role === 'janitor') continue;
     const d = distance(entity, candidate);
-    if (d <= range && d < bestDist && candidate.inventory?.length) {
-      best = candidate;
-      bestDist = d;
-    }
+    if (d <= range && candidate.inventory?.length) nearby.push({ candidate, d });
   }
-  return best;
+  if (!nearby.length) return null;
+
+  if (llmModeEnabled() && entity.role !== 'player' && nearby.length > 1) {
+    const payload = {
+      channel: 'trade',
+      subject: roomSubjectName(entityRoom(entity)),
+      speaker: entity.name,
+      speakerRole: roleLabelForLlm(entity.role),
+      traitSummary: summarizeTraitBundle(entity.traits),
+      socialSummary: `${entity.name} relationships: ${topRelationshipSummary(entity)}`,
+      interestSummary: summarizeInterests(entity),
+      room: entityRoom(entity),
+      fallback: `Choose best target from: ${nearby.map((entry) => `${entry.candidate.name}(dist:${entry.d.toFixed(1)},rel:${Math.round(getSocialBond(entity, entry.candidate))})`).join('; ')}`,
+    };
+    const raw = resolveLlmText(payload, { allowFallback: false, suppressMissLog: true });
+    const parsed = raw ? parseJsonFromLlm(raw) : null;
+    const targetName = String(parsed?.target || '').toLowerCase();
+    const picked = nearby.find((entry) => entry.candidate.name.toLowerCase() === targetName);
+    if (picked) return picked.candidate;
+  }
+
+  nearby.sort((a, b) => a.d - b.d);
+  return nearby[0].candidate;
 }
 function roomHasOpenSeat(roomName, student) {
   const layout = getRoomSeatLayout(roomName);
@@ -8425,12 +8705,18 @@ function drawEntities() {
     const barW = 18;
     const barX = px - barW / 2;
     ctx.fillStyle = '#1c2439';
-    ctx.fillRect(barX, py - 37, barW, 2);
-    ctx.fillRect(barX, py - 33, barW, 2);
+    ctx.fillRect(barX, py - 39, barW, 2);
+    ctx.fillRect(barX, py - 35, barW, 2);
+    ctx.fillRect(barX, py - 31, barW, 2);
     ctx.fillStyle = '#f6bd60';
-    ctx.fillRect(barX, py - 37, (barW * entity.energy) / 100, 2);
+    ctx.fillRect(barX, py - 39, (barW * entity.energy) / 100, 2);
     ctx.fillStyle = '#4cc9f0';
-    ctx.fillRect(barX, py - 33, (barW * entity.bladder) / 100, 2);
+    ctx.fillRect(barX, py - 35, (barW * entity.bladder) / 100, 2);
+    // Relationship bar uses strongest known bond so social dynamics are visible at a glance.
+    const strongestBond = strongestBondForEntity(entity);
+    const relationNorm = strongestBond ? (clampScore(strongestBond.score, -100, 100) + 100) / 200 : 0.5;
+    ctx.fillStyle = strongestBond && strongestBond.score >= 0 ? '#80ed99' : '#ff7096';
+    ctx.fillRect(barX, py - 31, barW * relationNorm, 2);
 
     const shouldDrawName = entity.role === 'player' || game.showNpcNames;
     if (shouldDrawName) {
@@ -8756,9 +9042,11 @@ function updateEntityTooltip(event) {
     const pocketItems = (hovered.inventory || []).slice(0, 3).join(', ');
     const moreItems = (hovered.inventory || []).length > 3 ? ` +${hovered.inventory.length - 3}` : '';
     const relationText = hovered.role === 'player' ? 'self' : relationshipLabel(hovered.relationships?.Eric || 0);
+    const strongest = strongestBondForEntity(hovered);
+    const strongestLabel = strongest ? `${strongest.peer.name} (${relationshipLabel(strongest.score)})` : 'none';
     const socialTag = hovered.socialProfile?.cliqueId ? ` | 🧑‍🤝‍🧑 ${hovered.socialProfile.cliqueId}` : '';
     const quirkTag = hovered.socialProfile?.evolvingQuirks?.length ? hovered.socialProfile.evolvingQuirks.slice(-1)[0] : 'settling in';
-    entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>📍 ${room} | 🤝 ${relationText}${socialTag}<br>⚡ Energy ${tooltipBar(hovered.energy, '#ffd166')}<br>🚻 Bladder ${tooltipBar(hovered.bladder, '#ff9f1c')}<br>🧼 Hygiene ${tooltipBar(hovered.hygiene || 0, '#72efdd')}<br>❤️ HP ${tooltipBar(hovered.hp, '#ef476f')}<br>🧠 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>💷 £${Math.round(hovered.money || 0)} | 🤝 Trade ${Math.round(hovered.traits?.trading || 0)} | 🗣️ Barter ${Math.round(hovered.traits?.barter || 0)}<br>🧬 Social quirk: ${quirkTag}<br>📝 Notes: ${hovered.title || hovered.profile?.title || 'No public notes yet'}<br>🎒 ${pocketItems || 'nothing useful'}${moreItems}`;
+    entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>📍 ${room} | 🤝 ${relationText}${socialTag}<br>⚡ Energy ${tooltipBar(hovered.energy, '#ffd166')}<br>🚻 Bladder ${tooltipBar(hovered.bladder, '#ff9f1c')}<br>🧼 Hygiene ${tooltipBar(hovered.hygiene || 0, '#72efdd')}<br>❤️ HP ${tooltipBar(hovered.hp, '#ef476f')}<br>🧠 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>💷 £${Math.round(hovered.money || 0)} | 🤝 Trade ${Math.round(hovered.traits?.trading || 0)} | 🗣️ Barter ${Math.round(hovered.traits?.barter || 0)}<br>🧲 Strongest bond: ${strongestLabel}<br>🧬 Social quirk: ${quirkTag}<br>📝 Notes: ${hovered.title || hovered.profile?.title || 'No public notes yet'}<br>🎒 ${pocketItems || 'nothing useful'}${moreItems}`;
     positionTooltip(pointer, 118, 260);
     entityTooltipEl.hidden = false;
     return;
@@ -9101,9 +9389,32 @@ closeInteractionPanelBtn.onclick = () => {
   game.selectedInteractionTarget = null;
 };
 
-function startGameFromSplash() {
+
+if (openSplashSettingsBtn && splashSettingsDialog) {
+  openSplashSettingsBtn.addEventListener('click', () => splashSettingsDialog.showModal());
+}
+if (closeSplashSettingsBtn && splashSettingsDialog) {
+  closeSplashSettingsBtn.addEventListener('click', () => splashSettingsDialog.close());
+}
+if (splashSettingsDialog) {
+  // Click on backdrop closes the settings modal for quick access back to Start button.
+  splashSettingsDialog.addEventListener('click', (event) => {
+    const rect = splashSettingsDialog.getBoundingClientRect();
+    const inside = event.clientX >= rect.left && event.clientX <= rect.right
+      && event.clientY >= rect.top && event.clientY <= rect.bottom;
+    if (!inside) splashSettingsDialog.close();
+  });
+}
+
+async function startGameFromSplash() {
   persistSplashSettings();
   applyStartupOptions();
+  if (llmModeEnabled()) {
+    await preloadLlmWorldSetup();
+    initialiseFullRelationshipMesh();
+    initialiseNpcRelationships();
+  }
+  if (splashSettingsDialog?.open) splashSettingsDialog.close();
   if (startOverlayEl) startOverlayEl.hidden = true;
   assignDailyDutyTeacher();
   announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
@@ -9137,6 +9448,14 @@ if (llmDebugClearBtn) {
 
 if (startGameBtn) startGameBtn.addEventListener('click', startGameFromSplash);
 
+
+if (optNpcChatterDelayEl) {
+  optNpcChatterDelayEl.value = String(normalizedNpcChatterDelay(optNpcChatterDelayEl.value || 1000));
+  optNpcChatterDelayEl.addEventListener('change', () => {
+    optNpcChatterDelayEl.value = String(normalizedNpcChatterDelay(optNpcChatterDelayEl.value));
+  });
+}
+
 if (optLlmTimeoutEl) {
   optLlmTimeoutEl.value = String(effectiveLlmBaseTimeout());
   optLlmTimeoutEl.addEventListener('change', () => {
@@ -9155,6 +9474,21 @@ if (optLlmQueueEl) {
     persistLlmSettings();
     setLlmStatus(`🧵 LLM queue concurrency set to ${game.llm.maxInFlight}.`);
     drainLlmBacklog();
+  });
+}
+
+
+if (optLlmPrePromptEl) {
+  optLlmPrePromptEl.value = sanitizeLlmPrePrompt(game.llm.prePrompt || '');
+  optLlmPrePromptEl.addEventListener('change', () => {
+    game.llm.prePrompt = sanitizeLlmPrePrompt(optLlmPrePromptEl.value || '');
+    optLlmPrePromptEl.value = game.llm.prePrompt;
+    // Prompt content changes output style, so clear cache to avoid mixed responses.
+    game.llm.cache.clear();
+    persistLlmSettings();
+    setLlmStatus(game.llm.prePrompt
+      ? '🧩 AI pre-prompt updated. Cache cleared for consistent style.'
+      : '🧩 AI pre-prompt cleared. Using default prompt behavior.');
   });
 }
 

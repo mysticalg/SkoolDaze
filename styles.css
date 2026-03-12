@@ -80,7 +80,8 @@ body {
 }
 
 .start-grid input,
-.start-grid select {
+.start-grid select,
+.start-grid textarea {
   border: 1px solid #4a628c;
   border-radius: 8px;
   background: #11233e;
@@ -104,6 +105,34 @@ body {
 
 .start-btn:hover { background: linear-gradient(180deg, #1a4068, #143252); }
 
+
+.splash-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.55rem;
+  margin-top: 0.55rem;
+}
+
+.splash-settings-btn {
+  width: 100%;
+  min-height: 2.35rem;
+  font-weight: 700;
+}
+
+.splash-settings-dialog {
+  width: min(860px, 94vw);
+  max-height: 86vh;
+  overflow: auto;
+}
+
+.splash-settings-dialog::backdrop {
+  background: rgba(3, 8, 18, 0.7);
+  backdrop-filter: blur(3px);
+}
+
+.settings-footer-actions {
+  margin-top: 0.55rem;
+}
 
 .llm-grid {
   margin-bottom: 0.35rem;
