@@ -63,6 +63,9 @@
             <option value="">Loading models…</option>
           </select>
         </label>
+        <label title="Local Ollama API endpoint. Use 127.0.0.1 if localhost fails on your browser/network setup.">🔌 Ollama endpoint
+          <input id="optLlmLocalEndpoint" type="text" placeholder="http://127.0.0.1:11434" disabled />
+        </label>
         <label title="Choose your remote provider when cloud mode is active.">☁️ Remote provider
           <select id="optLlmRemoteProvider" disabled>
             <option value="openai" selected>OpenAI</option>
