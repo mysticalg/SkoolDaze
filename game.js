@@ -57,6 +57,7 @@ const optLlmEnabledEl = document.getElementById('optLlmEnabled');
 const optLlmSourceEl = document.getElementById('optLlmSource');
 const optLlmModelEl = document.getElementById('optLlmModel');
 const optLlmLocalEndpointEl = document.getElementById('optLlmLocalEndpoint');
+const optLlmManualModelEl = document.getElementById('optLlmManualModel');
 const optLlmRemoteProviderEl = document.getElementById('optLlmRemoteProvider');
 const optLlmRemoteModelEl = document.getElementById('optLlmRemoteModel');
 const optLlmRemoteTokenEl = document.getElementById('optLlmRemoteToken');
@@ -1165,11 +1166,16 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = LLM_DEFAULT_TIMEO
   }
 }
 
+function effectiveLocalModelName() {
+  // Manual model names let players bypass browser discovery issues and still use Ollama.
+  return sanitizeLlmLine(game.llm.manualModelName, game.llm.selectedModel || '');
+}
+
 function llmProviderLabel() {
   if (game.llm.source === 'remote') {
     return `${game.llm.remoteProvider}:${game.llm.remoteModel || 'default'}`;
   }
-  return `ollama:${game.llm.selectedModel || 'none'}`;
+  return `ollama:${effectiveLocalModelName() || 'none'}`;
 }
 
 function persistLlmSettings() {
@@ -1179,6 +1185,7 @@ function persistLlmSettings() {
       selectedModel: game.llm.selectedModel,
       localEndpoint: game.llm.localEndpoint,
       manualModels: game.llm.manualModels || [],
+      manualModelName: game.llm.manualModelName || '',
       remoteProvider: game.llm.remoteProvider,
       remoteModel: game.llm.remoteModel,
       remoteToken: game.llm.remoteToken,
@@ -1197,6 +1204,7 @@ function loadLlmSettings() {
     game.llm.selectedModel = sanitizeLlmLine(saved.selectedModel, '');
     game.llm.localEndpoint = sanitizeLlmLine(saved.localEndpoint, OLLAMA_DEFAULT_ENDPOINT);
     game.llm.manualModels = Array.isArray(saved.manualModels) ? saved.manualModels.map((m) => sanitizeLlmLine(m, '')).filter(Boolean) : [];
+    game.llm.manualModelName = sanitizeLlmLine(saved.manualModelName, '');
     game.llm.remoteProvider = saved.remoteProvider === 'grok' ? 'grok' : 'openai';
     game.llm.remoteModel = sanitizeLlmLine(saved.remoteModel, game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini');
     game.llm.remoteToken = sanitizeLlmLine(saved.remoteToken, '');
@@ -1224,6 +1232,7 @@ function applyLlmUiState() {
   if (optLlmSourceEl) optLlmSourceEl.disabled = !enabled;
   if (optLlmModelEl) optLlmModelEl.disabled = !isLocal || !game.llm.availableModels.length;
   if (optLlmLocalEndpointEl) optLlmLocalEndpointEl.disabled = !isLocal;
+  if (optLlmManualModelEl) optLlmManualModelEl.disabled = !isLocal;
   if (optLlmRefreshModelsEl) optLlmRefreshModelsEl.disabled = !isLocal;
   if (optLlmImportModelsEl) optLlmImportModelsEl.disabled = !isLocal;
   if (optLlmRemoteProviderEl) optLlmRemoteProviderEl.disabled = !isRemote;
@@ -1298,6 +1307,7 @@ function importManualOllamaModels() {
   game.llm.manualModels = models;
   game.llm.availableModels = models;
   if (!game.llm.selectedModel || !models.includes(game.llm.selectedModel)) game.llm.selectedModel = models[0];
+  if (!game.llm.manualModelName) game.llm.manualModelName = game.llm.selectedModel;
   updateLlmModelSelect(models);
   if (optLlmModelEl) optLlmModelEl.value = game.llm.selectedModel;
   persistLlmSettings();
@@ -1360,6 +1370,7 @@ async function refreshOllamaModels({ silent = false } = {}) {
       updateLlmModelSelect(models);
       if (optLlmModelEl && game.llm.selectedModel) optLlmModelEl.value = game.llm.selectedModel;
       if (optLlmLocalEndpointEl) optLlmLocalEndpointEl.value = game.llm.localEndpoint;
+      if (optLlmManualModelEl && !optLlmManualModelEl.value.trim() && game.llm.selectedModel) optLlmManualModelEl.value = game.llm.selectedModel;
       persistLlmSettings();
       if (!silent) {
         setLlmStatus(models.length
@@ -1426,7 +1437,7 @@ function llmModeEnabled() {
   if (game.llm.source === 'remote') {
     return Boolean(game.llm.remoteProvider && game.llm.remoteModel && game.llm.remoteToken);
   }
-  return Boolean(game.llm.selectedModel);
+  return Boolean(effectiveLocalModelName());
 }
 
 function llmCacheKey({ channel = 'speech', subject = 'General', speaker = 'Narrator', room = 'School', fallback = '', speakerRole = 'character', traitSummary = 'balanced' }) {
@@ -1492,7 +1503,7 @@ async function generateLocalOllamaText(payload) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: game.llm.selectedModel,
+      model: effectiveLocalModelName(),
       stream: false,
       options: { temperature: 0.75, top_p: 0.92, num_predict: payload.channel === 'quiz' ? 180 : 42 },
       prompt: buildLlmPrompt(payload),
@@ -1654,6 +1665,7 @@ const game = {
     availableModels: [],
     localEndpoint: OLLAMA_DEFAULT_ENDPOINT,
     manualModels: [],
+    manualModelName: '',
     remoteProvider: 'openai',
     remoteModel: 'gpt-4.1-mini',
     remoteToken: '',
@@ -2246,6 +2258,7 @@ function applyStartupOptions() {
   const llmEnabled = Boolean(optLlmEnabledEl?.checked);
   const llmSource = String(optLlmSourceEl?.value || 'local');
   const llmModel = String(optLlmModelEl?.value || '').trim();
+  const llmManualModel = String(optLlmManualModelEl?.value || '').trim();
   const llmLocalEndpoint = normalizeLocalEndpoint(optLlmLocalEndpointEl?.value || game.llm.localEndpoint);
   const llmRemoteProvider = String(optLlmRemoteProviderEl?.value || 'openai');
   const llmRemoteModel = String(optLlmRemoteModelEl?.value || '').trim();
@@ -2269,6 +2282,7 @@ function applyStartupOptions() {
   // LLM mode is optional and always falls back to built-in text if unavailable.
   const providerChanged = game.llm.source !== llmSource
     || game.llm.selectedModel !== llmModel
+    || game.llm.manualModelName !== llmManualModel
     || game.llm.localEndpoint !== llmLocalEndpoint
     || game.llm.remoteProvider !== llmRemoteProvider
     || game.llm.remoteModel !== llmRemoteModel
@@ -2277,6 +2291,7 @@ function applyStartupOptions() {
   game.llm.enabled = llmEnabled;
   game.llm.source = llmSource === 'remote' ? 'remote' : 'local';
   game.llm.selectedModel = llmModel;
+  game.llm.manualModelName = llmManualModel || llmModel;
   game.llm.localEndpoint = llmLocalEndpoint;
   game.llm.remoteProvider = llmRemoteProvider === 'grok' ? 'grok' : 'openai';
   game.llm.remoteModel = llmRemoteModel || (game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini');
@@ -8181,6 +8196,10 @@ if (optLlmModelEl) {
     const selected = String(optLlmModelEl.value || '').trim();
     if (selected && selected !== game.llm.selectedModel) {
       game.llm.selectedModel = selected;
+      if (optLlmManualModelEl && !optLlmManualModelEl.value.trim()) {
+        optLlmManualModelEl.value = selected;
+      }
+      if (!game.llm.manualModelName) game.llm.manualModelName = selected;
       game.llm.cache.clear();
       persistLlmSettings();
       setLlmStatus(`✅ Local model set to ${selected}. Cache reset for fresh responses.`);
@@ -8196,6 +8215,24 @@ if (optLlmLocalEndpointEl) {
     game.llm.cache.clear();
     persistLlmSettings();
     setLlmStatus(`🔌 Local endpoint set to ${game.llm.localEndpoint}. Use refresh to load models.`);
+  });
+}
+
+if (optLlmManualModelEl) {
+  optLlmManualModelEl.value = game.llm.manualModelName || game.llm.selectedModel || '';
+  optLlmManualModelEl.addEventListener('change', () => {
+    const typed = sanitizeLlmLine(optLlmManualModelEl.value || '', '');
+    game.llm.manualModelName = typed;
+    if (typed && !game.llm.availableModels.includes(typed)) {
+      game.llm.availableModels = [typed, ...game.llm.availableModels];
+      updateLlmModelSelect(game.llm.availableModels);
+    }
+    if (typed) game.llm.selectedModel = typed;
+    game.llm.cache.clear();
+    persistLlmSettings();
+    setLlmStatus(typed
+      ? `⌨️ Manual Ollama model set to ${typed}.`
+      : 'ℹ️ Manual model cleared. Dropdown selection will be used.');
   });
 }
 
@@ -8262,6 +8299,9 @@ handleOpenAiOauthCallback();
 if (Array.isArray(game.llm.manualModels) && game.llm.manualModels.length) {
   game.llm.availableModels = game.llm.manualModels.slice();
   updateLlmModelSelect(game.llm.availableModels);
+}
+if (optLlmManualModelEl) {
+  optLlmManualModelEl.value = game.llm.manualModelName || game.llm.selectedModel || '';
 }
 applyLlmUiState();
 refreshOllamaModels({ silent: true });
