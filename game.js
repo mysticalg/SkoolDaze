@@ -1359,6 +1359,8 @@ function resolveLlmSocialDirective(actor, peer, fallbackIntent = 'ally') {
     queueLlmText(payload);
     return null;
   }
+  // Consume once so social directives stay dynamic rather than replaying old responses.
+  game.llm.cache.delete(key);
   try {
     const parsed = parseJsonFromLlm(cached);
     const allowed = new Set(['ally', 'tease', 'avoid', 'follow', 'defend']);
@@ -2125,10 +2127,6 @@ function drainLlmBacklog() {
 function queueLlmText(payload, options = {}) {
   if (!llmModeEnabled()) return;
   const key = llmCacheKey(payload);
-  if (game.llm.cache.has(key)) {
-    pushLlmDebug(`🗂️ Cache already primed [${payload.channel}] key=${summarizeForLlmDebug(key, 64)}`);
-    return;
-  }
   if (game.llm.inFlight.has(key)) {
     pushLlmDebug(`⏳ Request already in-flight [${payload.channel}] key=${summarizeForLlmDebug(key, 64)}`);
     return;
@@ -2215,6 +2213,8 @@ function resolveLlmDailyHymn() {
     queueLlmText(payload);
     return fallback;
   }
+  // Consume once so next assembly day requests a fresh hymn draft.
+  game.llm.cache.delete(key);
   const parsed = parseJsonFromLlm(cached);
   if (!parsed) return fallback;
   return {
@@ -2279,10 +2279,13 @@ function resolveLlmText(payload, options = {}) {
   if (!llmModeEnabled()) return fallback;
   const key = llmCacheKey(payload);
   if (game.llm.cache.has(key)) {
-    pushLlmDebug(`🎯 Cache hit [${payload.channel}] ${llmActorLabel(payload)}.`);
-    return game.llm.cache.get(key);
+    const fresh = game.llm.cache.get(key);
+    // LLM results are one-shot: consume once so future lines always fetch fresh text.
+    game.llm.cache.delete(key);
+    pushLlmDebug(`🟢 Fresh LLM line ready [${payload.channel}] ${llmActorLabel(payload)}.`);
+    return fresh;
   }
-  if (!suppressMissLog) pushLlmDebug(`🪫 Cache miss [${payload.channel}] ${llmActorLabel(payload)}; ${allowFallback ? 'fallback used immediately.' : 'waiting for cached LLM line.'}`,'warn');
+  if (!suppressMissLog) pushLlmDebug(`🪫 Awaiting fresh LLM output [${payload.channel}] ${llmActorLabel(payload)}; ${allowFallback ? 'fallback used immediately.' : 'waiting for response.'}`,'warn');
   queueLlmText(payload);
   return allowFallback ? fallback : null;
 }
@@ -2304,6 +2307,8 @@ function resolveLlmQuizQuestion(fallbackQuiz) {
     queueLlmText(payload);
     return fallbackQuiz;
   }
+  // Consume once so each classroom prompt can request a new variant.
+  game.llm.cache.delete(key);
   try {
     const parsed = parseJsonFromLlm(cached);
     if (!parsed) return fallbackQuiz;
@@ -4558,6 +4563,7 @@ function flushDeferredLlmDialogue(now = performance.now()) {
       const key = llmCacheKey(pendingSpeech.payload);
       const cached = game.llm.cache.get(key);
       if (cached) {
+        game.llm.cache.delete(key);
         const delivered = deliverResolvedSpeech(entity, cached, pendingSpeech.addressee, pendingSpeech.opts, now);
         if (delivered) {
           pushLlmDebug(`🗣️ Delivered deferred speech bubble for ${llmActorLabel(pendingSpeech.payload)}.`, 'info');
@@ -4578,6 +4584,7 @@ function flushDeferredLlmDialogue(now = performance.now()) {
       const key = llmCacheKey(pendingThought.payload);
       const cached = game.llm.cache.get(key);
       if (cached) {
+        game.llm.cache.delete(key);
         const delivered = deliverResolvedThought(entity, cached, pendingThought.durationMs, pendingThought.opts, now);
         if (delivered) {
           pushLlmDebug(`💭 Delivered deferred thought bubble for ${pendingThought.payload?.speaker || entity.name}.`, 'info');
@@ -4882,7 +4889,7 @@ function drawRoundedBubble(x, y, lines, style) {
   const {
     paddingX, paddingY, lineHeight, radius,
     fillColor, strokeColor, shadowColor, shadowBlur,
-    textColor, font, tailOffsetX = 10,
+    textColor, font, tailOffsetX = 0,
     bubblyTail = false,
   } = style;
 
@@ -4894,8 +4901,8 @@ function drawRoundedBubble(x, y, lines, style) {
   // Keep social bubbles fully visible even for pupils stood at classroom edges/corners.
   const left = Math.round(Math.max(4, Math.min(canvas.width - bubbleWidth - 4, unclampedLeft)));
   const top = Math.round(Math.max(4, Math.min(canvas.height - bubbleHeight - 16, unclampedTop)));
-  // Tail anchor follows speaker while respecting bubble bounds after clamping.
-  const rawTailX = Math.round(left + tailOffsetX + 4);
+  // Tail should point at the speaker head, with optional tiny nudge per bubble type.
+  const rawTailX = Math.round(x + tailOffsetX);
   const tailAnchorX = Math.max(left + 8, Math.min(left + bubbleWidth - 8, rawTailX));
 
   ctx.save();
@@ -5094,6 +5101,12 @@ function clearClassQuestionUi() {
   if (classQuestionChoicesEl) classQuestionChoicesEl.innerHTML = '';
 }
 
+function markEntityHandRaised(entity, now = performance.now(), durationMs = 2200) {
+  if (!entity) return;
+  // Briefly render a raised-hand icon so class participation is visible on sprites.
+  entity.handRaisedUntil = now + durationMs;
+}
+
 function teacherFeedbackLine(teacher, student, correct) {
   const studentName = student?.name || 'Student';
   if (correct) {
@@ -5116,6 +5129,7 @@ function teacherFeedbackLine(teacher, student, correct) {
 
 function resolveClassQuestionAttempt(quiz, student, attemptText, forcedCorrect = false) {
   if (!quiz || quiz.resolved) return;
+  markEntityHandRaised(student);
   const normalized = normalizeAnswerText(attemptText);
   const isCorrect = forcedCorrect || normalized === quiz.answer;
   quiz.resolved = true;
@@ -6733,8 +6747,10 @@ function chooseTarget(entity, currentPeriod) {
 
   if (isStartDayPeriod(currentPeriod)) {
     if (entity.role === 'teacher') {
-      // Teachers now stage inside registration rooms before students arrive.
-      return teacherBoardSpot(teacherRegistrationRoom(entity.name));
+      // Morning lineup rule: teachers hold by the field divider until first bell.
+      const teachers = teachersInRoster().sort((a, b) => a.seatIndex - b.seatIndex);
+      const teacherIndex = Math.max(0, teachers.findIndex((candidate) => candidate === entity));
+      return teacherGateLinePosition(teacherIndex);
     }
     return gateQueuePosition(entity);
   }
@@ -7438,6 +7454,7 @@ function updateAI(dt) {
 
     // Witty teacher comeback when a student asks a silly question.
     if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < 0.00024) {
+      markEntityHandRaised(entity, now, 2000);
       const sillyQuestions = ['🙃 Sir, can we do homework in our dreams?', '😅 Miss, is zero afraid of minus numbers?', '🤔 If I eat my notes, do I absorb the lesson?', '🧪 If we mix maths and music, do we get algebra beats?', '📏 Can I measure effort with a ruler and hand that in?', '🛰️ If I answer in space-voice, is it still correct?', '🍟 Is lunch technically a science experiment?', '🎭 If I act confident, do I get confidence marks?', '🦆 Is a duck in uniform allowed in assembly?', '📚 If I highlight everything, does that count as revision?', '🧠 Can my future self come sit this test for me?', '⏰ Can we have a two-minute break every two minutes?'];
       say(entity, sillyQuestions[Math.floor(game.rng() * sillyQuestions.length)], { durationMs: 3600 });
       const classTeacher = game.entities.find((candidate) => (
@@ -9065,6 +9082,13 @@ function drawEntities() {
       ctx.fillRect(px + 8, py - 14, 4, 4);
     }
 
+    if ((entity.handRaisedUntil || 0) > nowBubble) {
+      // Raised hand icon makes question/answer participation readable during lessons.
+      ctx.font = '12px monospace';
+      ctx.fillStyle = '#fef08a';
+      ctx.fillText('✋', px + 10, py - 30);
+    }
+
     // Each person gets mini vitals bars (energy + bladder) like Eric.
     const barW = 18;
     const barX = px - barW / 2;
@@ -9802,7 +9826,7 @@ async function startGameFromSplash() {
   announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
   if (llmModeEnabled()) {
     primeLlmSessionContext();
-    announce(`🤖 LLM mode active via ${llmProviderLabel()}. Dialogue cache warming in background.`, { force: true, feedType: 'world' });
+    announce(`🤖 LLM mode active via ${llmProviderLabel()}. live responses enabled (no response reuse).`, { force: true, feedType: 'world' });
   }
   if (game.dutyTeacherName) {
     announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
@@ -9865,11 +9889,11 @@ if (optLlmPrePromptEl) {
   optLlmPrePromptEl.addEventListener('change', () => {
     game.llm.prePrompt = sanitizeLlmPrePrompt(optLlmPrePromptEl.value || '');
     optLlmPrePromptEl.value = game.llm.prePrompt;
-    // Prompt content changes output style, so clear cache to avoid mixed responses.
+    // Prompt content changes output style; clear pending one-shot results for consistency.
     game.llm.cache.clear();
     persistLlmSettings();
     setLlmStatus(game.llm.prePrompt
-      ? '🧩 AI pre-prompt updated. Cache cleared for consistent style.'
+      ? '🧩 AI pre-prompt updated. Pending LLM results cleared for consistent style.'
       : '🧩 AI pre-prompt cleared. Using default prompt behavior.');
   });
 }
@@ -9883,7 +9907,7 @@ if (optLlmEnabledEl) {
     setLlmStatus(game.llm.enabled
       ? (game.llm.noFallback
         ? '🤖 LLM mode enabled (no fallback). NPC dialogue waits for model replies.'
-        : '🤖 LLM mode enabled. First lines may use fallback text while cache warms up.')
+        : '🤖 LLM mode enabled. First lines may use fallback text while fresh replies are fetched.')
       : 'ℹ️ LLM mode disabled. Using original built-in text.');
     if (game.llm.enabled) {
       pushLlmDebug(`🟢 LLM enabled with ${llmProviderLabel()}.`);
@@ -9897,7 +9921,7 @@ if (optLlmEnabledEl) {
 if (optLlmNsfwEl) {
   optLlmNsfwEl.checked = Boolean(game.llm.nsfw);
   optLlmNsfwEl.addEventListener('change', () => {
-    // Cache is prompt-dependent; clear so new tone takes effect immediately.
+    // Prompt options affect output style; clear pending one-shot results immediately.
     game.llm.nsfw = Boolean(optLlmNsfwEl.checked);
     game.llm.cache.clear();
     persistLlmSettings();
@@ -9911,13 +9935,13 @@ if (optLlmNsfwEl) {
 if (optLlmNoFallbackEl) {
   optLlmNoFallbackEl.checked = Boolean(game.llm.noFallback);
   optLlmNoFallbackEl.addEventListener('change', () => {
-    // No-fallback mode uses deferred LLM delivery so we clear cache to avoid mixed behaviour.
+    // No-fallback mode uses deferred LLM delivery; clear pending one-shot results to avoid mixed behaviour.
     game.llm.noFallback = Boolean(optLlmNoFallbackEl.checked);
     game.llm.cache.clear();
     persistLlmSettings();
     setLlmStatus(game.llm.noFallback
       ? '🧵 No-fallback mode enabled. Dialogue waits for LLM replies.'
-      : '🧩 Fallback mode enabled. Built-in lines are used when cache misses.');
+      : '🧩 Fallback mode enabled. Built-in lines are used while fresh replies are fetched.');
   });
 }
 
