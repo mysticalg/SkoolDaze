@@ -1173,7 +1173,59 @@ function setSocialBond(a, b, delta) {
   const key = socialBondKey(a.name, b.name);
   const next = clampScore((game.socialBonds[key] || 0) + delta, -100, 100);
   game.socialBonds[key] = next;
+  a.relationships = a.relationships || {};
+  b.relationships = b.relationships || {};
+  a.relationships[b.name] = Math.round(next);
+  b.relationships[a.name] = Math.round(next);
   return next;
+}
+
+function topRelationshipSummary(entity, limit = 3) {
+  if (!entity) return 'none';
+  const ranked = Object.entries(entity.relationships || {})
+    .filter(([name]) => name && name !== entity.name)
+    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+    .slice(0, limit)
+    .map(([name, score]) => `${name}:${Math.round(score)}`);
+  return ranked.length ? ranked.join(', ') : 'none';
+}
+
+function strongestBondForEntity(entity) {
+  if (!entity) return null;
+  let best = null;
+  let bestScore = 0;
+  for (const candidate of game.entities) {
+    if (!candidate || candidate === entity) continue;
+    const score = getSocialBond(entity, candidate);
+    if (Math.abs(score) > Math.abs(bestScore)) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best ? { peer: best, score: bestScore } : null;
+}
+
+function initialiseFullRelationshipMesh() {
+  const cast = game.entities.filter((entity) => entity && entity.name);
+  for (let i = 0; i < cast.length; i += 1) {
+    const actor = cast[i];
+    actor.relationships = actor.relationships || {};
+    if (actor.role !== 'player' && typeof actor.relationships.Eric !== 'number') {
+      actor.relationships.Eric = 0;
+    }
+    for (let j = i + 1; j < cast.length; j += 1) {
+      const peer = cast[j];
+      const seeded = Math.round((((actor.traits?.friendly || 50) + (peer.traits?.friendly || 50)) / 4)
+        - (((actor.traits?.aggression || 50) + (peer.traits?.aggression || 50)) / 5)
+        + ((Math.random() * 24) - 12));
+      const key = socialBondKey(actor.name, peer.name);
+      if (typeof game.socialBonds[key] !== 'number') game.socialBonds[key] = clampScore(seeded, -100, 100);
+      const bond = game.socialBonds[key];
+      actor.relationships[peer.name] = Math.round(bond);
+      peer.relationships = peer.relationships || {};
+      peer.relationships[actor.name] = Math.round(bond);
+    }
+  }
 }
 
 function ensureSocialProfile(entity) {
@@ -1229,6 +1281,8 @@ function resolveLlmSocialDirective(actor, peer, fallbackIntent = 'ally') {
     speaker: actor.name,
     speakerRole: roleLabelForLlm(actor.role),
     traitSummary: summarizeTraitBundle(actor.traits),
+    socialSummary: `${actor.name} relationships: ${topRelationshipSummary(actor)}; ${peer?.name || 'peer'} reputation with Eric:${Math.round(peer?.ericReputation || 0)}`,
+    interestSummary: `${summarizeInterests(actor)} | ${summarizeInterests(peer)}`,
     room: entityRoom(actor),
     addresseeName: peer?.name || '',
     addresseeRole: peer ? roleLabelForLlm(peer.role) : '',
@@ -1758,12 +1812,14 @@ function llmCacheKey({
   fallback = '',
   speakerRole = 'character',
   traitSummary = 'balanced',
+  socialSummary = '',
+  interestSummary = '',
   addresseeName = '',
   addresseeRole = '',
   conversationContext = '',
   conversationTurn = 0,
 }) {
-  return `${llmProviderLabel()}|${channel}|${subject}|${speaker}|${speakerRole}|${traitSummary}|${room}|${addresseeName}|${addresseeRole}|turn:${conversationTurn}|ctx:${String(conversationContext).toLowerCase().slice(0, 90)}|${String(fallback).toLowerCase().slice(0, 120)}`;
+  return `${llmProviderLabel()}|${channel}|${subject}|${speaker}|${speakerRole}|${traitSummary}|social:${String(socialSummary).toLowerCase().slice(0, 90)}|interests:${String(interestSummary).toLowerCase().slice(0, 70)}|${room}|${addresseeName}|${addresseeRole}|turn:${conversationTurn}|ctx:${String(conversationContext).toLowerCase().slice(0, 90)}|${String(fallback).toLowerCase().slice(0, 120)}`;
 }
 
 function summarizeTraitBundle(traits = {}) {
@@ -1772,6 +1828,15 @@ function summarizeTraitBundle(traits = {}) {
   return keys
     .map((key) => `${key}:${Math.round(Number(traits?.[key] || 0))}`)
     .join(', ');
+}
+
+
+function summarizeInterests(entity) {
+  const publicNotes = [];
+  if (entity?.profile?.prefers?.length) publicNotes.push(...entity.profile.prefers.slice(0, 2));
+  if (entity?.dialogueProfile?.preferredTopic) publicNotes.push(entity.dialogueProfile.preferredTopic);
+  if (entity?.socialProfile?.evolvingQuirks?.length) publicNotes.push(entity.socialProfile.evolvingQuirks[0]);
+  return publicNotes.filter(Boolean).slice(0, 3).join(', ') || 'school life';
 }
 
 function roleLabelForLlm(role = '') {
@@ -1791,6 +1856,8 @@ function buildLlmPrompt({
   traitSummary = 'balanced traits',
   addresseeName = '',
   addresseeRole = '',
+  socialSummary = '',
+  interestSummary = '',
   conversationContext = '',
   conversationTurn = 0,
   uncensored = false,
@@ -1803,22 +1870,34 @@ function buildLlmPrompt({
         ? 'Return ONLY JSON hymn content with verse+chorus and silly remix verse+chorus.'
       : channel === 'social'
         ? 'Return ONLY JSON social directive: {"intent":"ally|tease|avoid|follow|defend","bondDelta":-3..3,"line":"short line"}.'
+      : channel === 'trade'
+        ? 'Return ONLY JSON trade directive: {"target":"name","give":"item","take":"item","reason":"short reason"}.'
+      : channel === 'preload'
+        ? 'Return ONLY JSON world preload data for roles, traits, inventory, and social setup.'
       : channel === 'announcement'
         ? 'Write a short school PA/news style line. Keep it under 14 words.'
         : 'Write a short in-world school dialogue line. Keep it under 14 words.';
 
-  if (channel === 'quiz' || channel === 'social' || channel === 'hymn') {
+  if (channel === 'quiz' || channel === 'social' || channel === 'hymn' || channel === 'trade' || channel === 'preload') {
     return [
       channel === 'hymn'
         ? 'You are writing a short British school assembly hymn about Jesus for children.'
         : channel === 'social'
           ? 'You are coordinating NPC social behaviour for a playful British school simulation.'
-          : 'You are writing classroom quiz content for a playful British school game.',
+          : channel === 'trade'
+            ? 'You are selecting sensible NPC trading decisions for a school simulation.'
+            : channel === 'preload'
+              ? 'You are preloading a school simulation world with coherent personalities and social links.'
+              : 'You are writing classroom quiz content for a playful British school game.',
       channel === 'hymn'
         ? 'Respond ONLY as JSON: {"verse":"...","chorus":"...","sillyVerse":"...","sillyChorus":"..."}.'
         : channel === 'social'
           ? 'Respond ONLY as JSON: {"intent":"ally|tease|avoid|follow|defend","bondDelta":-3..3,"line":"..."}.'
-          : 'Respond ONLY as JSON: {"q":"...","choices":["A","B","C","D"],"answer":"..."}.',
+          : channel === 'trade'
+            ? 'Respond ONLY as JSON: {"target":"name","give":"item","take":"item","reason":"..."}.'
+            : channel === 'preload'
+              ? 'Respond ONLY as JSON: {"roles":{},"traits":{},"inventory":{},"relationships":[]}. Keys in roles/traits/inventory are character names.'
+              : 'Respond ONLY as JSON: {"q":"...","choices":["A","B","C","D"],"answer":"..."}.',
       channel === 'hymn'
         ? 'Each field should be one short singable line (under 14 words). No markdown.'
         : channel === 'social'
@@ -1826,6 +1905,8 @@ function buildLlmPrompt({
           : 'The answer must exactly match one of the choices. No markdown.',
       `Subject: ${subject}. Room: ${room}. Teacher context: ${speaker}.`,
       `Teacher role: ${speakerRole}. Traits snapshot: ${traitSummary}.`,
+      socialSummary ? `Reputation/relationships: ${socialSummary}` : null,
+      interestSummary ? `Common interests: ${interestSummary}` : null,
       addresseeName ? `Directed at: ${addresseeName} (${addresseeRole || 'character'}).` : null,
       conversationContext ? `Recent conversation: ${conversationContext}` : null,
       conversationTurn ? `Conversation turn: ${conversationTurn}` : null,
@@ -1859,6 +1940,8 @@ function buildLlmPrompt({
     safetyLine,
     `Speaker: ${speaker}. Role: ${speakerRole}. Traits: ${traitSummary}.`,
     addresseeName ? `Addressee: ${addresseeName}. Addressee role: ${addresseeRole || 'character'}.` : null,
+    socialSummary ? `Reputation/relationship context: ${socialSummary}` : null,
+    interestSummary ? `Shared interests and quirks: ${interestSummary}` : null,
     conversationContext ? `Recent conversation thread: ${conversationContext}` : null,
     conversationTurn ? `Conversation turn number: ${conversationTurn}` : null,
     addressingLine,
@@ -2197,6 +2280,86 @@ function warmupLlmCache() {
   });
 }
 
+
+async function requestLlmJson(payload) {
+  if (!llmModeEnabled()) return null;
+  const result = await generateLlmText(payload);
+  if (!result?.text) return null;
+  return parseJsonFromLlm(result.text);
+}
+
+function applyLlmWorldPreloadConfig(config = {}) {
+  if (!config || typeof config !== 'object') return;
+  const roleMap = config.roles || {};
+  const traitsMap = config.traits || {};
+  const inventoryMap = config.inventory || {};
+  const castNames = new Set(game.entities.map((entity) => entity.name));
+
+  for (const entity of game.entities) {
+    const llmRole = String(roleMap[entity.name] || '').toLowerCase();
+    if (STUDENT_ROLES.has(entity.role) && ['bully', 'hero', 'swot', 'weird'].includes(llmRole)) {
+      entity.role = llmRole;
+      entity.color = ROLE_VISUALS[llmRole] || entity.color;
+      entity.personality = { ...(personalities[llmRole] || personalities.hero) };
+    }
+
+    if (traitsMap[entity.name] && typeof traitsMap[entity.name] === 'object') {
+      entity.traits = buildTraitProfile(entity.role, traitsMap[entity.name]);
+    }
+
+    if (Array.isArray(inventoryMap[entity.name]) && inventoryMap[entity.name].length) {
+      entity.inventory = inventoryMap[entity.name].slice(0, 8).map((item) => sanitizeLlmLine(item, '')).filter(Boolean);
+    }
+  }
+
+  if (Array.isArray(config.relationships)) {
+    for (const row of config.relationships) {
+      const from = String(row?.from || '');
+      const to = String(row?.to || '');
+      const score = clampScore(Number(row?.score || 0), -100, 100);
+      if (!castNames.has(from) || !castNames.has(to) || from === to) continue;
+      const a = game.entities.find((entity) => entity.name === from);
+      const b = game.entities.find((entity) => entity.name === to);
+      if (!a || !b) continue;
+      const key = socialBondKey(a.name, b.name);
+      game.socialBonds[key] = score;
+      a.relationships = a.relationships || {};
+      b.relationships = b.relationships || {};
+      a.relationships[b.name] = Math.round(score);
+      b.relationships[a.name] = Math.round(score);
+    }
+  }
+}
+
+async function preloadLlmWorldSetup() {
+  if (!llmModeEnabled()) return;
+  if (game.llm.worldPreloadedForProvider === llmProviderLabel()) return;
+  const castSummary = game.entities
+    .slice(0, 60)
+    .map((entity) => `${entity.name}:${entity.role}`)
+    .join(', ');
+  const payload = {
+    channel: 'preload',
+    subject: 'World Setup',
+    speaker: 'Narrator',
+    speakerRole: 'narrator',
+    traitSummary: 'Generate coherent role archetypes, trait values, inventories and relationship scores.',
+    socialSummary: 'Set pairwise relationship scores in range -100..100.',
+    interestSummary: 'Include interests that influence dialogue and friendship choices.',
+    room: 'School',
+    fallback: `Cast roster: ${castSummary}`,
+  };
+  pushLlmDebug('🧩 Requesting LLM world preload for traits, roles, inventory and relationships.');
+  const parsed = await requestLlmJson(payload);
+  if (parsed) {
+    applyLlmWorldPreloadConfig(parsed);
+    game.llm.worldPreloadedForProvider = llmProviderLabel();
+    pushLlmDebug('✅ LLM world preload applied.');
+  } else {
+    pushLlmDebug('⚠️ LLM world preload unavailable; keeping deterministic setup.', 'warn');
+  }
+}
+
 const game = {
   timeMinutes: SCHOOL_DAY_START_MINUTES,
   // Minutes advanced per real-time second so the full school day lasts ~15 real minutes.
@@ -2235,6 +2398,7 @@ const game = {
     inFlight: new Set(),
     debugLog: [],
     sessionPrimedForProvider: '',
+    worldPreloadedForProvider: '',
     backlog: [],
   },
   rng: Math.random,
@@ -2914,7 +3078,10 @@ function applyStartupOptions() {
     || game.llm.remoteToken !== llmRemoteToken
     || game.llm.nsfw !== llmNsfw
     || game.llm.noFallback !== llmNoFallback;
-  if (providerChanged) game.llm.cache.clear();
+  if (providerChanged) {
+    game.llm.cache.clear();
+    game.llm.worldPreloadedForProvider = '';
+  }
   game.llm.enabled = llmEnabled;
   game.llm.source = llmSource === 'remote' ? 'remote' : 'local';
   game.llm.selectedModel = llmModel;
@@ -2955,6 +3122,7 @@ function initialiseNpcRelationships() {
   }
 }
 
+initialiseFullRelationshipMesh();
 initialiseNpcRelationships();
 for (const entity of game.entities) ensureDialogueSetup(entity);
 
@@ -4173,6 +4341,8 @@ function say(entity, text, opts = {}) {
     speaker: entity.name,
     speakerRole: roleLabelForLlm(entity.role),
     traitSummary: summarizeTraitBundle(entity.traits),
+    socialSummary: `${entity.name} relationships: ${topRelationshipSummary(entity)}; Eric reputation:${Math.round(entity.ericReputation || 0)}`,
+    interestSummary: `${summarizeInterests(entity)}${addressee ? ` | ${summarizeInterests(addressee)}` : ''}`,
     room: entityRoom(entity),
     addresseeName: addressee?.name || '',
     addresseeRole: addressee ? roleLabelForLlm(addressee.role) : '',
@@ -4211,6 +4381,8 @@ function think(entity, text, durationMs = 3200, opts = {}) {
     speaker: entity.name,
     speakerRole: roleLabelForLlm(entity.role),
     traitSummary: summarizeTraitBundle(entity.traits),
+    socialSummary: `${entity.name} relationships: ${topRelationshipSummary(entity)}; Eric reputation:${Math.round(entity.ericReputation || 0)}`,
+    interestSummary: summarizeInterests(entity),
     room: entityRoom(entity),
     addresseeName: '',
     addresseeRole: '',
@@ -4233,6 +4405,31 @@ function think(entity, text, durationMs = 3200, opts = {}) {
   deliverResolvedThought(entity, thoughtText || String(text), durationMs, opts, now);
 }
 
+function chooseTradeItemsWithLlm(actor, partner) {
+  if (!llmModeEnabled() || !actor?.inventory?.length || !partner?.inventory?.length) return null;
+  const payload = {
+    channel: 'trade',
+    subject: roomSubjectName(entityRoom(actor)),
+    speaker: actor.name,
+    speakerRole: roleLabelForLlm(actor.role),
+    traitSummary: summarizeTraitBundle(actor.traits),
+    socialSummary: `${actor.name} relationships:${topRelationshipSummary(actor)}; ${partner.name} relationships:${topRelationshipSummary(partner)}`,
+    interestSummary: `${summarizeInterests(actor)} | ${summarizeInterests(partner)}`,
+    room: entityRoom(actor),
+    addresseeName: partner.name,
+    addresseeRole: roleLabelForLlm(partner.role),
+    fallback: `actor inventory=${(actor.inventory || []).join(', ')}; partner inventory=${(partner.inventory || []).join(', ')}`,
+  };
+  const raw = resolveLlmText(payload, { allowFallback: false, suppressMissLog: true });
+  if (!raw) return null;
+  const parsed = parseJsonFromLlm(raw);
+  if (!parsed) return null;
+  const giveIdx = actor.inventory.findIndex((item) => String(item).toLowerCase() === String(parsed.give || '').toLowerCase());
+  const takeIdx = partner.inventory.findIndex((item) => String(item).toLowerCase() === String(parsed.take || '').toLowerCase());
+  if (giveIdx < 0 || takeIdx < 0) return null;
+  return { giveIdx, takeIdx };
+}
+
 function tradeChanceFor(actor, partner, isPlayerInitiated = false) {
   const actorTrading = actor.traits?.trading || 40;
   const actorBarter = actor.traits?.barter || 35;
@@ -4251,8 +4448,9 @@ function tryTrade(actor, partner, { isPlayerInitiated = false } = {}) {
   if (!actor.inventory?.length || !partner.inventory?.length) return false;
 
   if (Math.random() > tradeChanceFor(actor, partner, isPlayerInitiated)) return false;
-  const actorOfferIndex = Math.floor(Math.random() * actor.inventory.length);
-  const partnerOfferIndex = Math.floor(Math.random() * partner.inventory.length);
+  const llmChoice = !isPlayerInitiated ? chooseTradeItemsWithLlm(actor, partner) : null;
+  const actorOfferIndex = llmChoice?.giveIdx ?? Math.floor(Math.random() * actor.inventory.length);
+  const partnerOfferIndex = llmChoice?.takeIdx ?? Math.floor(Math.random() * partner.inventory.length);
   const actorOffer = actor.inventory[actorOfferIndex];
   const partnerOffer = partner.inventory[partnerOfferIndex];
   const price = 1 + Math.floor(Math.random() * 4);
@@ -5468,18 +5666,36 @@ function studentsCommittedToRoom(roomName, ignoreEntity = null) {
 }
 
 function nearestTradePartner(entity, range = 2.3) {
-  let best = null;
-  let bestDist = Infinity;
+  const nearby = [];
   for (const candidate of game.entities) {
     if (candidate === entity || candidate.knockedUntil > performance.now()) continue;
     if (candidate.role === 'janitor') continue;
     const d = distance(entity, candidate);
-    if (d <= range && d < bestDist && candidate.inventory?.length) {
-      best = candidate;
-      bestDist = d;
-    }
+    if (d <= range && candidate.inventory?.length) nearby.push({ candidate, d });
   }
-  return best;
+  if (!nearby.length) return null;
+
+  if (llmModeEnabled() && entity.role !== 'player' && nearby.length > 1) {
+    const payload = {
+      channel: 'trade',
+      subject: roomSubjectName(entityRoom(entity)),
+      speaker: entity.name,
+      speakerRole: roleLabelForLlm(entity.role),
+      traitSummary: summarizeTraitBundle(entity.traits),
+      socialSummary: `${entity.name} relationships: ${topRelationshipSummary(entity)}`,
+      interestSummary: summarizeInterests(entity),
+      room: entityRoom(entity),
+      fallback: `Choose best target from: ${nearby.map((entry) => `${entry.candidate.name}(dist:${entry.d.toFixed(1)},rel:${Math.round(getSocialBond(entity, entry.candidate))})`).join('; ')}`,
+    };
+    const raw = resolveLlmText(payload, { allowFallback: false, suppressMissLog: true });
+    const parsed = raw ? parseJsonFromLlm(raw) : null;
+    const targetName = String(parsed?.target || '').toLowerCase();
+    const picked = nearby.find((entry) => entry.candidate.name.toLowerCase() === targetName);
+    if (picked) return picked.candidate;
+  }
+
+  nearby.sort((a, b) => a.d - b.d);
+  return nearby[0].candidate;
 }
 function roomHasOpenSeat(roomName, student) {
   const layout = getRoomSeatLayout(roomName);
@@ -8425,12 +8641,18 @@ function drawEntities() {
     const barW = 18;
     const barX = px - barW / 2;
     ctx.fillStyle = '#1c2439';
-    ctx.fillRect(barX, py - 37, barW, 2);
-    ctx.fillRect(barX, py - 33, barW, 2);
+    ctx.fillRect(barX, py - 39, barW, 2);
+    ctx.fillRect(barX, py - 35, barW, 2);
+    ctx.fillRect(barX, py - 31, barW, 2);
     ctx.fillStyle = '#f6bd60';
-    ctx.fillRect(barX, py - 37, (barW * entity.energy) / 100, 2);
+    ctx.fillRect(barX, py - 39, (barW * entity.energy) / 100, 2);
     ctx.fillStyle = '#4cc9f0';
-    ctx.fillRect(barX, py - 33, (barW * entity.bladder) / 100, 2);
+    ctx.fillRect(barX, py - 35, (barW * entity.bladder) / 100, 2);
+    // Relationship bar uses strongest known bond so social dynamics are visible at a glance.
+    const strongestBond = strongestBondForEntity(entity);
+    const relationNorm = strongestBond ? (clampScore(strongestBond.score, -100, 100) + 100) / 200 : 0.5;
+    ctx.fillStyle = strongestBond && strongestBond.score >= 0 ? '#80ed99' : '#ff7096';
+    ctx.fillRect(barX, py - 31, barW * relationNorm, 2);
 
     const shouldDrawName = entity.role === 'player' || game.showNpcNames;
     if (shouldDrawName) {
@@ -8756,9 +8978,11 @@ function updateEntityTooltip(event) {
     const pocketItems = (hovered.inventory || []).slice(0, 3).join(', ');
     const moreItems = (hovered.inventory || []).length > 3 ? ` +${hovered.inventory.length - 3}` : '';
     const relationText = hovered.role === 'player' ? 'self' : relationshipLabel(hovered.relationships?.Eric || 0);
+    const strongest = strongestBondForEntity(hovered);
+    const strongestLabel = strongest ? `${strongest.peer.name} (${relationshipLabel(strongest.score)})` : 'none';
     const socialTag = hovered.socialProfile?.cliqueId ? ` | 🧑‍🤝‍🧑 ${hovered.socialProfile.cliqueId}` : '';
     const quirkTag = hovered.socialProfile?.evolvingQuirks?.length ? hovered.socialProfile.evolvingQuirks.slice(-1)[0] : 'settling in';
-    entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>📍 ${room} | 🤝 ${relationText}${socialTag}<br>⚡ Energy ${tooltipBar(hovered.energy, '#ffd166')}<br>🚻 Bladder ${tooltipBar(hovered.bladder, '#ff9f1c')}<br>🧼 Hygiene ${tooltipBar(hovered.hygiene || 0, '#72efdd')}<br>❤️ HP ${tooltipBar(hovered.hp, '#ef476f')}<br>🧠 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>💷 £${Math.round(hovered.money || 0)} | 🤝 Trade ${Math.round(hovered.traits?.trading || 0)} | 🗣️ Barter ${Math.round(hovered.traits?.barter || 0)}<br>🧬 Social quirk: ${quirkTag}<br>📝 Notes: ${hovered.title || hovered.profile?.title || 'No public notes yet'}<br>🎒 ${pocketItems || 'nothing useful'}${moreItems}`;
+    entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>📍 ${room} | 🤝 ${relationText}${socialTag}<br>⚡ Energy ${tooltipBar(hovered.energy, '#ffd166')}<br>🚻 Bladder ${tooltipBar(hovered.bladder, '#ff9f1c')}<br>🧼 Hygiene ${tooltipBar(hovered.hygiene || 0, '#72efdd')}<br>❤️ HP ${tooltipBar(hovered.hp, '#ef476f')}<br>🧠 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>💷 £${Math.round(hovered.money || 0)} | 🤝 Trade ${Math.round(hovered.traits?.trading || 0)} | 🗣️ Barter ${Math.round(hovered.traits?.barter || 0)}<br>🧲 Strongest bond: ${strongestLabel}<br>🧬 Social quirk: ${quirkTag}<br>📝 Notes: ${hovered.title || hovered.profile?.title || 'No public notes yet'}<br>🎒 ${pocketItems || 'nothing useful'}${moreItems}`;
     positionTooltip(pointer, 118, 260);
     entityTooltipEl.hidden = false;
     return;
@@ -9101,9 +9325,14 @@ closeInteractionPanelBtn.onclick = () => {
   game.selectedInteractionTarget = null;
 };
 
-function startGameFromSplash() {
+async function startGameFromSplash() {
   persistSplashSettings();
   applyStartupOptions();
+  if (llmModeEnabled()) {
+    await preloadLlmWorldSetup();
+    initialiseFullRelationshipMesh();
+    initialiseNpcRelationships();
+  }
   if (startOverlayEl) startOverlayEl.hidden = true;
   assignDailyDutyTeacher();
   announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
