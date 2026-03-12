@@ -100,12 +100,14 @@ const rooms = [
   // Reception-adjacent support spaces now sit in one contiguous block for easier wayfinding.
   { name: 'Toilets', x: 34, y: 66, w: 20, h: 10, floor: 'ground', type: 'hall' },
   { name: 'Janitor Room', x: 56, y: 66, w: 12, h: 10, floor: 'ground', type: 'hall' },
-  { name: 'Assembly Hall', x: 70, y: 66, w: 40, h: 10, floor: 'ground', type: 'hall' },
+  { name: 'Assembly Hall', x: 70, y: 66, w: 28, h: 10, floor: 'ground', type: 'hall' },
+  // Dining hall sits beside assembly for fast lunchtime flow.
+  { name: 'Dining Hall', x: 100, y: 66, w: 24, h: 10, floor: 'ground', type: 'hall' },
   { name: 'Geography', x: 8, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
   { name: 'Art Room', x: 34, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
   { name: 'History', x: 60, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
-  // Kitchen is now directly beside Assembly Hall so wayfinding is intuitive.
-  { name: 'Kitchen', x: 112, y: 66, w: 16, h: 10, floor: 'ground', type: 'hall' },
+  // Kitchen is attached to dining hall and still next to assembly for intuitive wayfinding.
+  { name: 'Kitchen', x: 126, y: 66, w: 16, h: 10, floor: 'ground', type: 'hall' },
   { name: 'P.E. Field', x: 90, y: 80, w: 70, h: 28, floor: 'ground', type: 'outdoor' },
   { name: 'Bike Sheds', x: 92, y: 94, w: 22, h: 12, floor: 'ground', type: 'outdoor' },
   { name: 'School Gates', x: 148, y: 80, w: 18, h: 28, floor: 'ground', type: 'outdoor' },
@@ -174,6 +176,16 @@ const roomDoors = rooms
       icon: '🚪',
     };
   });
+
+// Each teaching floor gets a locker bank so students can store books nearby.
+const lockerBanks = [
+  { label: 'Upper Lockers', floor: 'upper', room: 'Upper Corridor', x: 18, y: 17, capacity: 18 },
+  { label: 'Middle Lockers', floor: 'middle', room: 'Middle Corridor', x: 24, y: 52, capacity: 22 },
+  { label: 'Ground Lockers', floor: 'ground', room: 'Ground Corridor', x: 30, y: 78, capacity: 26 },
+  { label: 'Lower Lockers', floor: 'lower', room: 'Lower Corridor', x: 36, y: 112, capacity: 20 },
+];
+
+const lockers = [];
 
 const blackboards = [
   { room: 'Science Lab', x: 21, y: 6, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
@@ -276,6 +288,8 @@ const classroomProps = [
   { room: 'Art Room', x: 50, y: 90, icon: 'B', color: '#2ec4b6', kind: 'paint brush', throwable: true, hiddenUntil: 0 },
   { room: 'Kitchen', x: 116, y: 69, icon: '🍲', color: '#ffd6a5', kind: 'stock pot', throwable: false, hiddenUntil: 0 },
   { room: 'Kitchen', x: 121, y: 72, icon: '🥄', color: '#ffe5b4', kind: 'serving spoon', throwable: false, hiddenUntil: 0 },
+  { room: 'Dining Hall', x: 105, y: 69, icon: '🍽️', color: '#ffe8a1', kind: 'serving counter', throwable: false, hiddenUntil: 0, size: 2 },
+  { room: 'Dining Hall', x: 112, y: 72, icon: '🪑', color: '#f7d6bf', kind: 'dining bench', throwable: false, hiddenUntil: 0, size: 2 },
   { room: 'Science Lab', x: 14, y: 10, icon: 'S', color: '#80ed99', kind: 'beaker', throwable: true, hiddenUntil: 0 },
   { room: 'Science Lab', x: 11, y: 6, icon: '⚗', color: '#b7efc5', kind: 'chemical flask', throwable: true, hiddenUntil: 0 },
   { room: 'Science Lab', x: 17, y: 6, icon: '🧪', color: '#95d5b2', kind: 'lab vial', throwable: true, hiddenUntil: 0 },
@@ -343,20 +357,42 @@ const computerUseMeta = {
 };
 
 // Bell schedule now compresses a full school day to ~15 real-world minutes.
-const schedule = [
-  { period: 'Start Day', room: 'School Gates', mins: 10, mode: 'transition' },
-  { period: 'Registration', room: 'Science Lab', mins: 25, mode: 'lesson' },
-  { period: 'Lesson 1', room: 'Maths', mins: 60, mode: 'lesson' },
-  { period: 'Lesson 2', room: 'English', mins: 60, mode: 'lesson' },
-  { period: 'Morning Break', room: 'P.E. Field', mins: 25, mode: 'break' },
-  { period: 'Lesson 3', room: 'Geography', mins: 55, mode: 'lesson' },
-  { period: 'Lunch Break', room: 'P.E. Field', mins: 50, mode: 'break' },
-  { period: 'Lesson 4', room: 'Art Room', mins: 60, mode: 'lesson' },
-  { period: 'Lesson 5', room: 'Computer Room', mins: 60, mode: 'lesson' },
-  { period: 'Home Time', room: 'School Gates', mins: 20, mode: 'home' },
-  { period: 'End Day', room: 'School Gates', mins: 10, mode: 'end' },
-];
+function buildScheduleForDay(dayCount = 1) {
+  const weekday = weekdayLabelForDay(dayCount);
+  const mondayWednesdayAssembly = weekday === 'Mon' || weekday === 'Wed';
+  const routine = [
+    { period: 'Start Day', room: 'School Gates', mins: 10, mode: 'transition' },
+    { period: 'Registration', room: 'Science Lab', mins: 25, mode: 'lesson' },
+    { period: 'Lesson 1', room: 'Maths', mins: 60, mode: 'lesson' },
+  ];
 
+  if (mondayWednesdayAssembly) {
+    routine.push(
+      // Requested weekly routine: assembly after first class, then a short class.
+      { period: 'Assembly', room: 'Assembly Hall', mins: 30, mode: 'lesson' },
+      { period: 'Short Class', room: 'English', mins: 30, mode: 'lesson' },
+      { period: 'Extended Break', room: 'P.E. Field', mins: 40, mode: 'break' },
+    );
+  } else {
+    routine.push(
+      { period: 'Lesson 2', room: 'English', mins: 60, mode: 'lesson' },
+      { period: 'Morning Break', room: 'P.E. Field', mins: 25, mode: 'break' },
+    );
+  }
+
+  routine.push(
+    { period: 'Lesson 3', room: 'Geography', mins: 55, mode: 'lesson' },
+    // Lunch now occurs in the dining hall so students can congregate for food service.
+    { period: 'Lunch Break', room: 'Dining Hall', mins: 30, mode: 'break' },
+    { period: 'Lesson 4', room: 'Art Room', mins: 60, mode: 'lesson' },
+    { period: 'Lesson 5', room: 'Computer Room', mins: 60, mode: 'lesson' },
+    { period: 'Home Time', room: 'School Gates', mins: 20, mode: 'home' },
+    { period: 'End Day', room: 'School Gates', mins: 10, mode: 'end' },
+  );
+  return routine;
+}
+
+let schedule = buildScheduleForDay(1);
 const TARGET_DAY_REAL_SECONDS = 15 * 60;
 const TOTAL_DAY_GAME_MINUTES = schedule.reduce((sum, period) => sum + period.mins, 0);
 
@@ -956,6 +992,8 @@ const game = {
   schoolHistory: [],
   lastCollectableSpawnAt: 0,
   collectables: [],
+  lockerCoverage: 0,
+  lockerCapacity: 0,
 };
 
 let seatCounter = 0;
@@ -1162,10 +1200,15 @@ game.entities.push(
     title: 'Janitor', attire: 'janitorOveralls', moustache: true, hair: 'spiky',
     traitOverrides: { friendly: 71, wisdom: 74, honor: 76, discipline: 83 },
   }),
-  mkEntity('Dinner Lady Dot', 'dinnerLady', 87, 100, '#ffcad4', {
+  mkEntity('Dinner Lady Dot', 'dinnerLady', 120, 70, '#ffcad4', {
     title: 'Dinner Supervisor & Kitchen Lead', attire: 'dinnerLady', whistle: true,
-    quotes: ['No rough play on my watch.', 'Spread out and calm down.'],
+    quotes: ['Queue up neatly in the dining hall.', 'No rough play on my watch.'],
     traitOverrides: { discipline: 92, wisdom: 79, friendly: 66, honor: 84, aggression: 42 },
+  }),
+  mkEntity('Dinner Lady Pam', 'dinnerLady', 132, 70, '#ffc8dd', {
+    title: 'Dinner Service Assistant', attire: 'dinnerLady', whistle: true,
+    quotes: ['Hot meals this way, trays ready.', 'Keep the line moving, please.'],
+    traitOverrides: { discipline: 87, wisdom: 74, friendly: 71, honor: 80, aggression: 36 },
   }),
 );
 
@@ -1279,6 +1322,57 @@ const STUDENT_POPULATION_REDUCTION = 10;
 const maxStudentPopulation = Math.max(12, maxStudentPopulationForLessons() - STUDENT_POPULATION_REDUCTION);
 const activeStudentRoster = studentRoster.slice(0, maxStudentPopulation);
 
+
+function createLockerPlanForStudents(students) {
+  lockers.length = 0;
+  const allStudents = students.filter((entity) => isStudentCharacter(entity) && entity.role !== 'player');
+  const targetWithLocker = Math.min(allStudents.length, Math.floor(allStudents.length * 0.7));
+
+  let lockerId = 1;
+  for (const bank of lockerBanks) {
+    for (let i = 0; i < bank.capacity; i += 1) {
+      lockers.push({
+        id: `L-${String(lockerId).padStart(3, '0')}`,
+        bank: bank.label,
+        floor: bank.floor,
+        room: bank.room,
+        x: bank.x + (i % 10) * 2.15,
+        y: bank.y + Math.floor(i / 10) * 1.35,
+        assignedTo: null,
+      });
+      lockerId += 1;
+    }
+  }
+
+  game.lockerCapacity = lockers.length;
+
+  // Shuffle student order for fair locker distribution across personalities.
+  const shuffled = [...allStudents].sort(() => game.rng() - 0.5);
+  const assignmentCount = Math.min(targetWithLocker, lockers.length);
+  for (let i = 0; i < assignmentCount; i += 1) {
+    const student = shuffled[i];
+    const locker = lockers[i];
+    locker.assignedTo = student.name;
+    student.hasLocker = true;
+    student.lockerId = locker.id;
+    student.lockerKey = `${locker.id}-KEY`;
+    student.lockerFloor = locker.floor;
+    student.lockerRoom = locker.room;
+    student.inventory.push('locker key');
+  }
+
+  for (let i = assignmentCount; i < shuffled.length; i += 1) {
+    const student = shuffled[i];
+    student.hasLocker = false;
+    student.lockerId = null;
+    student.lockerKey = null;
+    student.lockerFloor = null;
+    student.lockerRoom = null;
+  }
+
+  game.lockerCoverage = shuffled.length ? Math.round((assignmentCount / shuffled.length) * 100) : 0;
+}
+
 function applyStudentAppearancePlan(roster) {
   // Keep requested diversity mix, now including two pale-white students.
   const skinPlan = ['green', 'red', 'black', 'black', 'yellow', 'yellow', 'yellow', 'lightBrown', 'lightBrown', 'lightBrown', 'paleWhite', 'paleWhite'];
@@ -1346,6 +1440,7 @@ function seedSwotGameTraders() {
   }
 }
 
+createLockerPlanForStudents(game.entities);
 seedSwotGameTraders();
 
 function initialiseNpcRelationships() {
@@ -2064,6 +2159,8 @@ function getTeacherSeatPosition(roomName) {
 
 function resetToSchoolMorning() {
   // New morning: everyone starts outside school gates before being led inside.
+  schedule = buildScheduleForDay(game.dayCount);
+  game.timeScale = schedule.reduce((sum, period) => sum + period.mins, 0) / TARGET_DAY_REAL_SECONDS;
   game.timeMinutes = 8 * 60 + 20;
   game.periodElapsed = 0;
   game.registrationTaken = false;
@@ -2159,6 +2256,7 @@ function resetToSchoolMorning() {
   updateHygieneHud();
   updateWeatherHud();
   announce('🌅 New school day: students gather at the gates ready for registration.');
+  announce(`🗄️ Lockers ready: ${game.lockerCapacity} total, ${game.lockerCoverage}% of students issued keys.`, { force: true });
   if (game.dutyTeacherName) {
     announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
   }
@@ -2768,6 +2866,9 @@ function setPeriod(index) {
 
   game.bellRingingUntil = performance.now() + 3000;
   announce(`🔔 Bell! ${current.period} in ${current.room}`);
+  if (current.period === 'Lunch Break') {
+    announce('🍽️ Lunch service is open in the dining hall for 30 minutes.');
+  }
   if (current.period === 'Home Time') {
     announce('🏠 Home time! Students may leave through the school gates.');
     announce('🎮 Want extra computer time? At the gates, press E to stay for one extra hour.', { force: true });
@@ -3658,7 +3759,7 @@ function isLunchtimePeriod(period = schedule[game.periodIndex]) {
 function dinnerLadyCanObserve(dinnerLady) {
   if (!dinnerLady || dinnerLady.knockedUntil > performance.now()) return false;
   if (!isLunchtimePeriod()) return false;
-  return entityRoom(dinnerLady) === 'P.E. Field' && !isTeacherBackTurned(dinnerLady);
+  return entityRoom(dinnerLady) === 'Dining Hall' && !isTeacherBackTurned(dinnerLady);
 }
 
 function calmNearbyStudents(observer, radius = 8.5, movementScale = 0.32) {
@@ -3672,15 +3773,15 @@ function calmNearbyStudents(observer, radius = 8.5, movementScale = 0.32) {
 }
 
 function dragStudentOffFieldToHeadmaster(dinnerLady, student) {
-  const draggedOffFieldX = 88.7;
-  const draggedOffFieldY = 86.4;
-  student.x = draggedOffFieldX;
-  student.y = draggedOffFieldY;
+  const removedFromHallX = 102.4;
+  const removedFromHallY = 82.2;
+  student.x = removedFromHallX;
+  student.y = removedFromHallY;
   student.vx = 0;
   student.vy = 0;
   student.target = roomCenter('Headmaster Office');
-  announce(`🚨 ${dinnerLady.name} dragged ${student.name} off the field to the Headmaster.`);
-  sendEntityToHeadmaster(student, 'dragged from field by dinner lady');
+  announce(`🚨 ${dinnerLady.name} removed ${student.name} from the dining hall to the Headmaster.`);
+  sendEntityToHeadmaster(student, 'removed from dining hall by dinner lady');
   if (student === player) addLines(25, 'dragged to Headmaster by dinner lady');
 }
 
@@ -3751,8 +3852,8 @@ function chooseTarget(entity, currentPeriod) {
   }
 
   if (entity.role === 'dinnerLady') {
-    // Dinner lady usually works in the kitchen and only heads to the field to supervise lunch.
-    if (isLunchtimePeriod(currentPeriod)) return roomCenter('P.E. Field');
+    // Dinner ladies serve in kitchen+dining hall and supervise students during lunch service.
+    if (isLunchtimePeriod(currentPeriod)) return roomCenter('Dining Hall');
     return roomCenter('Kitchen');
   }
 
@@ -3781,6 +3882,11 @@ function chooseTarget(entity, currentPeriod) {
 
   if (currentPeriod.mode === 'home') {
     return roomCenter('School Gates');
+  }
+
+  // Lunch hall routine: all students head to the dining hall to eat during lunch service.
+  if (isLunchtimePeriod(currentPeriod) && isStudentCharacter(entity)) {
+    return roomCenter('Dining Hall');
   }
 
   if (entity.role === 'teacher') {
@@ -4284,7 +4390,7 @@ function updateAI(dt) {
 
     // Bully behaviour is period-aware so mornings stay mostly calm.
     if (entity.role === 'bully') {
-      const supervisionSuppression = dinnerLadyWatchingField && entityRoom(entity) === 'P.E. Field' ? 0.22 : 1;
+      const supervisionSuppression = dinnerLadyWatchingField && entityRoom(entity) === 'Dining Hall' ? 0.22 : 1;
       if (game.rng() < bullyFightChance(current) * supervisionSuppression) {
         meleeAttack(entity);
       }
@@ -4306,7 +4412,7 @@ function updateAI(dt) {
     }
 
     // Break-time social bubbles make playground time feel alive.
-    if (current.mode === 'break' && isStudent && (!dinnerLadyWatchingField || entityRoom(entity) !== 'P.E. Field') && game.rng() < 0.016) {
+    if (current.mode === 'break' && isStudent && (!dinnerLadyWatchingField || entityRoom(entity) !== 'Dining Hall') && game.rng() < 0.016) {
       ensureDialogueSetup(entity);
       const recent = randomHistorySnippet();
       if (recent && game.rng() < 0.52) {
@@ -4371,8 +4477,8 @@ function updateAI(dt) {
     }
 
     if (entity.role === 'dinnerLady') {
-      // Dinner lady whistle calms chatter/movement spikes on the lunchtime field.
-      if (isLunchtimePeriod(current) && entityRoom(entity) === 'P.E. Field') {
+      // Dinner ladies whistle to keep lunch queues moving and the hall calm.
+      if (isLunchtimePeriod(current) && entityRoom(entity) === 'Dining Hall') {
         // Briefly looking away creates small windows where fights can flare back up.
         if (entity.writingUntil < performance.now() && game.rng() < 0.0012) {
           entity.writingUntil = performance.now() + 1400;
@@ -4390,7 +4496,7 @@ function updateAI(dt) {
         const rowdy = game.entities.find((candidate) => (
           candidate !== entity
           && isStudentCharacter(candidate)
-          && entityRoom(candidate) === 'P.E. Field'
+          && entityRoom(candidate) === 'Dining Hall'
           && candidate.knockedUntil < performance.now()
           && (candidate.role === 'bully' || candidate.mood === 'angry' || Math.abs(candidate.vx) + Math.abs(candidate.vy) > 0.42)
           && distance(entity, candidate) < 1.7
@@ -5198,6 +5304,18 @@ function drawWorld() {
     ctx.fillText('BIN', p.sx - 7, p.sy - 12);
   }
 
+
+  // Locker banks provide visual wayfinding on each floor corridor.
+  for (const locker of lockers) {
+    const p = worldToScreen(locker.x, locker.y);
+    fillDitherRect(p.sx - 6, p.sy - 8, 12, 16, '#8b99a8', '#6f7f8e', 2);
+    ctx.fillStyle = '#d8e1e8';
+    ctx.fillRect(p.sx - 4, p.sy - 4, 8, 8);
+    ctx.fillStyle = '#2a3540';
+    ctx.font = 'bold 6px monospace';
+    ctx.fillText(locker.assignedTo ? 'L' : '-', p.sx - 2, p.sy + 2);
+  }
+
   for (const fountain of waterFountains) {
     const p = worldToScreen(fountain.x, fountain.y);
     fillDitherRect(p.sx - 8, p.sy - 11, 16, 20, '#4ea8de', '#72c6f5', 3);
@@ -5898,6 +6016,7 @@ function findHoveredWorldTargetAtScreen(mouseX, mouseY) {
   // Keep item labels short and descriptive to avoid clutter while moving the mouse.
   addPoints(vendingMachines, (point) => `🥤 ${point.label}`);
   addPoints(trashCans, (point) => `🗑️ ${point.label}`);
+  addPoints(lockers, (point) => `🗄️ Locker ${point.id}${point.assignedTo ? ` (${point.assignedTo})` : ''}`, 0.9);
   addPoints(waterFountains, (point) => `⛲ ${point.label}`);
   addPoints(urinals, (point) => `🚻 ${point.label}`, 0.95);
   addPoints(showers, (point) => `🚿 ${point.label}`, 0.95);
