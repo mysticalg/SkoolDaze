@@ -451,6 +451,12 @@ const floorMeta = {
 };
 
 const schoolExit = { x: 159.2, yMin: 84, yMax: 107 };
+// Morning lineup geometry in the field: students queue on the right, teachers on the left.
+const morningQueue = {
+  dividerInsetFromFieldLeft: 35,
+  studentMinOffsetFromDivider: 2.2,
+  teacherOffsetFromDivider: 2.1,
+};
 const floorOrder = { upper: 3, middle: 2, ground: 1, lower: 0 };
 const floorSequence = ['lower', 'ground', 'middle', 'upper'];
 
@@ -1632,24 +1638,24 @@ function roomCenter(name) {
 
 function gateQueuePosition(entity) {
   const field = roomByName('P.E. Field');
+  const dividerX = field.x + morningQueue.dividerInsetFromFieldLeft;
   // Start-of-day student columns (area 2 from the user's marked screenshot).
   const lane = entity.seatIndex % 5;
   const row = Math.floor(entity.seatIndex / 5) % 14;
   return {
-    x: field.x + field.w - 18 + lane * 2.2,
+    // Keep every student lane to the right of the black divider line.
+    x: Math.max(dividerX + morningQueue.studentMinOffsetFromDivider, field.x + field.w - 18 + lane * 2.2),
     y: field.y + 3 + row * 1.55,
   };
 }
 
 function teacherGateLinePosition(teacherIndex) {
   const field = roomByName('P.E. Field');
-  // Start-of-day teacher area (area 1 from screenshot) sits left of student columns.
-  const cols = 3;
-  const col = teacherIndex % cols;
-  const row = Math.floor(teacherIndex / cols);
+  const dividerX = field.x + morningQueue.dividerInsetFromFieldLeft;
+  // Single-file teacher line stands just left of the divider line.
   return {
-    x: field.x + 12 + col * 2.8,
-    y: field.y + 4 + row * 2,
+    x: dividerX - morningQueue.teacherOffsetFromDivider,
+    y: field.y + 4 + teacherIndex * 2.02,
   };
 }
 
@@ -2371,8 +2377,6 @@ function resetToSchoolMorning() {
     announce('🌊 Toilets blocked! Bathrooms flooded. Mr Mop is rushing to clean it up.', { force: true });
   }
 
-  const gate = roomByName('School Gates');
-  let teacherIndex = 0;
   for (const entity of game.entities) {
     if (entity.refusesEricUntilDay && game.dayCount >= entity.refusesEricUntilDay) {
       // Gradual forgiveness: grudges can persist for days before interactions reopen.
@@ -2385,12 +2389,12 @@ function resetToSchoolMorning() {
       entity.arrivedForDay = true;
       entity.arrivalJoinMins = 0;
     } else if (entity.role === 'teacher') {
-      const pos = teacherGateLinePosition(teacherIndex++);
-      entity.x = pos.x;
-      entity.y = pos.y;
-      entity.arrivedForDay = true;
-      entity.arrivalJoinMins = 0;
-      entity.target = { ...pos };
+      // Teachers now arrive in random order from the school entrance, then walk to line up.
+      entity.x = schoolExit.x + 2.8 + (game.rng() * 1.2);
+      entity.y = schoolExit.yMin + 1.2 + (game.rng() * (schoolExit.yMax - schoolExit.yMin - 2.4));
+      entity.arrivedForDay = false;
+      entity.arrivalJoinMins = game.rng() * Math.max(0.01, schedule[0].mins * 0.82);
+      entity.target = null;
     } else if (entity.role === 'janitor') {
       const room = roomCenter(JANITOR_IDLE_ROOM);
       entity.x = room.x;
@@ -2406,10 +2410,9 @@ function resetToSchoolMorning() {
       entity.arrivalJoinMins = Infinity;
       entity.target = { ...bay };
     } else {
-      // Students phase into area-2 lineup columns with slight jitter to avoid stacking.
-      const queuePos = gateQueuePosition(entity);
-      entity.x = queuePos.x + (game.rng() - 0.5) * 0.9;
-      entity.y = queuePos.y + (game.rng() - 0.5) * 0.7;
+      // Students now also enter through the gate and then walk to area-2 queue slots.
+      entity.x = schoolExit.x + 2.8 + (game.rng() * 1.2);
+      entity.y = schoolExit.yMin + 1.2 + (game.rng() * (schoolExit.yMax - schoolExit.yMin - 2.4));
       entity.arrivedForDay = false;
       entity.arrivalJoinMins = game.rng() * Math.max(0.01, schedule[0].mins * 0.92);
       entity.target = null;
@@ -2433,7 +2436,7 @@ function resetToSchoolMorning() {
   updateBladderHud();
   updateHygieneHud();
   updateWeatherHud();
-  announce('🌅 New school day: teachers line up in Area 1, students form columns in Area 2.');
+  announce('🌅 New school day: teachers arrive from the gate and form a single line left of the black divider while students queue to the right.');
   announce(`🗄️ Lockers ready: ${game.lockerCapacity} total, ${game.lockerCoverage}% of students issued keys.`, { force: true });
   if (game.dutyTeacherName) {
     announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
@@ -3060,7 +3063,7 @@ function setPeriod(index) {
   });
 
   if (isStartDayPeriod(current)) {
-    announce('👨‍🏫 Teachers line up in Area 1 while students form columns in Area 2 on the field.');
+    announce('👨‍🏫 Teachers line up in a single file left of the black divider while students queue to the right.');
   }
 
   game.bellRingingUntil = performance.now() + 3000;
@@ -4240,10 +4243,18 @@ function updateNpcVitals(entity, dt, isRunning) {
   const isLunch = period.period === 'Lunch Break';
   const inFoodZone = entityRoom(entity) === 'P.E. Field' || entityRoom(entity) === 'Reception';
   const canRecoverFromMeal = period.mode === 'break' && isLunch && inFoodZone;
+  const studentSeatedRecovery = entity.role !== 'teacher' && entity.role !== 'janitor' && entity.role !== 'nurse' && entity.role !== 'dinnerLady'
+    && entity.isSeated
+    && !isLunch;
 
   if (canRecoverFromMeal) {
     entity.energy = Math.min(100, entity.energy + dtSeconds * recoverPerSecond);
     return;
+  }
+
+  if (studentSeatedRecovery) {
+    // Gentle seated recovery keeps classroom stamina believable without making seats overpowered.
+    entity.energy = Math.min(100, entity.energy + dtSeconds * 0.045);
   }
 
   const drainRate = baseDrainPerSecond + (isRunning ? runningExtraDrainPerSecond : 0);
@@ -4844,6 +4855,19 @@ function updateAI(dt) {
     let dx = routedTarget.x - entity.x;
     let dy = routedTarget.y - entity.y;
 
+    if (isStartDayPeriod(current)) {
+      const field = roomByName('P.E. Field');
+      if (field) {
+        const dividerX = field.x + morningQueue.dividerInsetFromFieldLeft;
+        // Keep morning queues split by role to match the field divider visuals.
+        if (isStudentCharacter(entity)) {
+          entity.x = Math.max(dividerX + 0.6, entity.x);
+        } else if (entity.role === 'teacher') {
+          entity.x = Math.min(dividerX - 0.6, entity.x);
+        }
+      }
+    }
+
     // Lightweight separation avoids visual clumping, but we skip it for seated pupils
     // so classroom rows stay stable and students don't drift toward the blackboard.
     // Doorway/stair choke points allow temporary stacking so flows do not deadlock.
@@ -5380,6 +5404,16 @@ function drawWorld() {
   ctx.fillStyle = 'rgba(15, 20, 38, 0.12)';
   for (let y = 0; y < canvas.height; y += 5) ctx.fillRect(0, y, canvas.width, 1);
 
+  // Restore floor separators so every level boundary is visible in the game window.
+  const floorBreaks = [15, 50, 76, 110];
+  for (const y of floorBreaks) {
+    const row = worldToScreen(0, y);
+    // Keep the very top edge clean while drawing the in-world floor boundaries.
+    if (row.sy <= 0) continue;
+    ctx.fillStyle = 'rgba(22, 30, 48, 0.5)';
+    ctx.fillRect(0, row.sy - 1, canvas.width, 2);
+  }
+
   for (const room of rooms) {
     const drawX = Math.floor((room.x - CAMERA.x) * sx);
     const drawY = Math.floor((room.y - CAMERA.y) * sy);
@@ -5455,6 +5489,16 @@ function drawWorld() {
   }
 
   drawTrees(sx, sy);
+
+  // Morning queue divider in the field (students right, teachers left).
+  const field = roomByName('P.E. Field');
+  if (field) {
+    const dividerX = field.x + morningQueue.dividerInsetFromFieldLeft;
+    const dividerTop = worldToScreen(dividerX, field.y + 0.8);
+    const dividerBottom = worldToScreen(dividerX, field.y + field.h - 0.8);
+    ctx.fillStyle = '#1b1b1b';
+    ctx.fillRect(dividerTop.sx - 1, dividerTop.sy, 2, dividerBottom.sy - dividerTop.sy);
+  }
 
   // Exit gate warning so players clearly see where escaping gets blocked.
   const gateTop = worldToScreen(schoolExit.x, schoolExit.yMin);
