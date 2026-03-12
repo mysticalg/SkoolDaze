@@ -67,6 +67,7 @@ const optGirlsRatioEl = document.getElementById('optGirlsRatio');
 const optLlmEnabledEl = document.getElementById('optLlmEnabled');
 const optLlmNsfwEl = document.getElementById('optLlmNsfw');
 const optLlmNoFallbackEl = document.getElementById('optLlmNoFallback');
+const optLlmNpcNamesEl = document.getElementById('optLlmNpcNames');
 const optLlmSourceEl = document.getElementById('optLlmSource');
 const optLlmPrePromptEl = document.getElementById('optLlmPrePrompt');
 const optLlmModelEl = document.getElementById('optLlmModel');
@@ -1573,6 +1574,7 @@ function persistLlmSettings() {
       remoteToken: game.llm.remoteToken,
       nsfw: Boolean(game.llm.nsfw),
       noFallback: Boolean(game.llm.noFallback),
+      npcNames: Boolean(game.llm.npcNames),
       prePrompt: sanitizeLlmPrePrompt(game.llm.prePrompt),
     }));
   } catch (error) {
@@ -1596,6 +1598,7 @@ function loadLlmSettings() {
     game.llm.remoteToken = sanitizeLlmLine(saved.remoteToken, '');
     game.llm.nsfw = Boolean(saved.nsfw);
     game.llm.noFallback = Boolean(saved.noFallback);
+    game.llm.npcNames = saved.npcNames !== false;
     game.llm.prePrompt = sanitizeLlmPrePrompt(saved.prePrompt || '');
   } catch (error) {
     // Ignore malformed storage and keep defaults.
@@ -1621,6 +1624,7 @@ function applyLlmUiState() {
   if (optLlmSourceEl) optLlmSourceEl.disabled = !enabled;
   if (optLlmNsfwEl) optLlmNsfwEl.disabled = !isLocal;
   if (optLlmNoFallbackEl) optLlmNoFallbackEl.disabled = !enabled;
+  if (optLlmNpcNamesEl) optLlmNpcNamesEl.disabled = !enabled;
   if (optLlmPrePromptEl) optLlmPrePromptEl.disabled = !enabled;
   if (optLlmModelEl) optLlmModelEl.disabled = !isLocal || !game.llm.availableModels.length;
   if (optLlmLocalEndpointEl) optLlmLocalEndpointEl.disabled = !isLocal;
@@ -1904,7 +1908,7 @@ function buildLlmPrompt({
       : channel === 'trade'
         ? 'Return ONLY JSON trade directive: {"target":"name","give":"item","take":"item","reason":"short reason"}.'
       : channel === 'preload'
-        ? 'Return ONLY JSON world preload data for roles, traits, inventory, and social setup.'
+        ? 'Return ONLY JSON world preload data for roles, traits, inventory, names, and social setup.'
       : channel === 'announcement'
         ? 'Write a short school PA/news style line. Keep it under 14 words.'
         : 'Write a short in-world school dialogue line. Keep it under 14 words.';
@@ -1927,7 +1931,7 @@ function buildLlmPrompt({
           : channel === 'trade'
             ? 'Respond ONLY as JSON: {"target":"name","give":"item","take":"item","reason":"..."}.'
             : channel === 'preload'
-              ? 'Respond ONLY as JSON: {"roles":{},"traits":{},"inventory":{},"relationships":[]}. Keys in roles/traits/inventory are character names. Inventories may contain many (up to 200) brand-new school-appropriate items per character, including phones/camera usage.'
+              ? 'Respond ONLY as JSON: {"roles":{},"traits":{},"inventory":{},"names":{},"relationships":[]}. Keys in roles/traits/inventory/names are character names. names maps currentName->newName. Inventories may contain many (up to 200) brand-new school-appropriate items per character, including phones/camera usage.'
               : 'Respond ONLY as JSON: {"q":"...","choices":["A","B","C","D"],"answer":"..."}.',
       channel === 'hymn'
         ? 'Each field should be one short singable line (under 14 words). No markdown.'
@@ -2333,34 +2337,66 @@ function applyLlmWorldPreloadConfig(config = {}) {
   const roleMap = config.roles || {};
   const traitsMap = config.traits || {};
   const inventoryMap = config.inventory || {};
-  const castNames = new Set(game.entities.map((entity) => entity.name));
+  const nameMap = config.names || {};
+
+  const originalNameByEntity = new Map();
+  for (const entity of game.entities) originalNameByEntity.set(entity, entity.name);
+
+  if (game.llm.npcNames) {
+    // LLM may suggest duplicate/invalid names; sanitize and enforce uniqueness in one pass.
+    const usedNames = new Set(game.entities.map((entity) => entity.role === 'player' ? entity.name : null).filter(Boolean));
+    for (const entity of game.entities) {
+      if (entity.role === 'player') continue;
+      const currentName = originalNameByEntity.get(entity) || entity.name;
+      const suggested = sanitizeLlmLine(nameMap[currentName], '').slice(0, 26);
+      if (!suggested) continue;
+      let finalName = suggested;
+      let suffix = 2;
+      while (usedNames.has(finalName)) {
+        finalName = `${suggested} ${suffix}`.slice(0, 26);
+        suffix += 1;
+      }
+      usedNames.add(finalName);
+      entity.name = finalName;
+    }
+  }
 
   for (const entity of game.entities) {
-    const llmRole = String(roleMap[entity.name] || '').toLowerCase();
+    const preloadName = originalNameByEntity.get(entity) || entity.name;
+    const llmRole = String(roleMap[preloadName] || roleMap[entity.name] || '').toLowerCase();
     if (STUDENT_ROLES.has(entity.role) && ['bully', 'hero', 'swot', 'weird'].includes(llmRole)) {
       entity.role = llmRole;
       entity.color = ROLE_VISUALS[llmRole] || entity.color;
       entity.personality = { ...(personalities[llmRole] || personalities.hero) };
     }
 
-    if (traitsMap[entity.name] && typeof traitsMap[entity.name] === 'object') {
-      entity.traits = buildTraitProfile(entity.role, traitsMap[entity.name]);
+    const traitEntry = traitsMap[preloadName] || traitsMap[entity.name];
+    if (traitEntry && typeof traitEntry === 'object') {
+      entity.traits = buildTraitProfile(entity.role, traitEntry);
     }
 
-    if (Array.isArray(inventoryMap[entity.name]) && inventoryMap[entity.name].length) {
-      entity.inventory = inventoryMap[entity.name].slice(0, 200).map((item) => sanitizeLlmLine(item, '')).filter(Boolean);
+    const inventoryEntry = inventoryMap[preloadName] || inventoryMap[entity.name];
+    if (Array.isArray(inventoryEntry) && inventoryEntry.length) {
+      entity.inventory = inventoryEntry.slice(0, 200).map((item) => sanitizeLlmLine(item, '')).filter(Boolean);
     }
   }
 
   if (Array.isArray(config.relationships)) {
+    const lookup = new Map();
+    for (const entity of game.entities) {
+      lookup.set(entity.name, entity);
+      const preloadName = originalNameByEntity.get(entity) || entity.name;
+      lookup.set(preloadName, entity);
+    }
+
     for (const row of config.relationships) {
       const from = String(row?.from || '');
       const to = String(row?.to || '');
       const score = clampScore(Number(row?.score || 0), -100, 100);
-      if (!castNames.has(from) || !castNames.has(to) || from === to) continue;
-      const a = game.entities.find((entity) => entity.name === from);
-      const b = game.entities.find((entity) => entity.name === to);
-      if (!a || !b) continue;
+      if (!from || !to || from === to) continue;
+      const a = lookup.get(from);
+      const b = lookup.get(to);
+      if (!a || !b || a === b) continue;
       const key = socialBondKey(a.name, b.name);
       game.socialBonds[key] = score;
       a.relationships = a.relationships || {};
@@ -2371,28 +2407,39 @@ function applyLlmWorldPreloadConfig(config = {}) {
   }
 }
 
+
 async function preloadLlmWorldSetup() {
   if (!llmModeEnabled()) return;
   if (game.llm.worldPreloadedForProvider === llmProviderLabel()) return;
   const castSummary = game.entities
     .slice(0, 60)
-    .map((entity) => `${entity.name}:${entity.role}`)
+    .map((entity) => `${entity.name}:${entity.role}:sex=${entity.sex || 'unspecified'}:traits=[${summarizeTraitBundle(entity.traits)}]`)
     .join(', ');
   const payload = {
     channel: 'preload',
     subject: 'World Setup',
     speaker: 'Narrator',
     speakerRole: 'narrator',
-    traitSummary: 'Generate coherent role archetypes, trait values, inventories and relationship scores.',
+    traitSummary: game.llm.npcNames
+      ? 'Generate coherent role archetypes, trait values, inventories, suitable NPC names, and relationship scores.'
+      : 'Generate coherent role archetypes, trait values, inventories and relationship scores.',
     socialSummary: 'Set pairwise relationship scores in range -100..100.',
-    interestSummary: 'Include interests that influence dialogue and friendship choices.',
+    interestSummary: game.llm.npcNames
+      ? 'If names are requested, make them fit each NPC role, sex, and trait profile.'
+      : 'Include interests that influence dialogue and friendship choices.',
     room: 'School',
     fallback: `Cast roster: ${castSummary}`,
   };
-  pushLlmDebug('🧩 Requesting LLM world preload for traits, roles, inventory and relationships.');
+  pushLlmDebug(game.llm.npcNames
+    ? '🧩 Requesting LLM world preload for traits, roles, inventory, relationships, and NPC naming.'
+    : '🧩 Requesting LLM world preload for traits, roles, inventory and relationships.');
   const parsed = await requestLlmJson(payload);
   if (parsed) {
     applyLlmWorldPreloadConfig(parsed);
+    // Name changes affect locker assignments and class rosters, so regenerate these maps.
+    createLockerPlanForStudents(game.entities);
+    assignFixedClassRosters();
+    initTutorialRollCallState();
     game.llm.worldPreloadedForProvider = llmProviderLabel();
     pushLlmDebug('✅ LLM world preload applied.');
   } else {
@@ -2437,6 +2484,7 @@ const game = {
     remoteToken: '',
     nsfw: false,
     noFallback: false,
+    npcNames: true,
     prePrompt: '',
     cache: new Map(),
     inFlight: new Set(),
@@ -3146,6 +3194,7 @@ function applyStartupOptions() {
   const llmSource = String(optLlmSourceEl?.value || 'local');
   const llmNsfw = Boolean(optLlmNsfwEl?.checked);
   const llmNoFallback = Boolean(optLlmNoFallbackEl?.checked);
+  const llmNpcNames = Boolean(optLlmNpcNamesEl?.checked ?? game.llm.npcNames);
   const llmPrePrompt = sanitizeLlmPrePrompt(optLlmPrePromptEl?.value || game.llm.prePrompt || '');
   const llmModel = String(optLlmModelEl?.value || '').trim();
   const llmLocalEndpoint = normalizeLocalEndpoint(optLlmLocalEndpointEl?.value || game.llm.localEndpoint);
@@ -3182,6 +3231,7 @@ function applyStartupOptions() {
     || game.llm.remoteToken !== llmRemoteToken
     || game.llm.nsfw !== llmNsfw
     || game.llm.noFallback !== llmNoFallback
+    || game.llm.npcNames !== llmNpcNames
     || game.llm.prePrompt !== llmPrePrompt;
   if (providerChanged) {
     game.llm.cache.clear();
@@ -3198,6 +3248,7 @@ function applyStartupOptions() {
   game.llm.remoteToken = llmRemoteToken;
   game.llm.nsfw = llmNsfw;
   game.llm.noFallback = llmNoFallback;
+  game.llm.npcNames = llmNpcNames;
   game.llm.prePrompt = llmPrePrompt;
   persistLlmSettings();
 
@@ -9635,6 +9686,20 @@ if (optLlmNoFallbackEl) {
     setLlmStatus(game.llm.noFallback
       ? '🧵 No-fallback mode enabled. Dialogue waits for LLM replies.'
       : '🧩 Fallback mode enabled. Built-in lines are used when cache misses.');
+  });
+}
+
+if (optLlmNpcNamesEl) {
+  optLlmNpcNamesEl.checked = Boolean(game.llm.npcNames);
+  optLlmNpcNamesEl.addEventListener('change', () => {
+    // Naming strategy changes preload output shape, so clear cached world preload state.
+    game.llm.npcNames = Boolean(optLlmNpcNamesEl.checked);
+    game.llm.cache.clear();
+    game.llm.worldPreloadedForProvider = '';
+    persistLlmSettings();
+    setLlmStatus(game.llm.npcNames
+      ? '🏷️ LLM NPC naming enabled. AI can rename cast based on traits and sex.'
+      : '🏷️ LLM NPC naming disabled. Using default roster names.');
   });
 }
 
