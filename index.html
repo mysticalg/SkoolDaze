@@ -105,9 +105,11 @@
     <aside class="panel">
       <!-- Keep live updates at the top of the menu bar for quick scanning during play. -->
       <h3>Event Feed</h3>
-      <div class="event-filters" title="Filter event feed to show actions and/or speech.">
+      <div class="event-filters" title="Filter event feed to show actions, speech, thought bubbles, or world-wide events.">
         <label><input id="filterActions" type="checkbox" checked /> 🧭 Actions</label>
         <label><input id="filterSpeech" type="checkbox" checked /> 💬 Speech</label>
+        <label><input id="filterThoughts" type="checkbox" checked /> 💭 Thinking</label>
+        <label><input id="filterWorld" type="checkbox" checked /> 🌍 World</label>
       </div>
       <div id="events" class="events" aria-live="polite"></div>
 

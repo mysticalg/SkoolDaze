@@ -254,7 +254,8 @@ canvas {
 
 .event-filters {
   display: flex;
-  gap: 0.7rem;
+  flex-wrap: wrap;
+  gap: 0.55rem 0.75rem;
   font-size: 0.72rem;
   margin-top: 0.18rem;
 }
@@ -270,6 +271,8 @@ canvas {
 
 .event-line.speech { color: #bde0ff; }
 .event-line.action { color: #f7f7f7; }
+.event-line.thought { color: #c9e8ff; }
+.event-line.world { color: #ffe8a6; }
 
 dialog {
   max-width: 560px;

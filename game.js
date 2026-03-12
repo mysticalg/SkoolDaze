@@ -41,6 +41,8 @@ const classQuestionPromptEl = document.getElementById('classQuestionPrompt');
 const classQuestionChoicesEl = document.getElementById('classQuestionChoices');
 const filterActionsEl = document.getElementById('filterActions');
 const filterSpeechEl = document.getElementById('filterSpeech');
+const filterThoughtsEl = document.getElementById('filterThoughts');
+const filterWorldEl = document.getElementById('filterWorld');
 const startOverlayEl = document.getElementById('startOverlay');
 const startGameBtn = document.getElementById('startGameBtn');
 const optStudentCountEl = document.getElementById('optStudentCount');
@@ -608,8 +610,8 @@ const personalities = {
 };
 
 // Dialogue pacing keeps chatter readable and prevents instant back-to-back spam.
-const MIN_DIALOGUE_INTERVAL_MS = 5000;
-const CLASSROOM_DIALOGUE_INTERVAL_MS = 7600;
+const MIN_DIALOGUE_INTERVAL_MS = 5600;
+const CLASSROOM_DIALOGUE_INTERVAL_MS = 9400;
 const INTERACTION_COOLDOWN_HOURS = 3;
 
 // Everyday school items can move through student pockets via trading and bartering.
@@ -976,18 +978,26 @@ function createThoughtVariants(entity) {
   const topic = entity.dialogueProfile?.preferredTopic || 'class';
   const confidence = ((entity.traits?.wit || 50) + (entity.traits?.intelligence || 50)) / 2;
   const confidenceTag = confidence > 62 ? 'I have got this' : 'please let this go smoothly';
-  const tones = ['🍕', '⚽', '🎮', '☁️', '🧠', '📝', '👟', '🎧'];
+  const tones = ['🍕', '⚽', '🎮', '☁️', '🧠', '📝', '👟', '🎧', '📓', '💡', '🫧', '🎯'];
   const thoughtTemplates = [
     `${confidenceTag}... maybe ${topic} will come up.`,
-    `Need to remember my planner this time.`,
-    `If I finish quickly, break will feel longer.`,
-    `Focus now, dream later.`,
-    `One good answer and I am safe today.`,
-    `Why is the bell always slower before lunch?`,
-    `Stay calm, walk in, look prepared.`,
+    'Need to remember my planner this time.',
+    'If I finish quickly, break will feel longer.',
+    'Focus now, dream later.',
+    'One good answer and I am safe today.',
+    'Why is the bell always slower before lunch?',
+    'Stay calm, walk in, look prepared.',
     `I should ask about ${topic} later.`,
+    'Do not laugh at the next bad joke. Keep a straight face.',
+    'If I sit near the window I might actually listen better.',
+    'Remember: write the date first, panic second.',
+    'Lunch plan: queue early, avoid chaos, guard the chips.',
+    'If the teacher asks, I definitely revised... probably.',
+    'Need one clean answer and a confident nod.',
+    'Must stop doodling spaceships in the margin.',
+    'If I survive this period, I deserve legendary snacks.',
   ];
-  return Array.from({ length: 24 }, (_, idx) => {
+  return Array.from({ length: 36 }, (_, idx) => {
     const tone = tones[(idx + styleSeedFromName(entity.name || 'npc')) % tones.length];
     const template = thoughtTemplates[(idx * 2 + styleSeedFromName(entity.name || 'npc')) % thoughtTemplates.length];
     return `${tone} ${template}`;
@@ -1060,7 +1070,7 @@ const game = {
   keys: {},
   announcements: [],
   eventLog: [],
-  eventFilters: { action: true, speech: true },
+  eventFilters: { action: true, speech: true, thought: true, world: true },
   rng: Math.random,
   quizActive: null,
   lastClassQuestionAt: 0,
@@ -1927,7 +1937,7 @@ function pickWeeklyWeather() {
   game.weatherWeek = week;
   const keys = Object.keys(weatherModes);
   game.weather = keys[Math.floor(game.rng() * keys.length)] || 'sunny';
-  announce(`${weatherModes[game.weather].icon} New week weather: ${weatherModes[game.weather].label}.`, { force: true });
+  announce(`${weatherModes[game.weather].icon} New week weather: ${weatherModes[game.weather].label}.`, { force: true, feedType: 'world' });
   playSfx('weather');
   updateWeatherHud();
 }
@@ -2560,7 +2570,7 @@ function resetToSchoolMorning() {
   updateBladderHud();
   updateHygieneHud();
   updateWeatherHud();
-  announce('🌅 New school day: teachers arrive from the gate and form a single line left of the black divider while students queue to the right.');
+  announce('🌅 New school day: teachers arrive from the gate and form a single line left of the black divider while students queue to the right.', { feedType: 'world' });
   announce(`🗄️ Lockers ready: ${game.lockerCapacity} total, ${game.lockerCoverage}% of students issued keys.`, { force: true });
   if (game.dutyTeacherName) {
     announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
@@ -2674,7 +2684,18 @@ function canPlayerHearSpeaker(source, range) {
   return sameRoom || distance(source, player) <= range;
 }
 
+function isHeadmasterAddressActive(now = performance.now()) {
+  const current = schedule[game.periodIndex];
+  if (!isAssemblyPeriod(current)) return false;
+  const headmaster = game.entities.find((entity) => entity.role === 'teacher' && entity.name === 'Mr Wacker');
+  return Boolean(headmaster?.speech && headmaster.speech.until > now && entityRoom(headmaster) === 'Assembly Hall');
+}
+
 function canUseDialogue(entity, now, channel = 'speech') {
+  // During headmaster address windows, everyone else stays quiet in assembly.
+  if (channel === 'speech' && entity?.name !== 'Mr Wacker' && isHeadmasterAddressActive(now) && entityRoom(entity) === 'Assembly Hall') {
+    return false;
+  }
   const lastAt = channel === 'thought' ? (entity.lastThoughtAt || 0) : (entity.lastSpokeAt || 0);
   const inClassroom = channel === 'speech' && isSupervisedPeriod(schedule[game.periodIndex]) && entityRoom(entity) === schedule[game.periodIndex].room;
   const minInterval = inClassroom ? CLASSROOM_DIALOGUE_INTERVAL_MS : MIN_DIALOGUE_INTERVAL_MS;
@@ -2722,7 +2743,7 @@ function say(entity, text, opts = {}) {
   if (shouldLogSpeech) pushFeedEvent(`${entity.name}: ${spokenText}`, 'speech');
 }
 
-function think(entity, text, durationMs = 3200) {
+function think(entity, text, durationMs = 3200, opts = {}) {
   if (!entity || !text) return;
   const now = performance.now();
   if (!canUseDialogue(entity, now, 'thought')) return;
@@ -2730,6 +2751,12 @@ function think(entity, text, durationMs = 3200) {
   if (!markDialogueUsed(entity, thoughtText, 'thought')) return;
   entity.thought = { text: thoughtText, until: now + durationMs };
   entity.lastThoughtAt = now;
+
+  // Optional thought-feed mirror helps debug AI intent while staying filterable.
+  const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 7.2;
+  if (opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange)) {
+    pushFeedEvent(`💭 ${entity.name}: ${thoughtText}`, 'thought');
+  }
 }
 
 function tradeChanceFor(actor, partner, isPlayerInitiated = false) {
@@ -2870,6 +2897,7 @@ function drawRoundedBubble(x, y, lines, style) {
     paddingX, paddingY, lineHeight, radius,
     fillColor, strokeColor, shadowColor, shadowBlur,
     textColor, font, tailOffsetX = 10,
+    bubblyTail = false,
   } = style;
 
   ctx.font = font;
@@ -2891,15 +2919,32 @@ function drawRoundedBubble(x, y, lines, style) {
   ctx.restore();
 
   // Tail keeps speech/thought ownership clear while preserving the rounded card style.
-  ctx.fillStyle = fillColor;
-  ctx.strokeStyle = strokeColor;
-  ctx.beginPath();
-  ctx.moveTo(left + tailOffsetX, top + bubbleHeight);
-  ctx.lineTo(left + tailOffsetX + 8, top + bubbleHeight);
-  ctx.lineTo(left + tailOffsetX + 4, top + bubbleHeight + 8);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
+  if (bubblyTail) {
+    // Thought bubbles get smaller trailing circles so they read as "thinking" at a glance.
+    const bubbleTrail = [
+      { x: left + tailOffsetX + 6, y: top + bubbleHeight + 4, r: 3.6 },
+      { x: left + tailOffsetX + 11, y: top + bubbleHeight + 9, r: 2.7 },
+      { x: left + tailOffsetX + 15, y: top + bubbleHeight + 13, r: 2.1 },
+    ];
+    ctx.fillStyle = fillColor;
+    ctx.strokeStyle = strokeColor;
+    for (const bubble of bubbleTrail) {
+      ctx.beginPath();
+      ctx.arc(bubble.x, bubble.y, bubble.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  } else {
+    ctx.fillStyle = fillColor;
+    ctx.strokeStyle = strokeColor;
+    ctx.beginPath();
+    ctx.moveTo(left + tailOffsetX, top + bubbleHeight);
+    ctx.lineTo(left + tailOffsetX + 8, top + bubbleHeight);
+    ctx.lineTo(left + tailOffsetX + 4, top + bubbleHeight + 8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
 
   ctx.fillStyle = textColor;
   ctx.font = font;
@@ -2929,6 +2974,7 @@ function announce(message, options = {}) {
     source = null,
     range = 6.5,
     force = false,
+    feedType = 'action',
   } = options;
 
   // Speech-style events can be local so the feed reflects what Eric can realistically hear.
@@ -2940,7 +2986,7 @@ function announce(message, options = {}) {
 
   game.announcements.unshift(`[${formatTime(game.timeMinutes)}] ${message}`);
   game.announcements = game.announcements.slice(0, 12);
-  pushFeedEvent(message, 'action');
+  pushFeedEvent(message, feedType);
 }
 
 function getSfxContext() {
@@ -3423,16 +3469,16 @@ function setPeriod(index) {
   }
 
   game.bellRingingUntil = performance.now() + 3000;
-  announce(`🔔 Bell! ${current.period} in ${current.room}`);
+  announce(`🔔 Bell! ${current.period} in ${current.room}`, { feedType: 'world' });
   if (current.period === 'Lunch Break') {
-    announce('🍽️ Lunch service is open in the dining hall for 30 minutes.');
+    announce('🍽️ Lunch service is open in the dining hall for 30 minutes.', { feedType: 'world' });
   }
   if (isAssemblyPeriod(current)) {
     const headmaster = game.entities.find((entity) => entity.role === 'teacher' && entity.name === 'Mr Wacker');
     game.assemblyNextSpeechAt = performance.now() + 1400;
     game.assemblyHymnAt = performance.now() + 10000;
     game.assemblyUsedThoughts = new Set();
-    announce('🎤 Assembly begins: all students to seats, teachers behind the Headmaster.');
+    announce('🎤 Assembly begins: all students to seats, teachers behind the Headmaster.', { feedType: 'world' });
     if (headmaster) {
       say(headmaster, '📢 Good morning! Sit smartly for today\'s thought and hymn.', { force: true, durationMs: 3600 });
     }
@@ -3448,7 +3494,7 @@ function setPeriod(index) {
     }
   }
   if (current.period === 'Home Time') {
-    announce('🏠 Home time! Students may leave through the school gates.');
+    announce('🏠 Home time! Students may leave through the school gates.', { feedType: 'world' });
     announce('🎮 Want extra computer time? At the gates, press E to stay for one extra hour.', { force: true });
     game.choseToStayAfterSchool = false;
     game.stayingAfterSchoolUntil = 0;
@@ -4644,6 +4690,11 @@ function updateNpcVitals(entity, dt, isRunning) {
   // moments and appear to crawl for the rest of the day.
   const dtSeconds = dt / 1000;
   const deltaMins = (dt / 1000) * game.timeScale;
+
+  // Mr Mop and dinner ladies are service NPCs and should always stay responsive.
+  if (entity.role === 'janitor' || entity.role === 'dinnerLady') {
+    entity.energy = 100;
+  }
   // NPC bladder rises over time, slightly quicker while running.
   entity.bladder = Math.min(100, entity.bladder + deltaMins * (0.34 + (isRunning ? 0.2 : 0)));
 
@@ -4677,7 +4728,9 @@ function updateNpcVitals(entity, dt, isRunning) {
     && !isLunch;
 
   if (canRecoverFromMeal) {
-    entity.energy = Math.min(100, entity.energy + dtSeconds * recoverPerSecond);
+    entity.energy = entity.role === "janitor" || entity.role === "dinnerLady"
+      ? 100
+      : Math.min(100, entity.energy + dtSeconds * recoverPerSecond);
     return;
   }
 
@@ -4686,13 +4739,19 @@ function updateNpcVitals(entity, dt, isRunning) {
   const netDrainPerSecond = studentSeatedRecovery
     ? (drainRate - NPC_SEATED_RECOVER_PER_SECOND)
     : drainRate;
-  entity.energy = Math.max(16, Math.min(100, entity.energy - (dtSeconds * netDrainPerSecond)));
+  entity.energy = entity.role === "janitor" || entity.role === "dinnerLady"
+    ? 100
+    : Math.max(16, Math.min(100, entity.energy - (dtSeconds * netDrainPerSecond)));
 
   // Keep end-of-day fatigue believable: students should usually finish around ~30%.
   // This softly nudges energy toward a line from 100 at the start of day to 30 at home time.
   const dayProgress = schoolDayProgress();
   const baselineEnergy = 100 - ((100 - NPC_END_OF_DAY_ENERGY_TARGET) * dayProgress);
-  entity.energy = Math.max(16, Math.min(entity.energy, baselineEnergy));
+  if (entity.role === "janitor" || entity.role === "dinnerLady") {
+    entity.energy = 100;
+  } else {
+    entity.energy = Math.max(16, Math.min(entity.energy, baselineEnergy));
+  }
 
   const emotionDrift = entity.mood === 'furious' || entity.mood === 'angry' ? -0.9 : 0.35;
   entity.emotion = Math.max(0, Math.min(100, entity.emotion + (emotionDrift * dtSeconds)));
@@ -5049,7 +5108,7 @@ function updateAI(dt) {
       : (inLesson ? (entity.lessonRoom || current.room) : current.room);
     const inAssignedClassroom = inLesson && isStudent && entityRoom(entity) === expectedRoomNow;
     const walkingToClass = inLesson && isStudent && !inAssignedClassroom;
-    if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home' || walkingToClass) && isStudent && game.rng() < 0.018) {
+    if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home' || walkingToClass) && isStudent && game.rng() < 0.011) {
       ensureDialogueSetup(entity);
       const hallwayChatter = entity.dialogue.hallwayChatter || ['😆 Wait up, I am coming too!'];
       const line = pickFreshLine(entity, hallwayChatter, 'speech');
@@ -5081,13 +5140,13 @@ function updateAI(dt) {
         `🔕 ${entity.name}: volume down, or everyone gets lines.`,
       ];
       say(entity, quietCalls[Math.floor(game.rng() * quietCalls.length)], { durationMs: 3400 });
-      game.lessonQuietUntil = now + 4200;
+      game.lessonQuietUntil = now + 9000;
       game.lessonNoiseLevel = 0.04;
     }
 
     // Witty teacher comeback when a student asks a silly question.
-    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < 0.0009) {
-      const sillyQuestions = ['🙃 Sir, can we do homework in our dreams?', '😅 Miss, is zero afraid of minus numbers?', '🤔 If I eat my notes, do I absorb the lesson?'];
+    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < 0.00055) {
+      const sillyQuestions = ['🙃 Sir, can we do homework in our dreams?', '😅 Miss, is zero afraid of minus numbers?', '🤔 If I eat my notes, do I absorb the lesson?', '🧪 If we mix maths and music, do we get algebra beats?', '📏 Can I measure effort with a ruler and hand that in?', '🛰️ If I answer in space-voice, is it still correct?', '🍟 Is lunch technically a science experiment?', '🎭 If I act confident, do I get confidence marks?', '🦆 Is a duck in uniform allowed in assembly?', '📚 If I highlight everything, does that count as revision?', '🧠 Can my future self come sit this test for me?', '⏰ Can we have a two-minute break every two minutes?'];
       say(entity, sillyQuestions[Math.floor(game.rng() * sillyQuestions.length)], { durationMs: 3600 });
       const classTeacher = game.entities.find((candidate) => (
         candidate.role === 'teacher'
@@ -5096,7 +5155,7 @@ function updateAI(dt) {
       ));
       if (classTeacher) {
         classTeacher.speech = null;
-        say(classTeacher, ['😏 Nice try. If that worked, I would eat the exam keys.', '🧠 Creative, but knowledge still needs actual study.', '😂 Brilliant joke. Now give me the real answer.'][Math.floor(game.rng() * 3)], { durationMs: 3900 });
+        say(classTeacher, ['😏 Nice try. If that worked, I would eat the exam keys.', '🧠 Creative, but knowledge still needs actual study.', '😂 Brilliant joke. Now give me the real answer.', '📘 Funny. Write that in your comedy notebook, then answer properly.', '🪑 Stand-up career later, seat-work now.', '🎯 Good energy — aim it at the actual question.', '🧮 If jokes solved equations, you would be top set already.', '⏱️ Ten out of ten for timing, zero for accuracy so far.', '📝 Excellent imagination. I also need excellent handwriting and a real answer.', '🔍 I admire the chaos. I still need evidence and working out.', '🧑‍🏫 Gold star for confidence, now earn one for correctness.', '🎓 Keep the wit, lose the waffle. Answer the task.'][Math.floor(game.rng() * 12)], { durationMs: 3900 });
       }
     }
 
@@ -6512,6 +6571,7 @@ function drawEntities() {
         textColor: '#1d3557',
         font: '8px monospace',
         tailOffsetX: 12,
+        bubblyTail: true,
       });
     }
 
@@ -7160,6 +7220,18 @@ if (filterActionsEl) {
 if (filterSpeechEl) {
   filterSpeechEl.addEventListener('change', () => {
     game.eventFilters.speech = filterSpeechEl.checked;
+    renderEventFeed();
+  });
+}
+if (filterThoughtsEl) {
+  filterThoughtsEl.addEventListener('change', () => {
+    game.eventFilters.thought = filterThoughtsEl.checked;
+    renderEventFeed();
+  });
+}
+if (filterWorldEl) {
+  filterWorldEl.addEventListener('change', () => {
+    game.eventFilters.world = filterWorldEl.checked;
     renderEventFeed();
   });
 }
