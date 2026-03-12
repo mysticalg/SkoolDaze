@@ -427,6 +427,8 @@ const ROLE_VISUALS = {
 const NPC_BASE_DRAIN_PER_SECOND = 0.0475;
 const NPC_RUNNING_EXTRA_DRAIN_PER_SECOND = 0.145;
 const NPC_LUNCH_RECOVER_PER_SECOND = 0.16;
+// Seated students should slowly recover stamina during lessons instead of still draining.
+const NPC_SEATED_RECOVER_PER_SECOND = 0.08;
 const NPC_END_OF_DAY_ENERGY_TARGET = 30;
 const TOTAL_DAY_GAME_MINUTES = schedule.reduce((sum, period) => sum + period.mins, 0);
 
@@ -4252,13 +4254,12 @@ function updateNpcVitals(entity, dt, isRunning) {
     return;
   }
 
-  if (studentSeatedRecovery) {
-    // Gentle seated recovery keeps classroom stamina believable without making seats overpowered.
-    entity.energy = Math.min(100, entity.energy + dtSeconds * 0.045);
-  }
-
   const drainRate = baseDrainPerSecond + (isRunning ? runningExtraDrainPerSecond : 0);
-  entity.energy = Math.max(16, entity.energy - dtSeconds * drainRate);
+  // Apply seated recovery against passive drain so resting pupils gain energy gradually.
+  const netDrainPerSecond = studentSeatedRecovery
+    ? (drainRate - NPC_SEATED_RECOVER_PER_SECOND)
+    : drainRate;
+  entity.energy = Math.max(16, Math.min(100, entity.energy - (dtSeconds * netDrainPerSecond)));
 
   // Keep end-of-day fatigue believable: students should usually finish around ~30%.
   // This softly nudges energy toward a line from 100 at the start of day to 30 at home time.
