@@ -61,6 +61,7 @@ const optLlmRemoteProviderEl = document.getElementById('optLlmRemoteProvider');
 const optLlmRemoteModelEl = document.getElementById('optLlmRemoteModel');
 const optLlmRemoteTokenEl = document.getElementById('optLlmRemoteToken');
 const optLlmRefreshModelsEl = document.getElementById('optLlmRefreshModels');
+const optLlmImportModelsEl = document.getElementById('optLlmImportModels');
 const optLlmOpenAiAuthEl = document.getElementById('optLlmOpenAiAuth');
 const optLlmClearTokenEl = document.getElementById('optLlmClearToken');
 const optLlmTokenStatusEl = document.getElementById('optLlmTokenStatus');
@@ -1177,6 +1178,7 @@ function persistLlmSettings() {
       source: game.llm.source,
       selectedModel: game.llm.selectedModel,
       localEndpoint: game.llm.localEndpoint,
+      manualModels: game.llm.manualModels || [],
       remoteProvider: game.llm.remoteProvider,
       remoteModel: game.llm.remoteModel,
       remoteToken: game.llm.remoteToken,
@@ -1194,6 +1196,7 @@ function loadLlmSettings() {
     game.llm.source = saved.source === 'remote' ? 'remote' : 'local';
     game.llm.selectedModel = sanitizeLlmLine(saved.selectedModel, '');
     game.llm.localEndpoint = sanitizeLlmLine(saved.localEndpoint, OLLAMA_DEFAULT_ENDPOINT);
+    game.llm.manualModels = Array.isArray(saved.manualModels) ? saved.manualModels.map((m) => sanitizeLlmLine(m, '')).filter(Boolean) : [];
     game.llm.remoteProvider = saved.remoteProvider === 'grok' ? 'grok' : 'openai';
     game.llm.remoteModel = sanitizeLlmLine(saved.remoteModel, game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini');
     game.llm.remoteToken = sanitizeLlmLine(saved.remoteToken, '');
@@ -1222,6 +1225,7 @@ function applyLlmUiState() {
   if (optLlmModelEl) optLlmModelEl.disabled = !isLocal || !game.llm.availableModels.length;
   if (optLlmLocalEndpointEl) optLlmLocalEndpointEl.disabled = !isLocal;
   if (optLlmRefreshModelsEl) optLlmRefreshModelsEl.disabled = !isLocal;
+  if (optLlmImportModelsEl) optLlmImportModelsEl.disabled = !isLocal;
   if (optLlmRemoteProviderEl) optLlmRemoteProviderEl.disabled = !isRemote;
   if (optLlmRemoteModelEl) optLlmRemoteModelEl.disabled = !isRemote;
   if (optLlmRemoteTokenEl) optLlmRemoteTokenEl.disabled = !isRemote;
@@ -1266,6 +1270,38 @@ function classifyOllamaError(error) {
   // Browser CORS/mixed-content failures often surface as generic network errors.
   if (window.location.protocol === 'https:') return 'mixed-content-or-cors';
   return 'network-or-cors';
+}
+
+function parseOllamaListOutput(rawText = '') {
+  // Accept pasted `ollama list` output and extract model names from the first column.
+  const lines = String(rawText || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const models = [];
+  for (const line of lines) {
+    if (/^name\s+id\s+size\s+modified/i.test(line)) continue;
+    if (/^models?\s+in/i.test(line)) continue;
+    const first = line.split(/\s+/)[0] || '';
+    if (!first || first.toLowerCase() === 'name') continue;
+    if (/^[\-–—]+$/.test(first)) continue;
+    models.push(first);
+  }
+  return Array.from(new Set(models));
+}
+
+function importManualOllamaModels() {
+  const pasted = window.prompt("Paste the output of 'ollama list' from your terminal:");
+  if (!pasted) return;
+  const models = parseOllamaListOutput(pasted);
+  if (!models.length) {
+    setLlmStatus('⚠️ Could not parse model names from pasted text. Please paste full `ollama list` output.', true);
+    return;
+  }
+  game.llm.manualModels = models;
+  game.llm.availableModels = models;
+  if (!game.llm.selectedModel || !models.includes(game.llm.selectedModel)) game.llm.selectedModel = models[0];
+  updateLlmModelSelect(models);
+  if (optLlmModelEl) optLlmModelEl.value = game.llm.selectedModel;
+  persistLlmSettings();
+  setLlmStatus(`✅ Imported ${models.length} model(s) from pasted ollama list.`);
 }
 
 function updateLlmModelSelect(models = []) {
@@ -1345,7 +1381,7 @@ async function refreshOllamaModels({ silent = false } = {}) {
     const corsHint = errorType === 'mixed-content-or-cors' || errorType === 'network-or-cors'
       ? ` If Ollama is running, allow this origin in Ollama (OLLAMA_ORIGINS) and ensure HTTP pages call HTTP Ollama endpoints. ${originHint}`
       : '';
-    setLlmStatus(`⚠️ Could not reach Ollama at ${candidates.join(', ')}.${corsHint} Using built-in text.`, true);
+    setLlmStatus(`⚠️ Could not reach Ollama at ${candidates.join(', ')}.${corsHint} The folder path (e.g. C:\\Users\\...\\.ollama\\models) is valid for Ollama, but browsers cannot read it directly — use API access or import from 'ollama list'. Using built-in text.`, true);
   }
 }
 
@@ -1617,6 +1653,7 @@ const game = {
     selectedModel: '',
     availableModels: [],
     localEndpoint: OLLAMA_DEFAULT_ENDPOINT,
+    manualModels: [],
     remoteProvider: 'openai',
     remoteModel: 'gpt-4.1-mini',
     remoteToken: '',
@@ -8202,6 +8239,10 @@ if (optLlmRefreshModelsEl) {
   optLlmRefreshModelsEl.addEventListener('click', () => refreshOllamaModels());
 }
 
+if (optLlmImportModelsEl) {
+  optLlmImportModelsEl.addEventListener('click', importManualOllamaModels);
+}
+
 if (optLlmOpenAiAuthEl) {
   optLlmOpenAiAuthEl.addEventListener('click', startOpenAiOauth);
 }
@@ -8218,6 +8259,10 @@ if (optLlmClearTokenEl) {
 }
 
 handleOpenAiOauthCallback();
+if (Array.isArray(game.llm.manualModels) && game.llm.manualModels.length) {
+  game.llm.availableModels = game.llm.manualModels.slice();
+  updateLlmModelSelect(game.llm.availableModels);
+}
 applyLlmUiState();
 refreshOllamaModels({ silent: true });
 
