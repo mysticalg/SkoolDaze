@@ -177,12 +177,16 @@ const roomDoors = rooms
     };
   });
 
-// Each teaching floor gets a locker bank so students can store books nearby.
+// Lockers are split to corridor ends so stair landings remain clear for traffic.
 const lockerBanks = [
-  { label: 'Upper Lockers', floor: 'upper', room: 'Upper Corridor', x: 18, y: 17, capacity: 18 },
-  { label: 'Middle Lockers', floor: 'middle', room: 'Middle Corridor', x: 24, y: 52, capacity: 22 },
-  { label: 'Ground Lockers', floor: 'ground', room: 'Ground Corridor', x: 30, y: 78, capacity: 26 },
-  { label: 'Lower Lockers', floor: 'lower', room: 'Lower Corridor', x: 36, y: 112, capacity: 20 },
+  { label: 'Upper West Lockers', floor: 'upper', room: 'Upper Corridor', x: 7, y: 17, capacity: 9, columns: 5 },
+  { label: 'Upper East Lockers', floor: 'upper', room: 'Upper Corridor', x: 151, y: 17, capacity: 9, columns: 5 },
+  { label: 'Middle West Lockers', floor: 'middle', room: 'Middle Corridor', x: 7, y: 52, capacity: 11, columns: 5 },
+  { label: 'Middle East Lockers', floor: 'middle', room: 'Middle Corridor', x: 151, y: 52, capacity: 11, columns: 5 },
+  { label: 'Ground West Lockers', floor: 'ground', room: 'Ground Corridor', x: 7, y: 78, capacity: 13, columns: 5 },
+  { label: 'Ground East Lockers', floor: 'ground', room: 'Ground Corridor', x: 151, y: 78, capacity: 13, columns: 5 },
+  { label: 'Lower West Lockers', floor: 'lower', room: 'Lower Corridor', x: 7, y: 112, capacity: 10, columns: 5 },
+  { label: 'Lower East Lockers', floor: 'lower', room: 'Lower Corridor', x: 151, y: 112, capacity: 10, columns: 5 },
 ];
 
 const lockers = [];
@@ -1332,14 +1336,15 @@ function createLockerPlanForStudents(students) {
 
   let lockerId = 1;
   for (const bank of lockerBanks) {
+    const bankColumns = Math.max(1, bank.columns || 10);
     for (let i = 0; i < bank.capacity; i += 1) {
       lockers.push({
         id: `L-${String(lockerId).padStart(3, '0')}`,
         bank: bank.label,
         floor: bank.floor,
         room: bank.room,
-        x: bank.x + (i % 10) * 2.15,
-        y: bank.y + Math.floor(i / 10) * 1.35,
+        x: bank.x + (i % bankColumns) * 2.15,
+        y: bank.y + Math.floor(i / bankColumns) * 1.35,
         assignedTo: null,
       });
       lockerId += 1;
