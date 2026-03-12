@@ -135,6 +135,12 @@
     <!-- Keep gameplay hints in Help so all player-facing guidance is found in one consistent location. -->
     <section class="canvas-wrap">
       <canvas id="game" width="1280" height="700" aria-label="School game area"></canvas>
+      <div id="dayTransitionOverlay" class="day-transition-overlay" aria-live="polite" hidden>
+        <div class="day-transition-card">
+          <h3 id="dayTransitionTitle">🌙 Night falls</h3>
+          <p id="dayTransitionBody">Students leave campus. A new day is preparing…</p>
+        </div>
+      </div>
       <div id="entityTooltip" class="entity-tooltip" role="status" aria-live="polite" hidden></div>
       <section id="classQuestionPanel" class="class-question-panel" hidden aria-live="polite">
         <header>

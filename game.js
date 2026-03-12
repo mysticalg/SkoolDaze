@@ -41,6 +41,9 @@ const classQuestionTitleEl = document.getElementById('classQuestionTitle');
 const classQuestionCountdownEl = document.getElementById('classQuestionCountdown');
 const classQuestionPromptEl = document.getElementById('classQuestionPrompt');
 const classQuestionChoicesEl = document.getElementById('classQuestionChoices');
+const dayTransitionOverlayEl = document.getElementById('dayTransitionOverlay');
+const dayTransitionTitleEl = document.getElementById('dayTransitionTitle');
+const dayTransitionBodyEl = document.getElementById('dayTransitionBody');
 const filterActionsEl = document.getElementById('filterActions');
 const filterSpeechEl = document.getElementById('filterSpeech');
 const filterThoughtsEl = document.getElementById('filterThoughts');
@@ -622,6 +625,7 @@ const floorMeta = {
 };
 
 const schoolExit = { x: 159.2, yMin: 84, yMax: 107 };
+const DAY_TRANSITION_MS = 4600;
 // Morning lineup geometry in the field: students queue on the right, teachers on the left.
 const morningQueue = {
   dividerInsetFromFieldLeft: 35,
@@ -1367,7 +1371,7 @@ const OLLAMA_DEFAULT_ENDPOINT = 'http://127.0.0.1:11434';
 const OPENAI_API_BASE = 'https://api.openai.com/v1';
 const GROK_API_BASE = 'https://api.x.ai/v1';
 const LLM_DEFAULT_TIMEOUT_MS = 3800;
-const LLM_MAX_INFLIGHT = 4;
+const LLM_MAX_INFLIGHT = 6;
 const LLM_STORAGE_KEY = 'skooldaze.llm.settings.v1';
 
 const LLM_GAME_PRIMER = [
@@ -1442,11 +1446,12 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = LLM_DEFAULT_TIMEO
 }
 
 function llmTimeoutForPayload(payload = {}) {
-  if (payload.channel === 'quiz') return 5600;
-  if (payload.channel === 'speech') return 4300;
-  if (payload.channel === 'thought') return 4200;
-  if (payload.channel === 'social') return 3200;
-  return LLM_DEFAULT_TIMEOUT_MS;
+  const pressureBonus = game?.llm?.inFlight?.size >= 4 ? 1000 : game?.llm?.inFlight?.size >= 2 ? 450 : 0;
+  if (payload.channel === 'quiz') return 6200 + pressureBonus;
+  if (payload.channel === 'speech') return 5200 + pressureBonus;
+  if (payload.channel === 'thought') return 5000 + pressureBonus;
+  if (payload.channel === 'social') return 3800 + Math.round(pressureBonus * 0.6);
+  return LLM_DEFAULT_TIMEOUT_MS + pressureBonus;
 }
 
 function effectiveLocalModelName() {
@@ -1823,8 +1828,14 @@ function buildLlmPrompt({
     ? `Address ${addresseeName} by name in the line (example style: "${addresseeName}, ...").`
     : null;
 
+  const underLoad = (game.llm.inFlight.size >= Math.max(2, LLM_MAX_INFLIGHT - 2))
+    && (channel === 'speech' || channel === 'thought' || channel === 'announcement');
+  const primer = underLoad
+    ? 'Fast mode: keep output extremely short and adapt fallback if uncertain.'
+    : LLM_GAME_PRIMER;
+
   return [
-    LLM_GAME_PRIMER,
+    primer,
     'You write concise text for a school simulation game.',
     'Pretend you are the exact character below speaking in first person voice.',
     styleGuide,
@@ -1915,7 +1926,20 @@ async function generateLlmText(payload) {
   }
 }
 
-function queueLlmText(payload) {
+function llmBacklogHasKey(key = '') {
+  return (game.llm.backlog || []).some((item) => item.key === key);
+}
+
+function drainLlmBacklog() {
+  if (!llmModeEnabled()) return;
+  while (game.llm.inFlight.size < LLM_MAX_INFLIGHT && game.llm.backlog.length) {
+    const next = game.llm.backlog.shift();
+    if (!next?.payload) continue;
+    queueLlmText(next.payload, { fromBacklog: true });
+  }
+}
+
+function queueLlmText(payload, options = {}) {
   if (!llmModeEnabled()) return;
   const key = llmCacheKey(payload);
   if (game.llm.cache.has(key)) {
@@ -1926,8 +1950,13 @@ function queueLlmText(payload) {
     pushLlmDebug(`⏳ Request already in-flight [${payload.channel}] key=${summarizeForLlmDebug(key, 64)}`);
     return;
   }
+  if (llmBacklogHasKey(key)) return;
   if (game.llm.inFlight.size >= LLM_MAX_INFLIGHT) {
-    pushLlmDebug(`🚦 LLM queue saturated (${game.llm.inFlight.size}/${LLM_MAX_INFLIGHT}); skipped [${payload.channel}]`, 'warn');
+    if (!options.fromBacklog) {
+      game.llm.backlog.push({ key, payload });
+      // Queue (not skip) overflow work so speech/thought can arrive once slots free up.
+      pushLlmDebug(`🚦 LLM queue saturated (${game.llm.inFlight.size}/${LLM_MAX_INFLIGHT}); queued [${payload.channel}]`, 'warn');
+    }
     return;
   }
   game.llm.inFlight.add(key);
@@ -1942,6 +1971,7 @@ function queueLlmText(payload) {
     }
   }).finally(() => {
     game.llm.inFlight.delete(key);
+    drainLlmBacklog();
   });
 }
 
@@ -2187,6 +2217,7 @@ const game = {
     inFlight: new Set(),
     debugLog: [],
     sessionPrimedForProvider: '',
+    backlog: [],
   },
   rng: Math.random,
   quizActive: null,
@@ -2264,6 +2295,10 @@ const game = {
   headmasterDetentionUntil: 0,
   headmasterDismissAnnounced: false,
   schoolHistory: [],
+  endDaySequenceActive: false,
+  transitionUntil: 0,
+  despawnedStudentsToday: 0,
+  nightCutscenePlayedToday: false,
   lastCollectableSpawnAt: 0,
   collectables: [],
   lockerCoverage: 0,
@@ -3721,6 +3756,11 @@ function resetToSchoolMorning() {
   game.assemblyUsedThoughts = new Set();
   game.dailyAssemblyHymn = null;
   game.dailyAssemblyHymnDay = 0;
+  game.endDaySequenceActive = false;
+  game.transitionUntil = 0;
+  game.despawnedStudentsToday = 0;
+  game.nightCutscenePlayedToday = false;
+  game.llm.backlog = [];
 
   if (game.dayCount > 1 && game.dayCount % TOILET_BLOCK_INTERVAL_DAYS === 0) {
     game.toiletsBlocked = true;
@@ -4334,7 +4374,8 @@ function renderEventFeed() {
 }
 
 function pushFeedEvent(message, type = 'action', timeMins = game.timeMinutes) {
-  game.eventLog.unshift({ message: String(message), type, time: formatTime(timeMins) });
+  const safeMessage = sanitizeLlmLine(message, '…');
+  game.eventLog.unshift({ message: safeMessage, type, time: formatTime(timeMins) });
   game.eventLog = game.eventLog.slice(0, 64);
   renderEventFeed();
 }
@@ -4358,15 +4399,16 @@ function announce(message, options = {}) {
     room: source ? entityRoom(source) : (schedule[game.periodIndex]?.room || 'School'),
     fallback: String(message),
   });
+  const safeMessage = sanitizeLlmLine(finalMessage, String(message));
 
   if (source) {
-    const spoken = String(finalMessage).replace(/^.*?:\s*"?/, '').replace(/"$/, '').trim();
+    const spoken = safeMessage.replace(/^.*?:\s*"?/, '').replace(/"$/, '').trim();
     say(source, spoken || '...');
   }
 
-  game.announcements.unshift(`[${formatTime(game.timeMinutes)}] ${finalMessage}`);
+  game.announcements.unshift(`[${formatTime(game.timeMinutes)}] ${safeMessage}`);
   game.announcements = game.announcements.slice(0, 12);
-  pushFeedEvent(finalMessage, feedType);
+  pushFeedEvent(safeMessage, feedType);
 }
 
 function getSfxContext() {
@@ -4914,13 +4956,13 @@ function setPeriod(index) {
     }
   }
   if (current.period === 'Home Time') {
-    announce('🏠 Home time! Students may leave through the school gates.', { feedType: 'world' });
+    announce('🏠 Home time (4:30–5:00)! Students head to the gates and leave campus.', { feedType: 'world' });
     announce('🎮 Want extra computer time? At the gates, press E to stay for one extra hour.', { force: true });
     game.choseToStayAfterSchool = false;
     game.stayingAfterSchoolUntil = 0;
   }
   if (current.period === 'End Day') {
-    announce('🌙 End of day bell. Campus is closing.');
+    announce('🌙 End of day window: once all students have despawned, a new morning starts.', { feedType: 'world' });
   }
   periodEl.textContent = `🔔 Period: ${current.period}`;
   roomTargetEl.textContent = `📍 Target: ${current.room}`;
@@ -7300,6 +7342,83 @@ function updateSchedule(dt) {
   updateFloorStatus();
 }
 
+
+function isStudentDespawningAtGate(entity) {
+  if (!entity || !isStudentCharacter(entity) || entity === player) return false;
+  const room = entityRoom(entity);
+  return room === 'School Gates' && entity.x >= (schoolExit.x - 0.35) && entity.y >= schoolExit.yMin && entity.y <= schoolExit.yMax;
+}
+
+function updateDayTransitionOverlay(now = performance.now()) {
+  if (!dayTransitionOverlayEl) return;
+  const active = game.endDaySequenceActive && now < (game.transitionUntil || 0);
+  dayTransitionOverlayEl.hidden = !active;
+  if (!active) return;
+  const progress = 1 - Math.max(0, Math.min(1, (game.transitionUntil - now) / DAY_TRANSITION_MS));
+  if (dayTransitionTitleEl) {
+    dayTransitionTitleEl.textContent = progress < 0.55 ? '🌙 Night falls over school' : '🌅 A fresh morning begins';
+  }
+  if (dayTransitionBodyEl) {
+    dayTransitionBodyEl.textContent = progress < 0.55
+      ? 'Students are heading home. Classrooms settle into silence…'
+      : `Day ${game.dayCount + 1} is preparing. Bags packed, bells resetting.`;
+  }
+}
+
+function beginEndOfDayTransition() {
+  if (game.endDaySequenceActive) return;
+  game.endDaySequenceActive = true;
+  game.transitionUntil = performance.now() + DAY_TRANSITION_MS;
+  announce('🌙 Night passes… books close, lights dim, and the school resets for morning.', { force: true, feedType: 'world' });
+  updateDayTransitionOverlay();
+}
+
+function maybeCompleteEndDayByDespawn() {
+  const current = schedule[game.periodIndex];
+  if (current.period !== 'Home Time' && current.period !== 'End Day') return;
+
+  const remainingStudents = game.entities.filter((entity) => (
+    isStudentCharacter(entity)
+    && entity !== player
+    && entity.arrivedForDay
+  ));
+
+  if (!remainingStudents.length) {
+    beginEndOfDayTransition();
+    return;
+  }
+
+  for (const student of remainingStudents) {
+    if (!isStudentDespawningAtGate(student)) continue;
+    student.arrivedForDay = false;
+    // Move despawned students off-map so they stop colliding/thinking/queuing this day.
+    student.x = schoolExit.x + 10;
+    student.y = schoolExit.yMax + 8;
+    student.target = null;
+    student.vx = 0;
+    student.vy = 0;
+    student.isSeated = false;
+    student.seatedRoom = null;
+    student.speech = null;
+    student.thought = null;
+    student.pendingSpeech = null;
+    student.pendingThought = null;
+    game.despawnedStudentsToday += 1;
+    if (game.despawnedStudentsToday % 5 === 0) {
+      announce(`🚶 ${game.despawnedStudentsToday} students have now left campus.`, { feedType: 'world' });
+    }
+  }
+
+  const leftOnCampus = game.entities.some((entity) => (
+    isStudentCharacter(entity)
+    && entity !== player
+    && entity.arrivedForDay
+  ));
+  if (!leftOnCampus) {
+    beginEndOfDayTransition();
+  }
+}
+
 function checkSchoolExit() {
   // Leaving via the gate triggers immediate discipline and a forced return.
   const current = schedule[game.periodIndex];
@@ -7311,9 +7430,12 @@ function checkSchoolExit() {
         player.y = 90;
         return;
       }
-      announce('✅ Eric leaves at home time. School day complete.');
-      game.dayCount += 1;
-      resetToSchoolMorning();
+      if (!game.endDaySequenceActive) {
+        announce('🚪 Wait for all students to leave first. Day rollover starts automatically once campus is empty.', { feedType: 'world' });
+        player.x = schoolExit.x - 2.2;
+        player.y = 90;
+        return;
+      }
       return;
     }
 
@@ -8777,7 +8899,13 @@ function loop(now) {
   const dt = Math.min(32, now - last);
   last = now;
 
-  if (!game.paused) {
+  if (game.endDaySequenceActive && now >= game.transitionUntil) {
+    game.nightCutscenePlayedToday = true;
+    game.dayCount += 1;
+    resetToSchoolMorning();
+  }
+
+  if (!game.paused && !game.endDaySequenceActive) {
     updateBellRingSfx(now);
     handleInput(dt);
 
@@ -8802,6 +8930,7 @@ function loop(now) {
     }
 
     updateAI(dt);
+    drainLlmBacklog();
     updateCollectables(now);
     updateWeatherFx(dt);
     updateBoardWriting(dt);
@@ -8810,6 +8939,7 @@ function loop(now) {
     updateMedicalSystem();
     updateJanitorSystems(dt);
     updateSchedule(dt);
+    maybeCompleteEndDayByDespawn();
     checkSchoolExit();
     updateBladder(dt);
     maybeShameEric(now);
@@ -8829,6 +8959,7 @@ function loop(now) {
   drawEntities();
   drawMiniMap();
   drawStatusOverlay();
+  updateDayTransitionOverlay(now);
 
   requestAnimationFrame(loop);
 }
