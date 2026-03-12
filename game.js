@@ -513,6 +513,8 @@ const NPC_LUNCH_RECOVER_PER_SECOND = 0.16;
 // Seated students should slowly recover stamina during lessons instead of still draining.
 const NPC_SEATED_RECOVER_PER_SECOND = 0.08;
 const NPC_END_OF_DAY_ENERGY_TARGET = 30;
+// Keep one spare seat in active classrooms so displaced students can re-seat cleanly.
+const LESSON_SPARE_SEATS_PER_ROOM = 1;
 const TOTAL_DAY_GAME_MINUTES = schedule.reduce((sum, period) => sum + period.mins, 0);
 
 // Period helpers keep schedule checks readable when timetable labels change.
@@ -3828,8 +3830,6 @@ function nearestTradePartner(entity, range = 2.3) {
   }
   return best;
 }
-const LESSON_SPARE_SEATS_PER_ROOM = 1;
-
 function roomHasOpenSeat(roomName, student) {
   const layout = getRoomSeatLayout(roomName);
   if (!layout || !layout.seats.length) return false;
