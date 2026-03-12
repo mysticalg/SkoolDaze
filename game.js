@@ -1778,23 +1778,31 @@ function buildLlmPrompt({
     ? 'Write a short first-person thought bubble. Keep it under 14 words.'
     : channel === 'quiz'
       ? 'Write ONE school class question with 4 choices and a correct answer as JSON.'
+      : channel === 'hymn'
+        ? 'Return ONLY JSON hymn content with verse+chorus and silly remix verse+chorus.'
       : channel === 'social'
         ? 'Return ONLY JSON social directive: {"intent":"ally|tease|avoid|follow|defend","bondDelta":-3..3,"line":"short line"}.'
       : channel === 'announcement'
         ? 'Write a short school PA/news style line. Keep it under 14 words.'
         : 'Write a short in-world school dialogue line. Keep it under 14 words.';
 
-  if (channel === 'quiz' || channel === 'social') {
+  if (channel === 'quiz' || channel === 'social' || channel === 'hymn') {
     return [
-      channel === 'social'
-        ? 'You are coordinating NPC social behaviour for a playful British school simulation.'
-        : 'You are writing classroom quiz content for a playful British school game.',
-      channel === 'social'
-        ? 'Respond ONLY as JSON: {"intent":"ally|tease|avoid|follow|defend","bondDelta":-3..3,"line":"..."}.'
-        : 'Respond ONLY as JSON: {"q":"...","choices":["A","B","C","D"],"answer":"..."}.',
-      channel === 'social'
-        ? 'Keep line under 12 words and in-character. No markdown.'
-        : 'The answer must exactly match one of the choices. No markdown.',
+      channel === 'hymn'
+        ? 'You are writing a short British school assembly hymn about Jesus for children.'
+        : channel === 'social'
+          ? 'You are coordinating NPC social behaviour for a playful British school simulation.'
+          : 'You are writing classroom quiz content for a playful British school game.',
+      channel === 'hymn'
+        ? 'Respond ONLY as JSON: {"verse":"...","chorus":"...","sillyVerse":"...","sillyChorus":"..."}.'
+        : channel === 'social'
+          ? 'Respond ONLY as JSON: {"intent":"ally|tease|avoid|follow|defend","bondDelta":-3..3,"line":"..."}.'
+          : 'Respond ONLY as JSON: {"q":"...","choices":["A","B","C","D"],"answer":"..."}.',
+      channel === 'hymn'
+        ? 'Each field should be one short singable line (under 14 words). No markdown.'
+        : channel === 'social'
+          ? 'Keep line under 12 words and in-character. No markdown.'
+          : 'The answer must exactly match one of the choices. No markdown.',
       `Subject: ${subject}. Room: ${room}. Teacher context: ${speaker}.`,
       `Teacher role: ${speakerRole}. Traits snapshot: ${traitSummary}.`,
       addresseeName ? `Directed at: ${addresseeName} (${addresseeRole || 'character'}).` : null,
@@ -1957,6 +1965,88 @@ function parseJsonFromLlm(rawText) {
     }
     return null;
   }
+}
+
+function defaultDailyHymn() {
+  return {
+    verse: 'Jesus, guide our steps today, keep us kind and true.',
+    chorus: 'Alleluia, Jesus leads us; we will follow through.',
+    sillyVerse: 'Jesus loves our wonky socks and lunchbox crumbs too.',
+    sillyChorus: 'Alleluia, clap off-beat, still grateful through and through.',
+  };
+}
+
+function resolveLlmDailyHymn() {
+  const fallback = defaultDailyHymn();
+  if (!llmModeEnabled()) return fallback;
+  const payload = {
+    channel: 'hymn',
+    subject: `Assembly Day ${game.dayCount}`,
+    speaker: 'Mr Wacker',
+    speakerRole: 'teacher',
+    traitSummary: 'discipline:92, honor:84, friendly:66',
+    room: 'Assembly Hall',
+    fallback: `verse:${fallback.verse} chorus:${fallback.chorus}`,
+  };
+  const key = llmCacheKey(payload);
+  const cached = game.llm.cache.get(key);
+  if (!cached) {
+    queueLlmText(payload);
+    return fallback;
+  }
+  const parsed = parseJsonFromLlm(cached);
+  if (!parsed) return fallback;
+  return {
+    verse: sanitizeLlmLine(parsed.verse, fallback.verse),
+    chorus: sanitizeLlmLine(parsed.chorus, fallback.chorus),
+    sillyVerse: sanitizeLlmLine(parsed.sillyVerse, fallback.sillyVerse),
+    sillyChorus: sanitizeLlmLine(parsed.sillyChorus, fallback.sillyChorus),
+  };
+}
+
+function primeDailyAssemblyHymn() {
+  if (!llmModeEnabled()) {
+    game.dailyAssemblyHymn = defaultDailyHymn();
+    game.dailyAssemblyHymnDay = game.dayCount;
+    return;
+  }
+  if (game.dailyAssemblyHymnDay === game.dayCount) return;
+  game.dailyAssemblyHymn = resolveLlmDailyHymn();
+  game.dailyAssemblyHymnDay = game.dayCount;
+}
+
+function assemblyStudentVoices() {
+  return game.entities.filter((entity) => isStudentCharacter(entity) && entity.role !== 'player' && entityRoom(entity) === 'Assembly Hall');
+}
+
+function runAssemblyCallAndResponse(now, headmaster) {
+  const voices = assemblyStudentVoices();
+  const yesLine = 'Yes Headmaster!';
+  for (const student of voices) {
+    if (game.rng() < 0.72) say(student, yesLine, { force: true, allowAssemblySpeech: true, durationMs: 1500, logToFeed: false });
+  }
+  // Single feed line avoids flooding while still showing group response happened.
+  pushFeedEvent(`🧑‍🎓 Assembly: ${yesLine}`, 'world');
+  game.assemblyNextSpeechAt = now + 9200;
+}
+
+function runAssemblyHymn(now, headmaster) {
+  primeDailyAssemblyHymn();
+  const hymn = game.dailyAssemblyHymn || defaultDailyHymn();
+  const silly = game.rng() < 0.42;
+  const verse = silly ? hymn.sillyVerse : hymn.verse;
+  const chorus = silly ? hymn.sillyChorus : hymn.chorus;
+
+  say(headmaster, '🎵 Hymn time! Verse then chorus together, voices up.', { force: true, durationMs: 3200 });
+
+  const voices = assemblyStudentVoices();
+  for (const student of voices) {
+    if (game.rng() < 0.9) say(student, `🎶 ${verse}`, { force: true, allowAssemblySpeech: true, durationMs: 2200, logToFeed: false });
+    if (game.rng() < 0.95) say(student, `🎵 ${chorus}`, { force: true, allowAssemblySpeech: true, durationMs: 2400, logToFeed: false });
+  }
+
+  pushFeedEvent(`🎼 Assembly hymn (${silly ? 'silly remix' : 'standard'}): ${verse} / ${chorus}`, 'world');
+  game.assemblyHymnAt = now + 22000;
 }
 
 function resolveLlmText(payload, options = {}) {
@@ -2132,6 +2222,8 @@ const game = {
   assemblyNextSpeechAt: 0,
   assemblyHymnAt: 0,
   assemblyUsedThoughts: new Set(),
+  dailyAssemblyHymn: null,
+  dailyAssemblyHymnDay: 0,
   // Dinner lady lunchtime behaviour state for field supervision + interventions.
   dinnerLadyLastWhistleAt: 0,
   weather: 'sunny',
@@ -3580,6 +3672,8 @@ function resetToSchoolMorning() {
   game.assemblyNextSpeechAt = 0;
   game.assemblyHymnAt = 0;
   game.assemblyUsedThoughts = new Set();
+  game.dailyAssemblyHymn = null;
+  game.dailyAssemblyHymnDay = 0;
 
   if (game.dayCount > 1 && game.dayCount % TOILET_BLOCK_INTERVAL_DAYS === 0) {
     game.toiletsBlocked = true;
@@ -3913,6 +4007,8 @@ function say(entity, text, opts = {}) {
   // Keep off-screen NPCs silent to reduce LLM queue pressure and maintain local readability.
   if (entity.role !== 'player' && !isEntityVisibleToPlayer(entity) && !opts.allowOffscreenSpeech) return;
   if (!opts.force && !canUseDialogue(entity, now, 'speech')) return;
+  const currentPeriod = schedule[game.periodIndex];
+  if (isAssemblyPeriod(currentPeriod) && entityRoom(entity) === 'Assembly Hall' && entity.name !== 'Mr Wacker' && !opts.allowAssemblySpeech) return;
   // Some pupils are naturally quiet; they often skip optional chatter.
   const silenceBias = clampScore(55 - ((entity.traits?.friendly || 40) * 0.28) - ((entity.traits?.funny || 40) * 0.18) + ((entity.traits?.discipline || 40) * 0.08), 8, 70);
   if (!opts.force && Math.random() < (silenceBias / 100)) return;
@@ -4723,6 +4819,7 @@ function setPeriod(index) {
     game.assemblyNextSpeechAt = performance.now() + 1400;
     game.assemblyHymnAt = performance.now() + 10000;
     game.assemblyUsedThoughts = new Set();
+    primeDailyAssemblyHymn();
     announce('🎤 Assembly begins: all students to seats, teachers behind the Headmaster.', { feedType: 'world' });
     if (headmaster) {
       say(headmaster, '📢 Good morning! Sit smartly for today\'s thought and hymn.', { force: true, durationMs: 3600 });
@@ -6173,17 +6270,11 @@ function updateAI(dt) {
     game.assemblyUsedThoughts.add(thought);
     say(headmaster, thought, { force: true, durationMs: 4200 });
     announce(`🧑‍🏫 Headmaster thought: ${thought}`, { force: true });
-    game.assemblyNextSpeechAt = now + 8500;
+    runAssemblyCallAndResponse(now, headmaster);
   }
 
   if (isAssemblyPeriod(current) && headmaster && now >= game.assemblyHymnAt) {
-    say(headmaster, '🎵 Hymn time! Voices up, hearts steady, no mumbling in row three!', { force: true, durationMs: 4200 });
-    for (const singer of game.entities) {
-      if (!isStudentCharacter(singer) && singer.role !== 'teacher') continue;
-      if (entityRoom(singer) !== 'Assembly Hall') continue;
-      if (game.rng() < 0.28) say(singer, '🎶 La-la-laaa...', { durationMs: 2400, force: true });
-    }
-    game.assemblyHymnAt = now + 18000;
+    runAssemblyHymn(now, headmaster);
   }
 
   if (supervised) {
