@@ -122,12 +122,12 @@ const rooms = [
   // Taller + wider hall improves assembly spacing and row alignment readability.
   { name: 'Assembly Hall', x: 68, y: 58, w: 30, h: 18, floor: 'ground', type: 'hall' },
   // Dining hall sits beside assembly for fast lunchtime flow.
-  { name: 'Dining Hall', x: 100, y: 66, w: 24, h: 10, floor: 'ground', type: 'hall' },
+  { name: 'Dining Hall', x: 100, y: 62, w: 36, h: 14, floor: 'ground', type: 'hall' },
   { name: 'Geography', x: 8, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
   { name: 'Art Room', x: 34, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
   { name: 'History', x: 60, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
   // Kitchen is attached to dining hall and still next to assembly for intuitive wayfinding.
-  { name: 'Kitchen', x: 126, y: 66, w: 16, h: 10, floor: 'ground', type: 'hall' },
+  { name: 'Kitchen', x: 138, y: 62, w: 12, h: 14, floor: 'ground', type: 'hall' },
   { name: 'P.E. Field', x: 90, y: 80, w: 70, h: 28, floor: 'ground', type: 'outdoor' },
   { name: 'Bike Sheds', x: 92, y: 94, w: 22, h: 12, floor: 'ground', type: 'outdoor' },
   { name: 'School Gates', x: 148, y: 80, w: 18, h: 28, floor: 'ground', type: 'outdoor' },
@@ -163,6 +163,60 @@ const stairs = [
 const STAIR_ENTRY_HALF_WIDTH = 1.95;
 const STAIR_ENTRY_HALF_HEIGHT = 1.5;
 const STAIR_INTERACT_RADIUS = 2.2;
+
+
+// Dining hall service points + seating grid keep lunch flow deterministic and readable.
+function diningHallLayout() {
+  const hall = roomByName('Dining Hall');
+  if (!hall) return null;
+
+  const plateStand = { x: hall.x + 3.2, y: hall.y + 2.3 };
+  const servingPoint = { x: hall.x + 8.6, y: hall.y + 2.4 };
+  const queueStart = { x: hall.x + 13.3, y: hall.y + 2.5 };
+  const queueSpacing = 1.55;
+  const queueSlots = Array.from({ length: 8 }, (_, idx) => ({
+    x: queueStart.x + (idx * queueSpacing),
+    y: queueStart.y,
+  }));
+
+  const seats = [];
+  const tableCols = [hall.x + 9.5, hall.x + 17.5, hall.x + 25.5, hall.x + 33.5];
+  const tableRows = [hall.y + 6.1, hall.y + 10.0];
+  for (const rowY of tableRows) {
+    for (const colX of tableCols) {
+      seats.push({ x: colX - 1.2, y: rowY, tableX: colX, tableY: rowY, side: 'left' });
+      seats.push({ x: colX + 1.2, y: rowY, tableX: colX, tableY: rowY, side: 'right' });
+    }
+  }
+
+  const patrolRoute = [
+    { x: hall.x + 6, y: hall.y + hall.h - 2.3 },
+    { x: hall.x + hall.w - 3, y: hall.y + hall.h - 2.2 },
+    { x: hall.x + hall.w - 4.5, y: hall.y + 4.6 },
+    { x: hall.x + 8.3, y: hall.y + 4.8 },
+  ];
+
+  return {
+    hall,
+    plateStand,
+    servingPoint,
+    queueSlots,
+    serviceDurationMs: 2000,
+    seats,
+    patrolRoute,
+  };
+}
+
+function resetLunchState(entity) {
+  if (!entity) return;
+  entity.lunchState = 'idle';
+  entity.hasLunchPlate = false;
+  entity.queuedForLunch = false;
+  entity.lunchQueueIndex = -1;
+  entity.lunchServedAt = 0;
+  entity.lunchSeatIndex = -1;
+  entity.lunchEatUntil = 0;
+}
 
 // Lightweight synth SFX keeps interactions responsive without external assets.
 const sfxState = { ctx: null, enabled: true };
@@ -1295,6 +1349,14 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     nextBlinkAt: performance.now() + 2000 + Math.random() * 7000,
     dailyCards: [],
     refusesEricUntilDay: 0,
+    // Lunch-service state machine: plate -> queue -> serve -> sit -> eat.
+    lunchState: 'idle',
+    hasLunchPlate: false,
+    queuedForLunch: false,
+    lunchQueueIndex: -1,
+    lunchServedAt: 0,
+    lunchSeatIndex: -1,
+    lunchEatUntil: 0,
   };
 }
 
@@ -3472,6 +3534,13 @@ function setPeriod(index) {
   announce(`🔔 Bell! ${current.period} in ${current.room}`, { feedType: 'world' });
   if (current.period === 'Lunch Break') {
     announce('🍽️ Lunch service is open in the dining hall for 30 minutes.', { feedType: 'world' });
+    for (const entity of game.entities) {
+      if (isStudentCharacter(entity)) resetLunchState(entity);
+    }
+  } else {
+    for (const entity of game.entities) {
+      if (isStudentCharacter(entity)) resetLunchState(entity);
+    }
   }
   if (isAssemblyPeriod(current)) {
     const headmaster = game.entities.find((entity) => entity.role === 'teacher' && entity.name === 'Mr Wacker');
@@ -4455,6 +4524,48 @@ function dinnerLadyCanObserve(dinnerLady) {
   return entityRoom(dinnerLady) === 'Dining Hall' && !isTeacherBackTurned(dinnerLady);
 }
 
+
+function lunchQueueOrder(students, layout) {
+  return students
+    .slice()
+    .sort((a, b) => {
+      const aQueued = a.lunchState === 'queue' || a.lunchState === 'beingServed' ? 0 : 1;
+      const bQueued = b.lunchState === 'queue' || b.lunchState === 'beingServed' ? 0 : 1;
+      if (aQueued !== bQueued) return aQueued - bQueued;
+      const aDist = distance(a, layout.queueSlots[0]);
+      const bDist = distance(b, layout.queueSlots[0]);
+      if (Math.abs(aDist - bDist) > 0.01) return aDist - bDist;
+      return a.seatIndex - b.seatIndex;
+    });
+}
+
+function nearestFreeDiningSeat(layout, eater) {
+  if (!layout) return null;
+  const occupiedIndices = new Set();
+  for (const candidate of game.entities) {
+    if (!candidate || candidate === eater) continue;
+    const idx = candidate.lunchSeatIndex;
+    if (typeof idx === 'number' && idx >= 0 && idx < layout.seats.length) {
+      occupiedIndices.add(idx);
+    }
+  }
+
+  let best = null;
+  let bestIndex = -1;
+  let bestDist = Infinity;
+  for (let i = 0; i < layout.seats.length; i += 1) {
+    if (occupiedIndices.has(i)) continue;
+    const seat = layout.seats[i];
+    const d = distance(eater, seat);
+    if (d < bestDist) {
+      bestDist = d;
+      best = seat;
+      bestIndex = i;
+    }
+  }
+  return best ? { seat: best, seatIndex: bestIndex } : null;
+}
+
 function calmNearbyStudents(observer, radius = 8.5, movementScale = 0.32) {
   for (const student of game.entities) {
     if (!isStudentCharacter(student) || student === player) continue;
@@ -4545,8 +4656,14 @@ function chooseTarget(entity, currentPeriod) {
   }
 
   if (entity.role === 'dinnerLady') {
-    // Dinner ladies serve in kitchen+dining hall and supervise students during lunch service.
-    if (isLunchtimePeriod(currentPeriod)) return roomCenter('Dining Hall');
+    // Dinner ladies split roles: one serves at the food bar, one patrols tables.
+    if (isLunchtimePeriod(currentPeriod)) {
+      const layout = diningHallLayout();
+      if (!layout) return roomCenter('Dining Hall');
+      const allDinnerLadies = game.entities.filter((candidate) => candidate.role === 'dinnerLady');
+      const servingLady = allDinnerLadies[0];
+      return entity === servingLady ? layout.servingPoint : (layout.patrolRoute[0] || roomCenter('Dining Hall'));
+    }
     return roomCenter('Kitchen');
   }
 
@@ -4588,7 +4705,8 @@ function chooseTarget(entity, currentPeriod) {
 
   // Lunch hall routine: all students head to the dining hall to eat during lunch service.
   if (isLunchtimePeriod(currentPeriod) && isStudentCharacter(entity)) {
-    return roomCenter('Dining Hall');
+    const layout = diningHallLayout();
+    return layout?.plateStand || roomCenter('Dining Hall');
   }
 
   if (entity.role === 'teacher') {
@@ -4926,6 +5044,99 @@ function updateAI(dt) {
     const lunchDutyLady = dinnerLadyEntity();
     const dinnerLadyWatchingField = dinnerLadyCanObserve(lunchDutyLady);
 
+
+    if (isLunchtimePeriod(current) && isStudent) {
+      const layout = diningHallLayout();
+      if (layout) {
+        // Lunch routine: collect plate, queue for serving, then sit at a long table to eat.
+        if (entity.lunchState === 'idle') {
+          entity.lunchState = 'toPlate';
+          entity.target = layout.plateStand;
+        }
+
+        if (entity.lunchState === 'toPlate') {
+          entity.target = layout.plateStand;
+          if (distance(entity, layout.plateStand) < 1.05) {
+            entity.hasLunchPlate = true;
+            entity.lunchState = 'queue';
+          }
+        }
+
+        const lunchStudents = game.entities.filter((candidate) => (
+          candidate !== player
+          && candidate.role !== 'teacher'
+          && candidate.role !== 'janitor'
+          && candidate.role !== 'nurse'
+          && candidate.role !== 'dinnerLady'
+          && candidate.arrivedForDay
+          && entityRoom(candidate) === 'Dining Hall'
+          && (candidate.lunchState === 'queue' || candidate.lunchState === 'beingServed' || candidate.lunchState === 'toPlate')
+        ));
+        const queueOrder = lunchQueueOrder(lunchStudents, layout);
+        for (let i = 0; i < queueOrder.length; i += 1) {
+          queueOrder[i].lunchQueueIndex = i;
+          if (queueOrder[i].lunchState === 'queue') {
+            queueOrder[i].target = layout.queueSlots[Math.min(i, layout.queueSlots.length - 1)];
+          }
+        }
+
+        if (entity.lunchState === 'queue') {
+          const frontSlot = layout.queueSlots[0];
+          const atFront = entity.lunchQueueIndex === 0 && distance(entity, frontSlot) < 0.9;
+          if (atFront) {
+            entity.lunchState = 'beingServed';
+            entity.lunchServedAt = now + layout.serviceDurationMs;
+          }
+        }
+
+        if (entity.lunchState === 'beingServed') {
+          entity.target = layout.queueSlots[0];
+          if (now >= (entity.lunchServedAt || 0)) {
+            entity.queuedForLunch = true;
+            entity.lunchState = 'toSeat';
+            const freeSeat = nearestFreeDiningSeat(layout, entity);
+            if (freeSeat) {
+              entity.lunchSeatIndex = freeSeat.seatIndex;
+              entity.target = freeSeat.seat;
+            }
+          }
+        }
+
+        if (entity.lunchState === 'toSeat') {
+          const seat = layout.seats[entity.lunchSeatIndex] || nearestFreeDiningSeat(layout, entity)?.seat;
+          if (seat) {
+            entity.target = seat;
+            if (distance(entity, seat) < 0.75) {
+              entity.x = seat.x;
+              entity.y = seat.y;
+              entity.isSeated = true;
+              entity.seatedRoom = 'Dining Hall';
+              entity.lunchState = 'eating';
+              entity.lunchEatUntil = now + (6200 + (game.rng() * 3400));
+            }
+          } else {
+            entity.target = roomCenter('Dining Hall');
+          }
+        }
+
+        if (entity.lunchState === 'eating') {
+          const seat = layout.seats[entity.lunchSeatIndex];
+          if (seat) {
+            entity.x = seat.x;
+            entity.y = seat.y;
+            entity.target = seat;
+          }
+          entity.isSeated = true;
+          entity.seatedRoom = 'Dining Hall';
+          if (now >= (entity.lunchEatUntil || 0)) {
+            entity.lunchState = 'done';
+            entity.hasLunchPlate = false;
+            entity.target = roomCenter('P.E. Field');
+          }
+        }
+      }
+    }
+
     if (isStudent && entity.displacedFromSeatUntil && performance.now() < entity.displacedFromSeatUntil) {
       entity.target = entity.displacedSeatPos || { x: entity.x, y: entity.y };
       entity.vx = 0;
@@ -5228,7 +5439,7 @@ function updateAI(dt) {
     }
 
     // Weather drives break-time choices and social reactions.
-    if (current.mode === 'break' && isStudent && game.rng() < 0.011) {
+    if (current.mode === 'break' && !isLunchtimePeriod(current) && isStudent && game.rng() < 0.011) {
       if (game.weather === 'rain') {
         entity.target = roomCenter('Assembly Hall');
         if (isOutside) think(entity, '🌧️ No thanks, staying inside today.');
@@ -5271,8 +5482,24 @@ function updateAI(dt) {
     }
 
     if (entity.role === 'dinnerLady') {
-      // Dinner ladies whistle to keep lunch queues moving and the hall calm.
+      // Dinner ladies split lunch duty: one serves from the bar, the other patrols tables.
       if (isLunchtimePeriod(current) && entityRoom(entity) === 'Dining Hall') {
+        const layout = diningHallLayout();
+        const allDinnerLadies = game.entities.filter((candidate) => candidate.role === 'dinnerLady');
+        const servingLady = allDinnerLadies[0];
+        const isServingLady = entity === servingLady;
+
+        if (layout) {
+          if (isServingLady) {
+            entity.target = layout.servingPoint;
+          } else {
+            entity.patrolIndex = typeof entity.patrolIndex === 'number' ? entity.patrolIndex : 0;
+            if (!entity.target || distance(entity, entity.target) < 1.05) {
+              entity.patrolIndex = (entity.patrolIndex + 1) % layout.patrolRoute.length;
+              entity.target = layout.patrolRoute[entity.patrolIndex];
+            }
+          }
+        }
         // Briefly looking away creates small windows where fights can flare back up.
         if (entity.writingUntil < performance.now() && game.rng() < 0.0012) {
           entity.writingUntil = performance.now() + 1400;
@@ -5286,6 +5513,19 @@ function updateAI(dt) {
           game.lessonNoiseLevel = Math.max(0, game.lessonNoiseLevel - 0.35);
         }
 
+
+
+        if (layout && isServingLady && game.rng() < 0.0065) {
+          const servingStudent = game.entities.find((candidate) => (
+            isStudentCharacter(candidate)
+            && candidate.lunchState === 'beingServed'
+            && entityRoom(candidate) === 'Dining Hall'
+            && distance(candidate, layout.queueSlots[0]) < 1.1
+          ));
+          if (servingStudent && game.rng() < 0.45) {
+            say(entity, `🍛 Next! ${servingStudent.name}, tray up please.`, { durationMs: 1800 });
+          }
+        }
         // Close-range intervention: drag one rowdy pupil to the Headmaster Office.
         const rowdy = game.entities.find((candidate) => (
           candidate !== entity
@@ -5423,9 +5663,10 @@ function updateAI(dt) {
     // During lessons all teachers should be seated in their designated classroom,
     // not just the currently assigned teacher in the active period room.
     const seatedTarget = inLesson && entityRoom(entity) === expectedRoom;
-    const wasSeated = entity.isSeated && entity.seatedRoom === expectedRoom;
+    const lunchSeatTarget = isLunchtimePeriod(current) && isStudent && entity.lunchState === 'eating' && entityRoom(entity) === 'Dining Hall';
+    const wasSeated = entity.isSeated && (entity.seatedRoom === expectedRoom || entity.seatedRoom === 'Dining Hall');
     // Add a small hysteresis window: sitting is easy to maintain, harder to flip off.
-    entity.isSeated = seatedTarget && (len < 0.4 || (wasSeated && len < 0.85));
+    entity.isSeated = (seatedTarget || lunchSeatTarget) && (len < 0.4 || (wasSeated && len < 0.85));
 
     // Assembly-specific settle pass: lock teachers at their final standing/seated marker
     // to stop micro path corrections that look like hopping on the spot.
@@ -5452,7 +5693,7 @@ function updateAI(dt) {
         entity.isSeated = true;
       }
     }
-    entity.seatedRoom = entity.isSeated ? expectedRoom : null;
+    entity.seatedRoom = entity.isSeated ? (lunchSeatTarget ? 'Dining Hall' : expectedRoom) : null;
     const lateForClass = entity.role === 'teacher'
       ? (inLesson && entityRoom(entity) !== expectedRoom)
       : (inLesson && entityRoom(entity) !== expectedRoom);
@@ -5973,6 +6214,48 @@ function drawWorld() {
         ctx.fillRect(teacherChair.sx - 4, teacherChair.sy + 1, 8, 2);
         ctx.fillRect(teacherChair.sx - 4, teacherChair.sy - 1, 2, 2);
         ctx.fillRect(teacherChair.sx + 2, teacherChair.sy - 1, 2, 2);
+      }
+    }
+
+    if (room.name === 'Dining Hall') {
+      const layout = diningHallLayout();
+      if (layout) {
+        const plate = worldToScreen(layout.plateStand.x, layout.plateStand.y);
+        const serve = worldToScreen(layout.servingPoint.x, layout.servingPoint.y);
+        // Plate stand + serving bar make lunch flow readable for players.
+        fillDitherRect(plate.sx - 10, plate.sy - 8, 20, 10, '#f8f1d3', '#e9d8a6', 2);
+        ctx.fillStyle = '#495057';
+        ctx.fillRect(plate.sx - 6, plate.sy - 5, 12, 2);
+        ctx.fillStyle = '#ffffff';
+        for (let i = 0; i < 5; i += 1) ctx.fillRect(plate.sx - 6 + (i * 3), plate.sy - 3, 2, 1);
+        fillDitherRect(serve.sx - 20, serve.sy - 8, 40, 11, '#ffd6a5', '#f4a261', 3);
+        ctx.fillStyle = '#6d4c41';
+        ctx.fillRect(serve.sx - 20, serve.sy + 2, 40, 2);
+
+        // Queue lane markers help communicate where students line up.
+        for (const slot of layout.queueSlots) {
+          const q = worldToScreen(slot.x, slot.y);
+          ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+          ctx.strokeRect(q.sx - 5, q.sy - 4, 10, 8);
+        }
+
+        // Long tables + paired chairs for seated lunch behaviour.
+        for (let i = 0; i < layout.seats.length; i += 2) {
+          const a = layout.seats[i];
+          const b = layout.seats[i + 1];
+          if (!a || !b) continue;
+          const table = worldToScreen(a.tableX, a.tableY);
+          ctx.fillStyle = '#8d6e63';
+          ctx.fillRect(table.sx - 10, table.sy - 4, 20, 8);
+          ctx.fillStyle = '#6d4c41';
+          ctx.fillRect(table.sx - 9, table.sy - 3, 18, 1);
+
+          const leftChair = worldToScreen(a.x, a.y);
+          const rightChair = worldToScreen(b.x, b.y);
+          ctx.fillStyle = '#5c6b73';
+          ctx.fillRect(leftChair.sx - 3, leftChair.sy - 3, 6, 5);
+          ctx.fillRect(rightChair.sx - 3, rightChair.sy - 3, 6, 5);
+        }
       }
     }
 
