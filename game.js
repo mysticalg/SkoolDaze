@@ -1833,6 +1833,32 @@ function resetEntityPathing(entity, destination) {
   entity.target = destination;
 }
 
+function teleportEntityOutsideCurrentDoor(entity, destination) {
+  const currentRoom = roomAtPosition(entity);
+  if (!currentRoom || currentRoom.type === 'corridor' || currentRoom.type === 'outdoor') return false;
+
+  const destinationRoom = roomAtPosition(destination);
+  // Only force a corridor teleport when they are actually trying to leave this room.
+  if (destinationRoom && destinationRoom.name === currentRoom.name) return false;
+
+  const exitDoor = roomDoors.find((door) => door.room === currentRoom.name);
+  if (!exitDoor) return false;
+
+  // Doorway rescue: if a pupil shudders in the threshold, place them just outside.
+  entity.x = exitDoor.x;
+  entity.y = exitDoor.exteriorY;
+  entity.vx = 0;
+  entity.vy = 0;
+  entity.jamSeconds = 0;
+  entity.stairJamSeconds = 0;
+  entity.stuckSeconds = 0;
+  entity.phaseThroughUntil = performance.now() + 900;
+  constrain(entity);
+
+  if (destination) entity.target = routeWaypoint(entity, destination);
+  return true;
+}
+
 function teleportEntityToTarget(entity, target, reason = 'stuck') {
   if (!target) return;
 
@@ -4533,6 +4559,12 @@ function updateAI(dt) {
     if (farFromGoal && doorwayChoke) {
       entity.jamSeconds = moved < 0.05 ? (entity.jamSeconds + (dt / 1000)) : Math.max(0, entity.jamSeconds - (dt / 1400));
       if (entity.jamSeconds > 1.15) resetEntityPathing(entity, entity.target);
+
+      // If a student keeps shuddering in a doorway while trying to leave a room,
+      // snap them just outside that room's door so corridor flow does not freeze.
+      if (isStudent && entity.jamSeconds > 2.35 && moved < 0.04) {
+        teleportEntityOutsideCurrentDoor(entity, entity.target);
+      }
     } else {
       entity.jamSeconds = 0;
     }
