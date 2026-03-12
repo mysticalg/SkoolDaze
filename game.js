@@ -9127,25 +9127,56 @@ function drawEntities() {
       const torsoTopW = appearance.torsoShape === 'tapered' ? Math.max(8, bodyW - 3) : bodyW;
       const chestW = isFemaleStudent ? (torsoTopW + (appearance.chestWidth || 1)) : torsoTopW;
       const hipsW = isFemaleStudent ? (bodyW + (appearance.hipWidth || 1)) : bodyW;
-      ctx.fillRect(px - Math.floor(chestW / 2), py - 18 + bob - heightShift, chestW, 5);
-      ctx.fillRect(px - Math.floor(hipsW / 2), py - 13 + bob - heightShift, hipsW, 7);
+      if (facingSide) {
+        // Side-on torso is slimmer so profile direction is obvious at a glance.
+        const sideTorsoW = Math.max(6, Math.floor(chestW * 0.45));
+        const sideHipsW = Math.max(6, Math.floor(hipsW * 0.5));
+        const sideTorsoX = entity.facing >= 0 ? px - 1 : px - sideTorsoW + 1;
+        const sideHipX = entity.facing >= 0 ? px - 1 : px - sideHipsW + 1;
+        ctx.fillRect(sideTorsoX, py - 18 + bob - heightShift, sideTorsoW, 5);
+        ctx.fillRect(sideHipX, py - 13 + bob - heightShift, sideHipsW, 7);
+      } else {
+        ctx.fillRect(px - Math.floor(chestW / 2), py - 18 + bob - heightShift, chestW, 5);
+        ctx.fillRect(px - Math.floor(hipsW / 2), py - 13 + bob - heightShift, hipsW, 7);
+      }
       if (useUniform) {
         const shirtColor = '#ffffff';
         const tieColor = '#2b59c3';
         const blazerColor = '#2f5fbf';
         ctx.fillStyle = '#ffffff';
-        ctx.fillRect(px - 2, py - 18 + bob - heightShift, 4, 4);
-        ctx.fillStyle = tieColor;
-        ctx.fillRect(px - 1, py - 14 + bob - heightShift, 2, 4);
+        if (facingSide) {
+          // Side profile: shirt seam only (no tie visible from side-on request).
+          const shirtX = entity.facing >= 0 ? px : px - 2;
+          ctx.fillRect(shirtX, py - 18 + bob - heightShift, 2, 5);
+        } else {
+          ctx.fillRect(px - 2, py - 18 + bob - heightShift, 4, 4);
+          ctx.fillStyle = tieColor;
+          ctx.fillRect(px - 1, py - 14 + bob - heightShift, 2, 4);
+        }
         if (useBlazerUniform) {
           // Cold-weather dress code: all pupils switch to blue blazers.
           ctx.fillStyle = blazerColor;
-          ctx.fillRect(px - Math.floor(hipsW / 2), py - 17 + bob - heightShift, hipsW, 8);
-          // Keep a white shirt/tie slit visible in the center for readability.
-          ctx.fillStyle = shirtColor;
-          ctx.fillRect(px - 1, py - 16 + bob - heightShift, 2, 5);
+          if (facingSide) {
+            const sideBlazerW = Math.max(6, Math.floor(hipsW * 0.5));
+            const sideBlazerX = entity.facing >= 0 ? px - 1 : px - sideBlazerW + 1;
+            ctx.fillRect(sideBlazerX, py - 17 + bob - heightShift, sideBlazerW, 8);
+            ctx.fillStyle = shirtColor;
+            const seamX = entity.facing >= 0 ? px : px - 1;
+            ctx.fillRect(seamX, py - 16 + bob - heightShift, 1, 5);
+          } else {
+            ctx.fillRect(px - Math.floor(hipsW / 2), py - 17 + bob - heightShift, hipsW, 8);
+            // Keep a white shirt/tie slit visible in the center for readability.
+            ctx.fillStyle = shirtColor;
+            ctx.fillRect(px - 1, py - 16 + bob - heightShift, 2, 5);
+          }
           ctx.fillStyle = '#234a97';
-          ctx.fillRect(px - Math.floor(hipsW / 2), py - 10 + bob - heightShift, hipsW, 2);
+          if (facingSide) {
+            const sideTrimW = Math.max(6, Math.floor(hipsW * 0.5));
+            const sideTrimX = entity.facing >= 0 ? px - 1 : px - sideTrimW + 1;
+            ctx.fillRect(sideTrimX, py - 10 + bob - heightShift, sideTrimW, 2);
+          } else {
+            ctx.fillRect(px - Math.floor(hipsW / 2), py - 10 + bob - heightShift, hipsW, 2);
+          }
         }
       }
 
@@ -9186,8 +9217,19 @@ function drawEntities() {
         leftArmYOffset -= 2;
         rightArmYOffset -= 2;
       }
-      ctx.fillRect(leftArmX, leftArmYOffset, armW, armL);
-      ctx.fillRect(rightArmX, rightArmYOffset, armW, armL);
+      if (facingSide) {
+        // Side profile uses one central visible arm; depth implied by a darker near-edge stripe.
+        const centerArmX = entity.facing >= 0 ? px : px - armW;
+        const centerArmY = Math.round((leftArmYOffset + rightArmYOffset) / 2);
+        ctx.fillRect(centerArmX, centerArmY, armW, armL);
+        ctx.fillStyle = '#d6ae8f';
+        const nearEdgeX = entity.facing >= 0 ? centerArmX + Math.max(0, armW - 1) : centerArmX;
+        ctx.fillRect(nearEdgeX, centerArmY + 1, 1, Math.max(2, armL - 2));
+        ctx.fillStyle = skinTone;
+      } else {
+        ctx.fillRect(leftArmX, leftArmYOffset, armW, armL);
+        ctx.fillRect(rightArmX, rightArmYOffset, armW, armL);
+      }
       if (isWriting && entity.role === 'teacher') {
         ctx.fillStyle = '#f8f9fa';
         const chalkX = strikeDir > 0 ? px + 14 : px - 14;
@@ -9218,7 +9260,20 @@ function drawEntities() {
         ctx.fillRect(px + Math.floor(bodyW / 2) - legW, py + 1 - heightShift, legW, 2);
       } else {
         const expressiveLegKick = legKick + emoteLegDelta;
-        if (isFemaleStudent) {
+        if (facingSide) {
+          // Side walking profile: both legs are near center with asymmetric stride lengths.
+          const sideLegBaseX = entity.facing >= 0 ? px - 1 : px - legW;
+          const nearLegY = py - 6 + (expressiveLegKick * 0.75) - heightShift;
+          const farLegY = py - 6 - (expressiveLegKick * 0.45) - heightShift;
+          const nearLegLen = Math.max(5, legL + Math.round(Math.abs(expressiveLegKick) * 0.25));
+          const farLegLen = Math.max(4, legL - 1);
+          ctx.fillRect(sideLegBaseX, nearLegY, legW, nearLegLen);
+          ctx.fillStyle = useUniform ? '#0e1626' : '#1a253f';
+          ctx.fillRect(sideLegBaseX - (entity.facing >= 0 ? 1 : -1), farLegY + 1, Math.max(1, legW - 1), farLegLen);
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(sideLegBaseX, nearLegY + nearLegLen, legW, 2);
+          ctx.fillRect(sideLegBaseX - (entity.facing >= 0 ? 1 : -1), farLegY + farLegLen + 1, Math.max(1, legW - 1), 1);
+        } else if (isFemaleStudent) {
           const standingSkirtDrop = skirtLength === 'long' ? 8 : 5;
           ctx.fillStyle = '#1f3f85';
           ctx.fillRect(px - Math.floor(bodyW / 2), py - 7 - heightShift, bodyW, standingSkirtDrop);
