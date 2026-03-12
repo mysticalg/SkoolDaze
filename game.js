@@ -1135,6 +1135,7 @@ const LLM_STORAGE_KEY = 'skooldaze.llm.settings.v1';
 const OPENAI_OAUTH_AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize';
 const OPENAI_OAUTH_CLIENT_ID = 'codex-web';
 const OPENAI_OAUTH_SCOPES = 'openid profile offline_access';
+const OPENAI_OAUTH_STATE_KEY = 'skooldaze.openai.oauth.state';
 
 function setLlmStatus(text, isError = false) {
   if (!optLlmStatusEl) return;
@@ -1349,16 +1350,25 @@ async function refreshOllamaModels({ silent = false } = {}) {
 }
 
 function handleOpenAiOauthCallback() {
-  // After OAuth redirect, parse token from URL hash/query and store it once.
+  // After OAuth redirect, parse token from URL hash/query and validate anti-CSRF state.
   const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
   const query = new URLSearchParams(window.location.search);
   const accessToken = hash.get('access_token') || query.get('access_token') || query.get('token') || '';
   if (!accessToken) return;
+
+  const callbackState = hash.get('state') || query.get('state') || '';
+  const expectedState = sessionStorage.getItem(OPENAI_OAUTH_STATE_KEY) || '';
+  if (expectedState && callbackState && callbackState !== expectedState) {
+    setLlmStatus('❌ OpenAI login state mismatch. Token was not saved. Please try sign-in again.', true);
+    return;
+  }
+
   game.llm.remoteToken = sanitizeLlmLine(accessToken, '');
   if (optLlmRemoteTokenEl) optLlmRemoteTokenEl.value = game.llm.remoteToken;
   updateLlmTokenUi();
   persistLlmSettings();
-  setLlmStatus('✅ OpenAI token captured from browser auth and saved locally.');
+  sessionStorage.removeItem(OPENAI_OAUTH_STATE_KEY);
+  setLlmStatus('✅ OpenAI token captured from current browser tab and saved locally.');
 
   // Clean URL so token is not left visible in history/address bar.
   const cleanUrl = `${window.location.origin}${window.location.pathname}`;
@@ -1367,10 +1377,12 @@ function handleOpenAiOauthCallback() {
 
 function startOpenAiOauth() {
   const redirectUri = `${window.location.origin}${window.location.pathname}`;
-  const state = `skool-${Date.now()}`;
+  const state = `skool-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  sessionStorage.setItem(OPENAI_OAUTH_STATE_KEY, state);
   const authUrl = `${OPENAI_OAUTH_AUTHORIZE_URL}?response_type=token&client_id=${encodeURIComponent(OPENAI_OAUTH_CLIENT_ID)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(OPENAI_OAUTH_SCOPES)}&state=${encodeURIComponent(state)}`;
-  window.open(authUrl, '_blank', 'noopener,noreferrer,width=620,height=760');
-  setLlmStatus('🌐 OpenAI sign-in opened. After approval, this page should capture and save the token.');
+
+  // Use same-tab navigation so auth runs in the user's active browser context (no popup window).
+  window.location.assign(authUrl);
 }
 
 function llmModeEnabled() {
