@@ -2613,6 +2613,9 @@ const game = {
   // Lesson chatter rhythm: teachers hush classes briefly, then noise returns gradually.
   lessonQuietUntil: 0,
   lessonNoiseLevel: 0,
+  // Classroom callout throttles reduce rapid-fire pupil shouting and line repetition.
+  lastClassroomStudentCalloutAt: -Infinity,
+  recentClassroomStudentCallouts: {},
   medicalEmergency: null,
   headmasterDetentionUntil: 0,
   headmasterDismissAnnounced: false,
@@ -4598,6 +4601,32 @@ function ensureAddressedNameInSpeech(line, addresseeName) {
   const hasName = new RegExp(`\\b${addresseeName.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')}\\b`, 'i').test(text);
   if (hasName) return text;
   return `${addresseeName}, ${text}`;
+}
+
+
+function normalizedClassroomCalloutKey(text) {
+  // Normalize punctuation/emoji/case so near-identical lines share one recent-key.
+  return String(text || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function classroomCalloutRecentlyUsed(roomName, text, now = performance.now(), lookbackMs = 22000) {
+  if (!roomName || !text) return false;
+  const key = normalizedClassroomCalloutKey(text);
+  if (!key) return false;
+  const bucket = game.recentClassroomStudentCallouts[roomName] || [];
+  const fresh = bucket.filter((entry) => (now - (entry.at || 0)) <= lookbackMs);
+  game.recentClassroomStudentCallouts[roomName] = fresh;
+  return fresh.some((entry) => entry.key === key);
+}
+
+function rememberClassroomCallout(roomName, text, now = performance.now()) {
+  if (!roomName || !text) return;
+  const key = normalizedClassroomCalloutKey(text);
+  if (!key) return;
+  const bucket = game.recentClassroomStudentCallouts[roomName] || [];
+  bucket.push({ key, at: now });
+  // Keep small rolling history per room to reduce allocation churn.
+  game.recentClassroomStudentCallouts[roomName] = bucket.slice(-18);
 }
 
 function say(entity, text, opts = {}) {
@@ -7245,22 +7274,30 @@ function updateAI(dt) {
       announce(`😈 ${entity.name} started misbehaving in ${current.period}.`);
     }
 
-    // In class students periodically attempt teacher prompts and can daydream.
+    // In class students can call out or daydream, but pacing is intentionally capped.
     const iqFactor = (entity.traits?.intelligence || 50) / 100;
     const witFactor = (entity.traits?.wit || 50) / 100;
-    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < (0.00072 + (game.lessonNoiseLevel * (0.0022 + (iqFactor * 0.0032))))) {
-      if (game.rng() < (0.45 + (iqFactor * 0.28) + (witFactor * 0.12))) {
+    const classroomCalloutCooldownMs = 3400;
+    const classroomCalloutDue = now - (game.lastClassroomStudentCalloutAt || -Infinity) >= classroomCalloutCooldownMs;
+    const calloutChance = 0.00018 + (game.lessonNoiseLevel * (0.00045 + (iqFactor * 0.0006)));
+    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && classroomCalloutDue && game.rng() < calloutChance) {
+      if (game.rng() < (0.34 + (iqFactor * 0.16) + (witFactor * 0.07))) {
         ensureDialogueSetup(entity);
         const responseLine = contextualResponseFor(entity, assignedTeacherEntityForPeriod(current));
         const spokenAttempt = game.quizActive && !game.quizActive.resolved
-          ? (entity.role === 'swot' && game.rng() < 0.75 ? game.quizActive.answer : randomFunnyWrongAnswer())
+          ? (entity.role === 'swot' && game.rng() < 0.72 ? game.quizActive.answer : randomFunnyWrongAnswer())
           : responseLine;
-        say(entity, spokenAttempt);
-        announce(`📚 ${entity.name} calls out: "${spokenAttempt}"`, { source: entity, range: 7.5 });
-        if (game.quizActive && !game.quizActive.resolved && now > game.quizActive.playerWindowUntil && game.rng() < (entity.role === 'swot' ? 0.38 : 0.07)) {
-          resolveClassQuestionAttempt(game.quizActive, entity, spokenAttempt, entity.role === 'swot' && normalizeAnswerText(spokenAttempt) === game.quizActive.answer);
+        if (!classroomCalloutRecentlyUsed(current.room, spokenAttempt, now)) {
+          const spoken = deliverResolvedSpeech(entity, spokenAttempt, inferSpeechAddressee(entity), { durationMs: 3000, feedRange: 7.5 }, now);
+          if (spoken) {
+            rememberClassroomCallout(current.room, spokenAttempt, now);
+            game.lastClassroomStudentCalloutAt = now;
+            if (game.quizActive && !game.quizActive.resolved && now > game.quizActive.playerWindowUntil && game.rng() < (entity.role === 'swot' ? 0.26 : 0.04)) {
+              resolveClassQuestionAttempt(game.quizActive, entity, spokenAttempt, entity.role === 'swot' && normalizeAnswerText(spokenAttempt) === game.quizActive.answer);
+            }
+            entity.emotion = Math.min(100, entity.emotion + 1.2);
+          }
         }
-        entity.emotion = Math.min(100, entity.emotion + 1.2);
       } else {
         ensureDialogueSetup(entity);
         const daydreams = entity.dialogue.thoughts || ['☁️ Looking out the window...'];
