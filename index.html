@@ -84,6 +84,10 @@
             🧵 No fallback (LLM-only dialogue)
             <input id="optLlmNoFallback" type="checkbox" />
           </label>
+          <label class="llm-toggle" title="When enabled, world preload asks the LLM to rename NPCs using each character's role, sex, and trait profile.">
+            🏷️ LLM-picked NPC names
+            <input id="optLlmNpcNames" type="checkbox" checked />
+          </label>
           <label title="Use local Ollama models or remote cloud providers.">🌐 LLM source
             <select id="optLlmSource" disabled>
               <option value="local" selected>Local (Ollama)</option>
