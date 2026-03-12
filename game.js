@@ -4,6 +4,7 @@ const ctx = canvas.getContext('2d');
 const clockEl = document.getElementById('clock');
 const periodEl = document.getElementById('period');
 const roomTargetEl = document.getElementById('roomTarget');
+const dayLabelEl = document.getElementById('dayLabel');
 const floorStatusEl = document.getElementById('floorStatus');
 const clockHandHourEl = document.getElementById('clockHandHour');
 const clockHandMinuteEl = document.getElementById('clockHandMinute');
@@ -18,6 +19,10 @@ const attendanceEl = document.getElementById('attendance');
 const missionEl = document.getElementById('mission');
 const eventsEl = document.getElementById('events');
 const todoEl = document.getElementById('todo');
+const todoCarouselBtn = document.getElementById('todoCarousel');
+const todoCarouselTextEl = document.getElementById('todoCarouselText');
+const todoDialog = document.getElementById('todoDialog');
+const closeTodoDialogBtn = document.getElementById('closeTodoDialog');
 
 const helpDialog = document.getElementById('helpDialog');
 const helpBtn = document.getElementById('helpBtn');
@@ -31,6 +36,14 @@ const interactionOptionsEl = document.getElementById('interactionOptions');
 const closeInteractionPanelBtn = document.getElementById('closeInteractionPanel');
 document.getElementById('closeHelp').onclick = () => helpDialog.close();
 helpBtn.onclick = () => helpDialog.showModal();
+
+// Daily objective carousel opens a full checklist dialog for detailed planning.
+if (todoCarouselBtn && todoDialog) {
+  todoCarouselBtn.onclick = () => todoDialog.showModal();
+}
+if (closeTodoDialogBtn && todoDialog) {
+  closeTodoDialogBtn.onclick = () => todoDialog.close();
+}
 
 // -----------------------------------------------------------------------------
 // World model
@@ -1833,6 +1846,32 @@ function resetEntityPathing(entity, destination) {
   entity.target = destination;
 }
 
+function teleportEntityOutsideCurrentDoor(entity, destination) {
+  const currentRoom = roomAtPosition(entity);
+  if (!currentRoom || currentRoom.type === 'corridor' || currentRoom.type === 'outdoor') return false;
+
+  const destinationRoom = roomAtPosition(destination);
+  // Only force a corridor teleport when they are actually trying to leave this room.
+  if (destinationRoom && destinationRoom.name === currentRoom.name) return false;
+
+  const exitDoor = roomDoors.find((door) => door.room === currentRoom.name);
+  if (!exitDoor) return false;
+
+  // Doorway rescue: if a pupil shudders in the threshold, place them just outside.
+  entity.x = exitDoor.x;
+  entity.y = exitDoor.exteriorY;
+  entity.vx = 0;
+  entity.vy = 0;
+  entity.jamSeconds = 0;
+  entity.stairJamSeconds = 0;
+  entity.stuckSeconds = 0;
+  entity.phaseThroughUntil = performance.now() + 900;
+  constrain(entity);
+
+  if (destination) entity.target = routeWaypoint(entity, destination);
+  return true;
+}
+
 function teleportEntityToTarget(entity, target, reason = 'stuck') {
   if (!target) return;
 
@@ -2597,7 +2636,12 @@ function updateTodo() {
     `If toilets are blocked/flooded, avoid bladder emergencies until they reopen`,
     `Avoid teachers while bunking`,
   ];
+
+  // Keep full objectives in the dialog list and condensed objectives in the one-line carousel.
   todoEl.innerHTML = todoItems.map((t) => `<li>${t}</li>`).join('');
+  if (todoCarouselTextEl) {
+    todoCarouselTextEl.textContent = todoItems.join('  •  ');
+  }
 }
 
 function addLines(amount, reason) {
@@ -4533,6 +4577,12 @@ function updateAI(dt) {
     if (farFromGoal && doorwayChoke) {
       entity.jamSeconds = moved < 0.05 ? (entity.jamSeconds + (dt / 1000)) : Math.max(0, entity.jamSeconds - (dt / 1400));
       if (entity.jamSeconds > 1.15) resetEntityPathing(entity, entity.target);
+
+      // If a student keeps shuddering in a doorway while trying to leave a room,
+      // snap them just outside that room's door so corridor flow does not freeze.
+      if (isStudent && entity.jamSeconds > 2.35 && moved < 0.04) {
+        teleportEntityOutsideCurrentDoor(entity, entity.target);
+      }
     } else {
       entity.jamSeconds = 0;
     }
@@ -4702,7 +4752,8 @@ function updateSchedule(dt) {
     }
   }
 
-  clockEl.textContent = `🕘 ${weekdayLabelForDay()} ${formatTime(game.timeMinutes)}`;
+  clockEl.textContent = `🕘 ${formatTime(game.timeMinutes)}`;
+  if (dayLabelEl) dayLabelEl.textContent = `📅 Day: ${weekdayLabelForDay()}`;
   const waitingLabel = !periodWaiting
     ? ''
     : (!teacherPresent ? ' (waiting for teacher to arrive)' : ' (waiting for teacher to sit)');
@@ -5055,6 +5106,18 @@ function drawWorld() {
   ctx.fillText('GROUND FLOOR', 12, 52);
   ctx.fillStyle = '#ffd67a';
   ctx.fillText('LOWER FLOOR', 110, 52);
+
+  // Draw a focus box around Eric's current floor so floor awareness is instant while moving.
+  const floorHighlightBoxes = {
+    upper: { x: 10, y: 10, w: 88, h: 14 },
+    middle: { x: 10, y: 26, w: 92, h: 14 },
+    ground: { x: 10, y: 42, w: 92, h: 14 },
+    lower: { x: 108, y: 42, w: 84, h: 14 },
+  };
+  const floorBox = floorHighlightBoxes[entityFloor(player)] || floorHighlightBoxes.ground;
+  ctx.strokeStyle = '#ffe27a';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(floorBox.x, floorBox.y, floorBox.w, floorBox.h);
 
   // In-canvas analog clock sits beside the floor strip and matches the strip height.
   const clockPanelX = floorStripX + floorStripW + 5;
