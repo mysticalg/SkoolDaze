@@ -82,6 +82,15 @@
     <section class="canvas-wrap">
       <canvas id="game" width="1280" height="700" aria-label="School game area"></canvas>
       <div id="entityTooltip" class="entity-tooltip" role="status" aria-live="polite" hidden></div>
+      <section id="classQuestionPanel" class="class-question-panel" hidden aria-live="polite">
+        <header>
+          <h3 id="classQuestionTitle">🧑‍🏫 Class question</h3>
+          <span id="classQuestionCountdown" title="Time left before the class jumps in.">⏳ Waiting...</span>
+        </header>
+        <p id="classQuestionPrompt">Listen for the teacher prompt near the board.</p>
+        <div id="classQuestionChoices" class="class-question-choices"></div>
+        <p id="classQuestionHint">💡 Click an answer to join in. Swots may answer instantly if you wait too long.</p>
+      </section>
       <section id="interactionPanel" class="interaction-panel" hidden aria-live="polite">
         <header>
           <h3 id="interactionTitle">Student interaction</h3>

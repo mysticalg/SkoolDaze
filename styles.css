@@ -358,6 +358,54 @@ dialog h3 {
 }
 
 
+.class-question-panel {
+  position: absolute;
+  right: 0.8rem;
+  top: 0.8rem;
+  width: 340px;
+  border: 1px solid #88c9ff;
+  border-radius: 10px;
+  background: rgba(7, 18, 33, 0.96);
+  color: #e8f6ff;
+  padding: 0.55rem;
+  z-index: 44;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.42);
+}
+.class-question-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.class-question-panel h3 {
+  margin: 0;
+  font-size: 0.82rem;
+}
+.class-question-panel p {
+  margin: 0.32rem 0;
+  font-size: 0.74rem;
+}
+.class-question-choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.34rem;
+}
+.class-question-choice {
+  border: 1px solid #4e7ca8;
+  background: linear-gradient(180deg, #143252, #102640);
+  color: #dff0ff;
+  border-radius: 7px;
+  font-size: 0.73rem;
+  text-align: left;
+  padding: 0.35rem;
+  cursor: pointer;
+}
+.class-question-choice:hover {
+  background: linear-gradient(180deg, #1a4068, #143252);
+  border-color: #7fc5ff;
+}
+
+
 .interaction-panel {
   position: absolute;
   right: 0.8rem;

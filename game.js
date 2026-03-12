@@ -34,6 +34,11 @@ const interactionTitleEl = document.getElementById('interactionTitle');
 const interactionMetaEl = document.getElementById('interactionMeta');
 const interactionOptionsEl = document.getElementById('interactionOptions');
 const closeInteractionPanelBtn = document.getElementById('closeInteractionPanel');
+const classQuestionPanelEl = document.getElementById('classQuestionPanel');
+const classQuestionTitleEl = document.getElementById('classQuestionTitle');
+const classQuestionCountdownEl = document.getElementById('classQuestionCountdown');
+const classQuestionPromptEl = document.getElementById('classQuestionPrompt');
+const classQuestionChoicesEl = document.getElementById('classQuestionChoices');
 const filterActionsEl = document.getElementById('filterActions');
 const filterSpeechEl = document.getElementById('filterSpeech');
 const startOverlayEl = document.getElementById('startOverlay');
@@ -112,8 +117,8 @@ const rooms = [
   // Reception-adjacent support spaces now sit in one contiguous block for easier wayfinding.
   { name: 'Toilets', x: 34, y: 66, w: 20, h: 10, floor: 'ground', type: 'hall' },
   { name: 'Janitor Room', x: 56, y: 66, w: 12, h: 10, floor: 'ground', type: 'hall' },
-  // Taller hall gives enough depth for full-school seating during assembly.
-  { name: 'Assembly Hall', x: 70, y: 60, w: 28, h: 16, floor: 'ground', type: 'hall' },
+  // Taller + wider hall improves assembly spacing and row alignment readability.
+  { name: 'Assembly Hall', x: 68, y: 58, w: 30, h: 18, floor: 'ground', type: 'hall' },
   // Dining hall sits beside assembly for fast lunchtime flow.
   { name: 'Dining Hall', x: 100, y: 66, w: 24, h: 10, floor: 'ground', type: 'hall' },
   { name: 'Geography', x: 8, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
@@ -216,7 +221,7 @@ const blackboards = [
   { room: 'Geography', x: 18, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
   { room: 'Art Room', x: 46, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
   { room: 'History', x: 74, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
-  { room: 'Assembly Hall', x: 84, y: 63, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
+  { room: 'Assembly Hall', x: 83, y: 61, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
   { room: 'Headmaster Office', x: 164, y: 40, text: 'DISCIPLINE', revealChars: 10, revealSpeed: 36, lastSfxAt: 0 },
 ];
 
@@ -228,6 +233,84 @@ const BOARD_DRAW = {
   maxLines: 4,
   maxCharsPerLine: 22,
 };
+
+// Rich subject question bank gives each lesson many possible prompts.
+const SUBJECT_QUESTION_SEEDS = {
+  Maths: [
+    { prompt: 'What is {a} + {b}?', answer: ({ a, b }) => String(a + b), wrong: ({ a, b }) => [String(a + b + 1), String(a + b - 1), String(a + b + 2)] },
+    { prompt: 'What is {a} × {b}?', answer: ({ a, b }) => String(a * b), wrong: ({ a, b }) => [String((a * b) + a), String((a * b) - b), String((a * b) + 2)] },
+    { prompt: 'What is {a} - {b}?', answer: ({ a, b }) => String(a - b), wrong: ({ a, b }) => [String(a + b), String((a - b) + 2), String((a - b) - 2)] },
+  ],
+  English: [
+    { prompt: 'Which word is a noun: {noun}, quickly, or beautifully?', answer: ({ a }) => a, wrong: () => ['quickly', 'beautifully', 'running'] },
+    { prompt: 'Pick the adjective: red, sprint, or calmly?', answer: () => 'red', wrong: () => ['sprint', 'calmly', 'ignore'] },
+    { prompt: 'Which punctuation ends a question?', answer: () => '?', wrong: () => ['.', ',', '!'] },
+  ],
+  Science: [
+    { prompt: 'Water freezes at what °C?', answer: () => '0', wrong: () => ['10', '-10', '100'] },
+    { prompt: 'Which gas do plants absorb?', answer: () => 'carbon dioxide', wrong: () => ['oxygen', 'helium', 'nitrogen'] },
+    { prompt: 'Which planet is known as the red planet?', answer: () => 'mars', wrong: () => ['venus', 'jupiter', 'mercury'] },
+  ],
+  History: [
+    { prompt: 'Which came first: Bronze Age or Iron Age?', answer: () => 'bronze age', wrong: () => ['iron age', 'stone age', 'roman age'] },
+    { prompt: 'A decade is how many years?', answer: () => '10', wrong: () => ['5', '12', '20'] },
+    { prompt: 'Who built Roman roads in Britain?', answer: () => 'romans', wrong: () => ['vikings', 'normans', 'tudors'] },
+  ],
+  Geography: [
+    { prompt: 'What is the largest ocean?', answer: () => 'pacific', wrong: () => ['atlantic', 'indian', 'arctic'] },
+    { prompt: 'A map uses which direction at the top?', answer: () => 'north', wrong: () => ['south', 'east', 'west'] },
+    { prompt: 'Which is a continent: Sahara or Europe?', answer: () => 'europe', wrong: () => ['sahara', 'amazon', 'nile'] },
+  ],
+  Computing: [
+    { prompt: 'Binary uses which two digits?', answer: () => '0 and 1', wrong: () => ['1 and 2', '2 and 3', '0 and 2'] },
+    { prompt: 'CPU stands for?', answer: () => 'central processing unit', wrong: () => ['computer power utility', 'core program unit', 'central program utility'] },
+    { prompt: 'Which is an input device: keyboard or monitor?', answer: () => 'keyboard', wrong: () => ['monitor', 'speaker', 'projector'] },
+  ],
+};
+
+const SUBJECT_WORD_BANK = {
+  nouns: ['book', 'school', 'planet', 'teacher', 'science', 'library', 'computer', 'volcano', 'history', 'river'],
+};
+
+function roomSubjectName(roomName = '') {
+  if (roomName === 'Maths') return 'Maths';
+  if (roomName === 'English') return 'English';
+  if (roomName === 'Science Lab' || roomName === 'Physics Lab' || roomName === 'Chem Prep') return 'Science';
+  if (roomName === 'History') return 'History';
+  if (roomName === 'Geography') return 'Geography';
+  if (roomName === 'Computer Room') return 'Computing';
+  return 'General';
+}
+
+// Build hundreds of unique class questions from subject templates each day.
+function buildSubjectQuestionBank() {
+  const bank = {};
+  const nounWords = SUBJECT_WORD_BANK.nouns;
+  const allSubjects = ['Maths', 'English', 'Science', 'History', 'Geography', 'Computing', 'General'];
+  for (const subject of allSubjects) {
+    const templates = SUBJECT_QUESTION_SEEDS[subject] || SUBJECT_QUESTION_SEEDS.Maths;
+    bank[subject] = [];
+    for (let i = 0; i < 180; i += 1) {
+      const a = 2 + (i % 11);
+      const b = 1 + ((i * 3) % 10);
+      const noun = nounWords[i % nounWords.length];
+      const template = templates[i % templates.length];
+      const vars = { a, b, noun };
+      const correct = String(template.answer(vars)).toLowerCase();
+      const distractors = Array.from(new Set((template.wrong(vars) || []).map((choice) => String(choice).toLowerCase()).filter((choice) => choice !== correct))).slice(0, 3);
+      while (distractors.length < 3) distractors.push(`${correct} ${distractors.length + 1}`);
+      const choices = [correct, ...distractors].sort(() => Math.random() - 0.5);
+      bank[subject].push({
+        q: template.prompt.replaceAll('{a}', String(a)).replaceAll('{b}', String(b)).replaceAll('{noun}', noun),
+        answer: correct,
+        choices,
+      });
+    }
+  }
+  return bank;
+}
+
+const SUBJECT_QUESTION_BANK = buildSubjectQuestionBank();
 
 const shields = [
   { x: 13, y: 6, letter: 'D', found: false },
@@ -430,6 +513,8 @@ const NPC_LUNCH_RECOVER_PER_SECOND = 0.16;
 // Seated students should slowly recover stamina during lessons instead of still draining.
 const NPC_SEATED_RECOVER_PER_SECOND = 0.08;
 const NPC_END_OF_DAY_ENERGY_TARGET = 30;
+// Keep one spare seat in active classrooms so displaced students can re-seat cleanly.
+const LESSON_SPARE_SEATS_PER_ROOM = 1;
 const TOTAL_DAY_GAME_MINUTES = schedule.reduce((sum, period) => sum + period.mins, 0);
 
 // Period helpers keep schedule checks readable when timetable labels change.
@@ -444,6 +529,10 @@ function isStartDayPeriod(period) {
 function isRegistrationPeriod(period) {
   return period.period === 'Registration';
 }
+
+// Tutor rooms host morning registration: each student stays in one fixed tutor group.
+const TUTOR_ROOMS = ['Science Lab', 'Upper Common', 'Physics Lab', 'Chem Prep', 'English', 'Music Room', 'Geography', 'History'];
+const CLASS_RESPONSE_LINES = ['Here sir.', 'Sir.', 'Here.', 'Yes sir.', 'Yes miss.', 'Here miss.', 'Present.', 'Yep, here.'];
 
 const floorMeta = {
   upper: { label: 'Upper', color: 'Purple' },
@@ -974,6 +1063,7 @@ const game = {
   eventFilters: { action: true, speech: true },
   rng: Math.random,
   quizActive: null,
+  lastClassQuestionAt: 0,
   lastLateTick: 0,
   autoMode: false,
   idleMs: 0,
@@ -983,6 +1073,9 @@ const game = {
   hygiene: 100,
   warnedNeedToilet: false,
   registrationTaken: false,
+  // Fixed timetables/rosters: stable classmates per subject and tutor across days.
+  fixedClassRosters: {},
+  tutorialRollCall: {},
   litter: [],
   playerCarryingTrash: false,
   playerHeldItem: null,
@@ -1008,6 +1101,10 @@ const game = {
   preferredWeather: 'auto',
   weatherWeek: 1,
   weatherFx: [],
+  // Player anti-stuck telemetry helps detect wall embedding and auto-rescue Eric.
+  playerStuckMs: 0,
+  playerLastX: 0,
+  playerLastY: 0,
   // Daily dialogue memory prevents repeated barks from the same NPC in one day.
   dialogueDayKey: 1,
   ericSeatReservedToday: true,
@@ -1556,11 +1653,19 @@ function applyStartupOptions() {
   roomSeatCache.clear();
   createLockerPlanForStudents(game.entities);
   seedSwotGameTraders();
+  assignFixedClassRosters();
+  initTutorialRollCallState();
+  game.playerLastX = player.x;
+  game.playerLastY = player.y;
+  game.playerStuckMs = 0;
+
   assignDailyDutyTeacher();
 }
 
 createLockerPlanForStudents(game.entities);
 seedSwotGameTraders();
+assignFixedClassRosters();
+initTutorialRollCallState();
 
 function initialiseNpcRelationships() {
   for (const entity of game.entities) {
@@ -2230,13 +2335,15 @@ function getRoomSeatLayout(roomName) {
 
   if (roomName === 'Assembly Hall') {
     const studentCount = game.entities.filter((entity) => isStudentCharacter(entity)).length;
-    const cols = 10;
+    // Slightly wider seat grid keeps front rows aligned with the rest of assembly.
+    const cols = 12;
     const rows = Math.max(4, Math.ceil(studentCount / cols));
     const seats = [];
     const seatMinX = room.x + 2.1;
     const seatMaxX = room.x + room.w - 2.1;
-    const seatMinY = room.y + 5.2;
-    const seatMaxY = room.y + room.h - 1.4;
+    // Reserve extra top aisle space for teachers so first student row sits in line.
+    const seatMinY = room.y + 6.4;
+    const seatMaxY = room.y + room.h - 1.8;
     for (let row = 0; row < rows; row += 1) {
       for (let col = 0; col < cols; col += 1) {
         const x = seatMinX + (col / Math.max(1, cols - 1)) * (seatMaxX - seatMinX);
@@ -2298,6 +2405,16 @@ function getRoomSeatLayout(roomName) {
 function getSeatPosition(roomName, seatIndex, requester = null) {
   const layout = getRoomSeatLayout(roomName);
   if (!layout || !layout.seats.length) return null;
+
+  // Assembly uses a dedicated student ordering so front rows fill evenly.
+  if (roomName === 'Assembly Hall' && requester && isStudentCharacter(requester)) {
+    const assemblyStudents = game.entities
+      .filter((entity) => isStudentCharacter(entity))
+      .sort((a, b) => a.seatIndex - b.seatIndex);
+    const idx = Math.max(0, assemblyStudents.findIndex((entity) => entity === requester));
+    return layout.seats[idx % layout.seats.length] || layout.seats[0];
+  }
+
   const ericSlot = player.seatIndex % layout.seats.length;
   let slot = seatIndex % layout.seats.length;
 
@@ -2345,6 +2462,7 @@ function resetToSchoolMorning() {
   game.timeMinutes = 8 * 60 + 20;
   game.periodElapsed = 0;
   game.registrationTaken = false;
+  initTutorialRollCallState();
   game.drinksToday = 0;
   game.dailyToiletVisits = 0;
   game.warnedNeedToilet = false;
@@ -2428,6 +2546,10 @@ function resetToSchoolMorning() {
     entity.knockoutCount = Math.max(0, (entity.knockoutCount || 0) - 1);
     entity.needsNurseUntil = 0;
   }
+
+  game.playerLastX = player.x;
+  game.playerLastY = player.y;
+  game.playerStuckMs = 0;
 
   assignDailyDutyTeacher();
   assignDailyTradingCards();
@@ -2876,6 +2998,183 @@ function setBoardText(board, text) {
   board.lastSfxAt = 0;
 }
 
+
+function normalizeAnswerText(text) {
+  return String(text || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function randomFunnyWrongAnswer() {
+  const funny = [
+    'my dog ate the textbook',
+    'definitely cheese',
+    'i blame gravity',
+    'banana squared',
+    'the answer is vibes',
+    '42-ish maybe?',
+    'ask the janitor',
+  ];
+  return funny[Math.floor(game.rng() * funny.length)];
+}
+
+function pickClassQuestion(roomName) {
+  const subject = roomSubjectName(roomName);
+  const bank = SUBJECT_QUESTION_BANK[subject] || SUBJECT_QUESTION_BANK.General || SUBJECT_QUESTION_BANK.Maths;
+  const idx = Math.floor(game.rng() * bank.length);
+  const base = bank[idx] || { q: 'What is 6 × 7?', answer: '42', choices: ['42', '36', '48', '54'] };
+  const choices = [...(base.choices || [])].slice(0, 4);
+  while (choices.length < 4) choices.push(randomFunnyWrongAnswer());
+  const shuffled = choices.sort(() => game.rng() - 0.5);
+  return {
+    ...base,
+    q: String(base.q || '').trim(),
+    answer: normalizeAnswerText(base.answer),
+    choices: shuffled.map((choice) => String(choice)),
+    subject,
+    roomName,
+  };
+}
+
+function clearClassQuestionUi() {
+  if (classQuestionPanelEl) classQuestionPanelEl.hidden = true;
+  if (classQuestionChoicesEl) classQuestionChoicesEl.innerHTML = '';
+}
+
+function teacherFeedbackLine(teacher, student, correct) {
+  const studentName = student?.name || 'Student';
+  if (correct) {
+    const praise = [
+      `Excellent work, ${studentName}.`,
+      `${studentName}, that is spot on.`,
+      `Brilliant answer, ${studentName}.`,
+      `${studentName}, keep that focus — correct.`,
+    ];
+    return `✅ ${teacher.name}: "${praise[Math.floor(game.rng() * praise.length)]}"`;
+  }
+  const corrections = [
+    `${studentName}, not this time — read the board carefully.`,
+    `${studentName}, close, but that is incorrect.`,
+    `${studentName}, brave attempt. Let us fix that together.`,
+    `${studentName}, wrong answer. Try the key idea first.`,
+  ];
+  return `❌ ${teacher.name}: "${corrections[Math.floor(game.rng() * corrections.length)]}"`;
+}
+
+function resolveClassQuestionAttempt(quiz, student, attemptText, forcedCorrect = false) {
+  if (!quiz || quiz.resolved) return;
+  const normalized = normalizeAnswerText(attemptText);
+  const isCorrect = forcedCorrect || normalized === quiz.answer;
+  quiz.resolved = true;
+  quiz.resolvedBy = student.name;
+  quiz.resolvedCorrect = isCorrect;
+  quiz.answerText = normalized;
+
+  say(student, normalized || randomFunnyWrongAnswer(), { durationMs: 3000, force: true });
+  announce(`📣 ${student.name} answers: "${normalized || '...'}"`, { source: student, range: 9, force: true });
+  announce(teacherFeedbackLine(quiz.teacher, student, isCorrect), { source: quiz.teacher, range: 9, force: true });
+  if (!isCorrect) addLines(10, `${student.name} gave a wrong class answer`);
+
+  if (student === player) {
+    game.charisma = Math.max(0, Math.min(100, game.charisma + (isCorrect ? 2 : -1)));
+    updateCharismaHud();
+  }
+
+  clearClassQuestionUi();
+  setTimeout(() => {
+    if (game.quizActive === quiz) game.quizActive = null;
+  }, 350);
+}
+
+function showClassQuestionUi(quiz) {
+  if (!classQuestionPanelEl || !classQuestionChoicesEl || !classQuestionPromptEl || !classQuestionCountdownEl || !classQuestionTitleEl) return;
+  classQuestionTitleEl.textContent = `🧑‍🏫 ${quiz.teacher.name} asks (${quiz.subject})`;
+  classQuestionPromptEl.textContent = quiz.q;
+  classQuestionChoicesEl.innerHTML = '';
+
+  quiz.choices.forEach((choice, idx) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'class-question-choice';
+    btn.title = `Answer option ${idx + 1}`;
+    btn.textContent = `${String.fromCharCode(65 + idx)}. ${choice}`;
+    btn.onclick = () => {
+      if (quiz.resolved) return;
+      resolveClassQuestionAttempt(quiz, player, choice);
+    };
+    classQuestionChoicesEl.appendChild(btn);
+  });
+
+  classQuestionPanelEl.hidden = false;
+  positionClassQuestionPanel(quiz.roomName || schedule[game.periodIndex]?.room);
+}
+
+function updateClassQuestionSystem(now = performance.now()) {
+  const quiz = game.quizActive;
+  if (!quiz) {
+    clearClassQuestionUi();
+    return;
+  }
+  if (quiz.resolved) return;
+
+  const msLeft = Math.max(0, Math.ceil((quiz.playerWindowUntil - now) / 1000));
+  if (classQuestionCountdownEl) classQuestionCountdownEl.textContent = msLeft > 0 ? `⏳ ${msLeft}s for Eric` : '⏳ Class can jump in';
+
+  if (now <= quiz.playerWindowUntil) return;
+  if (now < (quiz.nextNpcAttemptAt || 0)) return;
+
+  const current = schedule[game.periodIndex];
+  const students = game.entities.filter((entity) => entity !== player && isStudentCharacter(entity) && entityRoom(entity) === current.room && entity.knockedUntil < now);
+  if (!students.length) return;
+
+  const swots = students.filter((entity) => entity.role === 'swot');
+  const instantSwotChance = swots.length && game.rng() < 0.34;
+  const responder = instantSwotChance
+    ? swots[Math.floor(game.rng() * swots.length)]
+    : students[Math.floor(game.rng() * students.length)];
+
+  let spokenAnswer = randomFunnyWrongAnswer();
+  let correct = false;
+  if (responder.role === 'swot' && game.rng() < 0.72) {
+    spokenAnswer = quiz.answer;
+    correct = true;
+  } else if (responder.role === 'hero' && game.rng() < 0.35) {
+    spokenAnswer = quiz.answer;
+    correct = true;
+  } else if (game.rng() < 0.2) {
+    spokenAnswer = quiz.choices[Math.floor(game.rng() * quiz.choices.length)] || randomFunnyWrongAnswer();
+    correct = normalizeAnswerText(spokenAnswer) === quiz.answer;
+  }
+
+  resolveClassQuestionAttempt(quiz, responder, spokenAnswer, correct);
+}
+function maybeStartClassQuestion(current, now) {
+  if (!isSupervisedPeriod(current) || isRegistrationPeriod(current) || isAssemblyPeriod(current)) return;
+  if (game.quizActive) return;
+  if (now - (game.lastClassQuestionAt || 0) < 28000) return;
+  const teacher = assignedTeacherEntityForPeriod(current);
+  if (!teacher || entityRoom(teacher) !== current.room || teacher.knockedUntil > now) return;
+  if (!isAssignedTeacherSeatedForPeriod(current) && game.rng() < 0.5) return;
+  if (game.rng() > 0.0028 + (game.lessonNoiseLevel * 0.0015)) return;
+
+  const quiz = pickClassQuestion(current.room);
+  const board = blackboards.find((entry) => entry.room === current.room);
+  if (board) setBoardText(board, quiz.q);
+
+  game.quizActive = {
+    ...quiz,
+    teacher,
+    askedAt: now,
+    playerWindowUntil: now + 5600,
+    nextNpcAttemptAt: now + 5600 + (game.rng() * 1200),
+    resolved: false,
+    roomName: current.room,
+  };
+  game.lastClassQuestionAt = now;
+  showClassQuestionUi(game.quizActive);
+  announce(`🧑‍🏫 ${teacher.name}: "${quiz.subject} question for Eric first."`, { source: teacher, range: 9, force: true });
+}
+
+
+
 function boardLinesForText(text) {
   const words = String(text || '').toUpperCase().split(/\s+/).filter(Boolean);
   const lines = [];
@@ -3030,6 +3329,58 @@ function moveEntityWithCollision(entity, deltaX, deltaY) {
   // Axis-separated fallback gives natural wall sliding and keeps controls responsive.
   if (isWalkablePoint(nextX, entity.y)) entity.x = nextX;
   if (isWalkablePoint(entity.x, nextY)) entity.y = nextY;
+}
+
+function nearestWalkablePoint(origin, candidates = []) {
+  const points = [origin, ...candidates].filter(Boolean);
+  for (const point of points) {
+    if (isWalkablePoint(point.x, point.y)) return point;
+
+    // Spiral-style local probe around each candidate to find nearest valid ground.
+    for (let radius = 0.45; radius <= 3; radius += 0.45) {
+      for (let a = 0; a < 360; a += 30) {
+        const rad = (a * Math.PI) / 180;
+        const test = { x: point.x + Math.cos(rad) * radius, y: point.y + Math.sin(rad) * radius };
+        if (isWalkablePoint(test.x, test.y)) return test;
+      }
+    }
+  }
+  return null;
+}
+
+function recoverPlayerIfWallStuck(dt) {
+  const moved = Math.hypot(player.x - game.playerLastX, player.y - game.playerLastY);
+  const pushingInput = Math.abs(player.vx) + Math.abs(player.vy) > 0.02;
+  const insideWalkable = isWalkablePoint(player.x, player.y);
+
+  if (!insideWalkable || (pushingInput && moved < 0.003)) {
+    game.playerStuckMs += dt;
+  } else {
+    game.playerStuckMs = Math.max(0, game.playerStuckMs - (dt * 2));
+  }
+
+  game.playerLastX = player.x;
+  game.playerLastY = player.y;
+
+  if (game.playerStuckMs < 1100) return;
+
+  const current = schedule[game.periodIndex];
+  const preferred = [
+    getSeatPosition(current.room, player.seatIndex, player),
+    roomCenter(current.room),
+    roomCenter('Ground Corridor'),
+  ];
+  const safe = nearestWalkablePoint({ x: player.x, y: player.y }, preferred);
+  if (!safe) return;
+
+  player.x = safe.x;
+  player.y = safe.y;
+  player.vx = 0;
+  player.vy = 0;
+  player.isSeated = false;
+  player.seatedRoom = null;
+  game.playerStuckMs = 0;
+  announce('🛟 Eric was stuck in a wall and got auto-unstuck.', { force: true });
 }
 
 function setPeriod(index) {
@@ -3555,8 +3906,6 @@ function nearestTradePartner(entity, range = 2.3) {
   }
   return best;
 }
-const LESSON_SPARE_SEATS_PER_ROOM = 1;
-
 function roomHasOpenSeat(roomName, student) {
   const layout = getRoomSeatLayout(roomName);
   if (!layout || !layout.seats.length) return false;
@@ -3605,34 +3954,132 @@ function lessonClassroomCandidates(currentPeriod) {
   return candidates.length ? candidates : fallbackClassrooms;
 }
 
-function chooseLessonRoomForStudent(student, currentPeriod) {
-  const candidates = lessonClassroomCandidates(currentPeriod);
-  // Reserve one spare chair per classroom when possible so students can re-seat if displaced.
-  let availableRooms = candidates.filter((roomName) => roomHasSpareSeat(roomName, student));
-  if (!availableRooms.length) {
-    availableRooms = candidates.filter((roomName) => roomHasOpenSeat(roomName, student));
-  }
-  if (!availableRooms.length) return currentPeriod.room;
+function assignFixedClassRosters() {
+  // Build deterministic class/tutor rosters so students meet the same classmates each day.
+  const students = game.entities.filter((entity) => isStudentCharacter(entity));
+  const registrationRosters = {};
+  TUTOR_ROOMS.forEach((room) => { registrationRosters[room] = []; });
 
-  // Keep classes balanced by selecting the room with the lowest occupancy ratio.
-  let bestRoom = availableRooms[0];
-  let bestRatio = Infinity;
-  let bestCommitted = Infinity;
-  for (const roomName of availableRooms) {
-    const layout = getRoomSeatLayout(roomName);
-    if (!layout || !layout.seats.length) continue;
-    const committed = studentsCommittedToRoom(roomName, student);
-    const effectiveCapacity = Math.max(1, layout.seats.length - LESSON_SPARE_SEATS_PER_ROOM);
-    const ratio = committed / effectiveCapacity;
-    if (ratio < bestRatio || (Math.abs(ratio - bestRatio) < 0.0001 && committed < bestCommitted)) {
-      bestRatio = ratio;
-      bestCommitted = committed;
-      bestRoom = roomName;
+  for (const student of students) {
+    if (student === player) {
+      student.tutorRoom = 'Science Lab';
+    } else {
+      const idx = styleSeedFromName(`${student.name}:tutor`) % TUTOR_ROOMS.length;
+      student.tutorRoom = TUTOR_ROOMS[idx];
+    }
+    registrationRosters[student.tutorRoom] = registrationRosters[student.tutorRoom] || [];
+    registrationRosters[student.tutorRoom].push(student.name);
+    student.fixedLessonRooms = student.fixedLessonRooms || {};
+  }
+
+  const fixedBySubject = {};
+  const lessonSubjects = [...new Set(schedule
+    .filter((period) => period.mode === 'lesson' && !isRegistrationPeriod(period) && !isAssemblyPeriod(period))
+    .map((period) => period.room))];
+
+  for (const subjectRoom of lessonSubjects) {
+    const pseudoPeriod = { room: subjectRoom };
+    const candidates = lessonClassroomCandidates(pseudoPeriod).slice(0, 6);
+    const rosterMap = {};
+    candidates.forEach((room) => { rosterMap[room] = []; });
+
+    const ordered = [...students].sort((a, b) => styleSeedFromName(`${a.name}:${subjectRoom}`) - styleSeedFromName(`${b.name}:${subjectRoom}`));
+    for (const student of ordered) {
+      let bestRoom = candidates[0] || subjectRoom;
+      let bestScore = Infinity;
+      for (const roomName of candidates) {
+        const layout = getRoomSeatLayout(roomName);
+        const capacity = Math.max(4, (layout?.seats?.length || 8) - LESSON_SPARE_SEATS_PER_ROOM);
+        const occupancy = rosterMap[roomName]?.length || 0;
+        // Prefer rooms with spare seats and lower occupancy, with stable deterministic tie-breaks.
+        const overflowPenalty = occupancy >= capacity ? 1000 : 0;
+        const tieBreaker = (styleSeedFromName(`${student.name}:${roomName}`) % 17) / 100;
+        const score = (occupancy / capacity) + overflowPenalty + tieBreaker;
+        if (score < bestScore) {
+          bestScore = score;
+          bestRoom = roomName;
+        }
+      }
+      rosterMap[bestRoom] = rosterMap[bestRoom] || [];
+      rosterMap[bestRoom].push(student.name);
+      student.fixedLessonRooms[subjectRoom] = bestRoom;
+    }
+
+    fixedBySubject[subjectRoom] = rosterMap;
+  }
+
+  game.fixedClassRosters = {
+    Registration: registrationRosters,
+    ...fixedBySubject,
+  };
+}
+
+function chooseLessonRoomForStudent(student, currentPeriod) {
+  if (!student) return currentPeriod.room;
+  if (isRegistrationPeriod(currentPeriod)) {
+    return student.tutorRoom || currentPeriod.room;
+  }
+  if (isAssemblyPeriod(currentPeriod)) return 'Assembly Hall';
+  if (student.fixedLessonRooms?.[currentPeriod.room]) {
+    return student.fixedLessonRooms[currentPeriod.room];
+  }
+  return currentPeriod.room;
+}
+
+function initTutorialRollCallState() {
+  const rooms = game.fixedClassRosters?.Registration || {};
+  const state = {};
+  for (const [roomName, roster] of Object.entries(rooms)) {
+    if (!roster.length) continue;
+    state[roomName] = { index: 0, waitingForReply: false, nextAt: 0 };
+  }
+  game.tutorialRollCall = state;
+}
+
+function updateTutorialRollCall(now = performance.now()) {
+  const rooms = game.fixedClassRosters?.Registration || {};
+  if (!Object.keys(rooms).length) return;
+
+  let completedRooms = 0;
+  for (const [roomName, roster] of Object.entries(rooms)) {
+    if (!roster.length) {
+      completedRooms += 1;
+      continue;
+    }
+    const roll = game.tutorialRollCall[roomName] || { index: 0, waitingForReply: false, nextAt: 0 };
+    game.tutorialRollCall[roomName] = roll;
+    if (roll.index >= roster.length) {
+      completedRooms += 1;
+      continue;
+    }
+    if (now < (roll.nextAt || 0)) continue;
+
+    const teacherName = assignedTeacherForRoom(roomName);
+    const teacher = game.entities.find((entity) => entity.role === 'teacher' && entity.name === teacherName && entityRoom(entity) === roomName);
+    const studentName = roster[roll.index];
+    const student = game.entities.find((entity) => entity.name === studentName && entityRoom(entity) === roomName);
+    if (!teacher || !student) continue;
+
+    if (!roll.waitingForReply) {
+      say(teacher, `${student.name}?`, { durationMs: 2300 });
+      announce(`📘 ${teacher.name} calls register in ${roomName}: "${student.name}?"`, { source: teacher, range: 10, force: true });
+      roll.waitingForReply = true;
+      roll.nextAt = now + 900 + (game.rng() * 450);
+    } else {
+      const line = CLASS_RESPONSE_LINES[Math.floor(game.rng() * CLASS_RESPONSE_LINES.length)];
+      say(student, line, { durationMs: 2100 });
+      roll.waitingForReply = false;
+      roll.index += 1;
+      roll.nextAt = now + 600 + (game.rng() * 400);
     }
   }
 
-  return bestRoom;
+  if (!game.registrationTaken && completedRooms === Object.keys(rooms).length && completedRooms > 0) {
+    game.registrationTaken = true;
+    announce('📘 Tutorial registration complete: every tutor has called the full class list.', { force: true });
+  }
 }
+
 
 function toggleSeat() {
   const currentRoom = entityRoom(player);
@@ -3850,37 +4297,10 @@ function interact() {
     }
   }
 
-  // Interactive teacher quiz in class for extra detail.
-  const teacherNearby = game.entities.find((e) => e.role === 'teacher' && distance(e, player) < 1.7);
-  const current = schedule[game.periodIndex];
-  const now = performance.now();
-  if (
-    teacherNearby
-    && entityRoom(player) === current.room
-    && isAssignedTeacherSeatedForPeriod(current)
-    && !game.quizActive
-    // Slower questioning cadence so lessons feel less spammy.
-    && now - teacherNearby.lastQuizAt > 90000
-    && game.rng() < 0.45
-  ) {
-    const quiz = { q: 'What is 6 x 7?', answer: '42' };
-    game.quizActive = quiz;
-    teacherNearby.lastQuizAt = now;
-    const board = blackboards.find((b) => b.room === current.room);
-    if (board) {
-      teacherNearby.target = { x: board.x - 1.2, y: board.y + 1.3 };
-      teacherNearby.writingUntil = performance.now() + 1500;
-      setBoardText(board, quiz.q);
-    }
-    say(teacherNearby, 'Right class, question time.');
-    const response = prompt(`${teacherNearby.name} asks: ${quiz.q}`);
-    if ((response || '').trim() === quiz.answer) {
-      announce(`✅ Correct answer. ${teacherNearby.name} nods approvingly.`, { source: teacherNearby, range: 7 });
-    } else {
-      addLines(30, 'wrong answer in lesson');
-      announce(`❌ Wrong answer. ${teacherNearby.name}: "Concentrate!"`, { source: teacherNearby, range: 7 });
-    }
-    game.quizActive = null;
+  // Eric now answers class questions from the on-screen panel near the board.
+  if (game.quizActive && !game.quizActive.resolved && entityRoom(player) === schedule[game.periodIndex].room) {
+    showClassQuestionUi(game.quizActive);
+    announce('📝 Question panel opened — choose A, B, C, or D.');
   }
 }
 
@@ -4148,6 +4568,10 @@ function chooseTarget(entity, currentPeriod) {
 
 function isTeacherPresentForPeriod(currentPeriod) {
   if (!isSupervisedPeriod(currentPeriod)) return true;
+  if (isRegistrationPeriod(currentPeriod)) {
+    // Registration uses multiple tutor rooms, so any active tutor roll-call counts as staffed.
+    return game.entities.some((entity) => entity.role === 'teacher' && entity.knockedUntil < performance.now());
+  }
   // Count attendance by room presence so lessons don't stall when teachers pace near the board.
   return game.entities.some((entity) => (
     entity.role === 'teacher'
@@ -4415,6 +4839,13 @@ function updateAI(dt) {
     game.lessonNoiseLevel = Math.min(1, game.lessonNoiseLevel + dt * 0.0005);
   }
 
+  if (isRegistrationPeriod(current)) {
+    updateTutorialRollCall(now);
+  }
+
+  maybeStartClassQuestion(current, now);
+  updateClassQuestionSystem(now);
+
   for (const entity of game.entities) {
     if (entity === player) continue;
     if (!hasArrivedForCurrentPeriod(entity, current)) {
@@ -4529,8 +4960,14 @@ function updateAI(dt) {
       if (game.rng() < (0.45 + (iqFactor * 0.28) + (witFactor * 0.12))) {
         ensureDialogueSetup(entity);
         const responseLine = contextualResponseFor(entity, assignedTeacherEntityForPeriod(current));
-        say(entity, responseLine);
-        announce(`📚 ${entity.name} attempted the class question.`, { source: entity, range: 7.5 });
+        const spokenAttempt = game.quizActive && !game.quizActive.resolved
+          ? (entity.role === 'swot' && game.rng() < 0.75 ? game.quizActive.answer : randomFunnyWrongAnswer())
+          : responseLine;
+        say(entity, spokenAttempt);
+        announce(`📚 ${entity.name} calls out: "${spokenAttempt}"`, { source: entity, range: 7.5 });
+        if (game.quizActive && !game.quizActive.resolved && now > game.quizActive.playerWindowUntil && game.rng() < (entity.role === 'swot' ? 0.38 : 0.07)) {
+          resolveClassQuestionAttempt(game.quizActive, entity, spokenAttempt, entity.role === 'swot' && normalizeAnswerText(spokenAttempt) === game.quizActive.answer);
+        }
         entity.emotion = Math.min(100, entity.emotion + 1.2);
       } else {
         ensureDialogueSetup(entity);
@@ -4927,6 +5364,23 @@ function updateAI(dt) {
     const wasSeated = entity.isSeated && entity.seatedRoom === expectedRoom;
     // Add a small hysteresis window: sitting is easy to maintain, harder to flip off.
     entity.isSeated = seatedTarget && (len < 0.4 || (wasSeated && len < 0.85));
+
+    // Assembly-specific settle pass: lock teachers at their final standing/seated marker
+    // to stop micro path corrections that look like hopping on the spot.
+    if (inLesson && isAssemblyPeriod(current) && entity.role === 'teacher' && entityRoom(entity) === 'Assembly Hall') {
+      const roster = teachersInRoster();
+      const index = Math.max(0, roster.filter((teacher) => teacher.name !== 'Mr Wacker').findIndex((teacher) => teacher.name === entity.name));
+      const settleSpot = entity.name === 'Mr Wacker'
+        ? assemblyHeadmasterSpot()
+        : assemblyTeacherLineSpot(index, roster.length);
+      if (distance(entity, settleSpot) < 0.9) {
+        entity.x = settleSpot.x;
+        entity.y = settleSpot.y;
+        entity.target = settleSpot;
+        entity.isSeated = true;
+      }
+    }
+
     // Keep lessons visually correct: students sit once they are at their desk tile.
     if (seatedTarget && entity.role !== 'teacher') {
       const seatTarget = getSeatPosition(expectedRoom, entity.seatIndex, entity) || entity.target;
@@ -5122,11 +5576,6 @@ function updateSchedule(dt) {
     announce(`⏱️ ${current.period} resumed after waiting for teacher to get seated.`);
   }
   game.timeMinutes += deltaMins;
-
-  if (isRegistrationPeriod(current) && !game.registrationTaken && game.periodElapsed > 8) {
-    game.registrationTaken = true;
-    announce('📘 Registration complete: all students marked present by tutors.');
-  }
 
   if (isRegistrationPeriod(current) && !game.ericSeatReservedToday && game.periodElapsed < 2.5) {
     const blocker = ericSeatOccupant(current.room);
@@ -6300,6 +6749,24 @@ function positionTooltip(pointer, topOffset = 118, maxWidth = 260) {
   entityTooltipEl.style.top = `${top}px`;
 }
 
+
+function positionClassQuestionPanel(roomName) {
+  if (!classQuestionPanelEl) return;
+  const board = blackboards.find((entry) => entry.room === roomName);
+  if (!board) {
+    classQuestionPanelEl.style.left = '';
+    classQuestionPanelEl.style.right = '0.8rem';
+    return;
+  }
+  const boardPos = worldToScreen(board.x, board.y);
+  const wrap = canvas.parentElement.getBoundingClientRect();
+  const panelWidth = 340;
+  const preferredLeft = Math.min(Math.max(8, (boardPos.sx / canvas.width) * wrap.width + 22), wrap.width - panelWidth - 8);
+  classQuestionPanelEl.style.left = `${preferredLeft}px`;
+  classQuestionPanelEl.style.right = 'auto';
+  classQuestionPanelEl.style.top = '0.8rem';
+}
+
 function tooltipBar(value, color) {
   const clamped = Math.max(0, Math.min(100, Math.round(value || 0)));
   return `<span class="tooltip-meter"><span style="width:${clamped}%;background:${color};"></span></span>${clamped}%`;
@@ -6614,6 +7081,7 @@ function loop(now) {
 
     moveEntityWithCollision(player, player.vx * dt * 0.011, player.vy * dt * 0.011);
     constrain(player);
+    recoverPlayerIfWallStuck(dt);
 
     // Update animation time for all entities so movement reads like retro sprites.
     for (const entity of game.entities) {
@@ -6763,5 +7231,14 @@ window.__skoolDazeDebug = {
     game.autoMode = Boolean(enabled);
     game.idleMs = 0;
     updateAutoStatus();
+  },
+  // Test hook: place Eric directly for automated stuck-recovery checks.
+  setPlayerPosition: (x, y) => {
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      player.x = x;
+      player.y = y;
+      player.vx = 0;
+      player.vy = 0;
+    }
   },
 };
