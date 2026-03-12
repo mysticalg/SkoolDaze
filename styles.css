@@ -91,6 +91,53 @@ body {
 
 .ratios { margin-bottom: 0.6rem; }
 
+.ollama-panel {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.35rem 0 0.65rem;
+  padding: 0.55rem;
+  border: 1px solid #365278;
+  border-radius: 8px;
+  background: rgba(5, 16, 31, 0.45);
+}
+
+.ollama-panel textarea,
+.ollama-panel input {
+  border: 1px solid #4a628c;
+  border-radius: 8px;
+  background: #11233e;
+  color: #eaf6ff;
+  min-height: 2rem;
+  padding: 0.2rem 0.4rem;
+}
+
+.ollama-panel textarea {
+  resize: vertical;
+  min-height: 4.3rem;
+}
+
+.ollama-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.ollama-actions button {
+  border: 1px solid #4a628c;
+  background: #11233e;
+  color: #eaf6ff;
+  border-radius: 8px;
+  padding: 0.33rem 0.5rem;
+  cursor: pointer;
+}
+
+.ollama-actions button:hover {
+  background: #17315a;
+}
+
+.ollama-help.error { color: #fecaca; }
+.ollama-help.ok { color: #86efac; }
+
 .start-btn {
   width: 100%;
   min-height: 2.35rem;

@@ -53,6 +53,13 @@ const optRatioSwotEl = document.getElementById('optRatioSwot');
 const optRatioWeirdEl = document.getElementById('optRatioWeird');
 const optGameSpeedEl = document.getElementById('optGameSpeed');
 const optWeatherEl = document.getElementById('optWeather');
+const optOllamaModelEl = document.getElementById('optOllamaModel');
+const optOllamaEndpointEl = document.getElementById('optOllamaEndpoint');
+const optOllamaLoadApiBtn = document.getElementById('optOllamaLoadApi');
+const optOllamaImportListBtn = document.getElementById('optOllamaImportList');
+const optOllamaListInputEl = document.getElementById('optOllamaListInput');
+const ollamaModelOptionsEl = document.getElementById('ollamaModelOptions');
+const ollamaModelHelpEl = document.getElementById('ollamaModelHelp');
 document.getElementById('closeHelp').onclick = () => helpDialog.close();
 helpBtn.onclick = () => helpDialog.showModal();
 
@@ -1209,6 +1216,10 @@ const game = {
   collectables: [],
   lockerCoverage: 0,
   lockerCapacity: 0,
+  // Ollama selection is stored as browser-safe text/API config (no direct folder access).
+  ollamaModel: '',
+  ollamaEndpoint: 'http://localhost:11434',
+  ollamaKnownModels: [],
 };
 
 let seatCounter = 0;
@@ -1706,6 +1717,105 @@ function applyStudentMix(studentCount, ratios) {
   });
 }
 
+const OLLAMA_SETTINGS_STORAGE_KEY = 'skooldaze.ollamaSettings.v1';
+
+function setOllamaStatus(message, tone = '') {
+  if (!ollamaModelHelpEl) return;
+  ollamaModelHelpEl.textContent = message;
+  ollamaModelHelpEl.classList.remove('error', 'ok');
+  if (tone) ollamaModelHelpEl.classList.add(tone);
+}
+
+function parseOllamaListOutput(rawText) {
+  if (!rawText) return [];
+  const modelNames = [];
+  const lines = rawText.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || /^name\s+/i.test(trimmed)) continue;
+    const [name] = trimmed.split(/\s+/);
+    if (!name) continue;
+    modelNames.push(name);
+  }
+  return [...new Set(modelNames)];
+}
+
+function looksLikeOllamaFolderPath(value) {
+  if (!value) return false;
+  const normalized = String(value).toLowerCase().replace(/\\/g, '/');
+  return normalized.includes('.ollama/models') || /^[a-z]:\/.+\.ollama\/models/.test(normalized);
+}
+
+function renderOllamaModelOptions(models = []) {
+  if (!ollamaModelOptionsEl) return;
+  ollamaModelOptionsEl.innerHTML = '';
+  for (const modelName of models) {
+    const option = document.createElement('option');
+    option.value = modelName;
+    ollamaModelOptionsEl.append(option);
+  }
+}
+
+function saveOllamaSettings() {
+  const payload = {
+    model: optOllamaModelEl?.value?.trim() || '',
+    endpoint: optOllamaEndpointEl?.value?.trim() || 'http://localhost:11434',
+    knownModels: game.ollamaKnownModels,
+  };
+  try {
+    localStorage.setItem(OLLAMA_SETTINGS_STORAGE_KEY, JSON.stringify(payload));
+  } catch (error) {
+    // Storage may be unavailable in private windows; skip persistence silently.
+  }
+}
+
+function loadOllamaSettings() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(OLLAMA_SETTINGS_STORAGE_KEY) || '{}');
+    if (optOllamaModelEl && typeof parsed.model === 'string') optOllamaModelEl.value = parsed.model;
+    if (optOllamaEndpointEl && typeof parsed.endpoint === 'string') optOllamaEndpointEl.value = parsed.endpoint;
+    if (Array.isArray(parsed.knownModels)) game.ollamaKnownModels = parsed.knownModels;
+  } catch (error) {
+    // Invalid saved state should not block game startup.
+  }
+  renderOllamaModelOptions(game.ollamaKnownModels);
+}
+
+async function loadOllamaModelsFromApi() {
+  if (!optOllamaEndpointEl) return;
+  const endpoint = (optOllamaEndpointEl.value || '').trim().replace(/\/$/, '');
+  if (!endpoint) {
+    setOllamaStatus('⚠️ Add an Ollama endpoint first (for example http://localhost:11434).', 'error');
+    return;
+  }
+  setOllamaStatus('⏳ Loading models from Ollama API...', '');
+  try {
+    const response = await fetch(`${endpoint}/api/tags`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    const models = (payload.models || []).map((entry) => entry.name).filter(Boolean);
+    game.ollamaKnownModels = [...new Set([...(game.ollamaKnownModels || []), ...models])];
+    renderOllamaModelOptions(game.ollamaKnownModels);
+    saveOllamaSettings();
+    setOllamaStatus(`✅ Loaded ${models.length} model(s) from API. You can still type a model manually.`, 'ok');
+  } catch (error) {
+    setOllamaStatus('⚠️ Browser could not reach Ollama API. Check endpoint/CORS, or import `ollama list` output.', 'error');
+  }
+}
+
+function importOllamaModelsFromList() {
+  if (!optOllamaListInputEl) return;
+  const imported = parseOllamaListOutput(optOllamaListInputEl.value);
+  if (!imported.length) {
+    setOllamaStatus('⚠️ No model names found. Paste raw terminal output from `ollama list`.', 'error');
+    return;
+  }
+  game.ollamaKnownModels = [...new Set([...(game.ollamaKnownModels || []), ...imported])];
+  renderOllamaModelOptions(game.ollamaKnownModels);
+  saveOllamaSettings();
+  setOllamaStatus(`✅ Imported ${imported.length} model(s). You can also type any model manually.`, 'ok');
+}
+
 function applyStartupOptions() {
   const desiredStudents = Number(optStudentCountEl?.value || 30);
   const desiredTeachers = Number(optTeacherCountEl?.value || 9);
@@ -1727,6 +1837,23 @@ function applyStartupOptions() {
     game.weather = weatherSetting;
   }
 
+  const ollamaModel = (optOllamaModelEl?.value || '').trim();
+  const ollamaEndpoint = (optOllamaEndpointEl?.value || 'http://localhost:11434').trim();
+  game.ollamaEndpoint = ollamaEndpoint;
+  if (looksLikeOllamaFolderPath(ollamaModel)) {
+    setOllamaStatus('❌ Folder paths (like .ollama/models) are not browser-readable. Use API/import or type the model name.', 'error');
+    return false;
+  }
+  game.ollamaModel = ollamaModel;
+  if (ollamaModel && !game.ollamaKnownModels.includes(ollamaModel)) {
+    game.ollamaKnownModels = [...game.ollamaKnownModels, ollamaModel];
+    renderOllamaModelOptions(game.ollamaKnownModels);
+  }
+  saveOllamaSettings();
+  if (ollamaModel) {
+    setOllamaStatus(`✅ Using model \"${ollamaModel}\".`, 'ok');
+  }
+
   // Startup population changes alter seating demand; rebuild cached layouts.
   roomSeatCache.clear();
   createLockerPlanForStudents(game.entities);
@@ -1738,6 +1865,7 @@ function applyStartupOptions() {
   game.playerStuckMs = 0;
 
   assignDailyDutyTeacher();
+  return true;
 }
 
 createLockerPlanForStudents(game.entities);
@@ -7544,7 +7672,8 @@ closeInteractionPanelBtn.onclick = () => {
 };
 
 function startGameFromSplash() {
-  applyStartupOptions();
+  const started = applyStartupOptions();
+  if (!started) return;
   if (startOverlayEl) startOverlayEl.hidden = true;
   assignDailyDutyTeacher();
   announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
@@ -7564,6 +7693,21 @@ function startGameFromSplash() {
 }
 
 if (startGameBtn) startGameBtn.addEventListener('click', startGameFromSplash);
+if (optOllamaLoadApiBtn) optOllamaLoadApiBtn.addEventListener('click', loadOllamaModelsFromApi);
+if (optOllamaImportListBtn) optOllamaImportListBtn.addEventListener('click', importOllamaModelsFromList);
+if (optOllamaModelEl) {
+  optOllamaModelEl.addEventListener('input', () => {
+    if (looksLikeOllamaFolderPath(optOllamaModelEl.value)) {
+      setOllamaStatus('❌ Folder path detected. Type the model name only, e.g. llama3.1:8b.', 'error');
+      return;
+    }
+    setOllamaStatus('💡 Tip: model names can be typed manually even if API discovery is unavailable.', '');
+    saveOllamaSettings();
+  });
+}
+if (optOllamaEndpointEl) optOllamaEndpointEl.addEventListener('change', saveOllamaSettings);
+if (optOllamaListInputEl) optOllamaListInputEl.addEventListener('change', saveOllamaSettings);
+loadOllamaSettings();
 
 // Lightweight debug hooks help automated validation without changing gameplay UI.
 window.__skoolDazeDebug = {

@@ -46,6 +46,25 @@
         <label title="Chaotic students with odd routines.">🌀 Weird <input id="optRatioWeird" type="number" min="0" max="100" value="25" /></label>
       </div>
 
+      <h3>🤖 Ollama model</h3>
+      <div class="ollama-panel" title="Browser-safe model selection uses API discovery, pasted ollama list output, or manual model name entry.">
+        <label title="Pick from discovered/imported models or type a model manually.">🏷️ Model name
+          <input id="optOllamaModel" type="text" list="ollamaModelOptions" placeholder="e.g. llama3.1:8b" autocomplete="off" />
+          <datalist id="ollamaModelOptions"></datalist>
+        </label>
+        <label title="Optional Ollama API URL used for browser-friendly model discovery.">🌐 Ollama API endpoint
+          <input id="optOllamaEndpoint" type="url" value="http://localhost:11434" placeholder="http://localhost:11434" />
+        </label>
+        <div class="ollama-actions">
+          <button id="optOllamaLoadApi" type="button" title="Load models using the Ollama API /api/tags endpoint">🔄 Load from API</button>
+          <button id="optOllamaImportList" type="button" title="Import model names by pasting terminal output from `ollama list` below">📥 Import from `ollama list`</button>
+        </div>
+        <label title="Paste command-line output from `ollama list` to extract model names in browser-safe format.">📋 `ollama list` output
+          <textarea id="optOllamaListInput" rows="3" placeholder="NAME            ID              SIZE    MODIFIED\nllama3.1:8b     abc123          4.7 GB  2 days ago"></textarea>
+        </label>
+        <p id="ollamaModelHelp" class="todo-help ollama-help" aria-live="polite">💡 Browsers cannot scan `.ollama/models` folders directly. Use API discovery, import `ollama list`, or type the model manually.</p>
+      </div>
+
       <button id="startGameBtn" class="start-btn" type="button" title="Start the school day with these options">▶️ Start school day</button>
       <p class="todo-help">💡 Tip: percentages are normalized automatically if they do not add up to 100.</p>
     </div>
