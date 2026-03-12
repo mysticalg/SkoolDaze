@@ -50,6 +50,16 @@
           <label title="Minimum global delay between any NPC speech/thought bubble. Lower feels busier; higher feels calmer.">🗣️ NPC chatter delay (ms)
             <input id="optNpcChatterDelay" type="number" min="100" max="10000" step="100" value="1000" />
           </label>
+          <label title="Choose boys-only, girls-only, or a mixed school setup.">🏫 School intake
+            <select id="optSchoolIntake">
+              <option value="mixed" selected>Mixed</option>
+              <option value="boys">Boys only</option>
+              <option value="girls">Girls only</option>
+            </select>
+          </label>
+          <label title="Girls-to-boys ratio for mixed intake. 50 means equal split.">⚖️ Girls ratio (%)
+            <input id="optGirlsRatio" type="number" min="0" max="100" value="50" />
+          </label>
         </div>
 
         <h3>🎭 Student mix (%)</h3>

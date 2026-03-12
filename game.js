@@ -62,6 +62,8 @@ const optRatioWeirdEl = document.getElementById('optRatioWeird');
 const optGameSpeedEl = document.getElementById('optGameSpeed');
 const optWeatherEl = document.getElementById('optWeather');
 const optNpcChatterDelayEl = document.getElementById('optNpcChatterDelay');
+const optSchoolIntakeEl = document.getElementById('optSchoolIntake');
+const optGirlsRatioEl = document.getElementById('optGirlsRatio');
 const optLlmEnabledEl = document.getElementById('optLlmEnabled');
 const optLlmNsfwEl = document.getElementById('optLlmNsfw');
 const optLlmNoFallbackEl = document.getElementById('optLlmNoFallback');
@@ -223,7 +225,7 @@ function diningHallLayout() {
     { x: hall.x + 8.3, y: hall.y + 4.8 },
   ];
 
-  return {
+  const entity = {
     hall,
     plateStand,
     servingPoint,
@@ -545,12 +547,12 @@ const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 // Bell schedule now compresses a full school day to ~15 real-world minutes.
 const SCHOOL_DAY_START_MINUTES = (8 * 60) + 20;
-const REGISTRATION_START_MINUTES = (8 * 60) + 50;
+const REGISTRATION_START_MINUTES = (9 * 60) + 5;
 
 function buildScheduleForDay(dayCount = 1) {
   const weekday = weekdayLabelForDay(dayCount);
   const mondayWednesdayAssembly = weekday === 'Mon' || weekday === 'Wed';
-  // Keep a longer arrival/tutorial window so registration does not begin before 8:50.
+  // Keep a longer arrival/tutorial window so registration does not begin before 9:05.
   const startDayMinutes = Math.max(10, REGISTRATION_START_MINUTES - SCHOOL_DAY_START_MINUTES);
   const routine = [
     { period: 'Start Day', room: 'School Gates', mins: startDayMinutes, mode: 'transition' },
@@ -813,7 +815,10 @@ const npcTraitBackendDb = window.TRAIT_BACKEND_DB || {
 };
 
 function randomInventoryFor(role) {
-  const baseline = role === 'teacher' ? ['textbook', 'letter', 'apple'] : ['textbook', 'paper airplane'];
+  // Everyone carries a basic phone for texting/pictures; old fixed paper-plane loadout removed.
+  const baseline = role === 'teacher'
+    ? ['textbook', 'basic mobile phone', 'charger', 'letter']
+    : ['basic mobile phone', 'charger', 'textbook'];
   const picks = 2 + Math.floor(Math.random() * 3);
   const items = [...baseline];
   for (let i = 0; i < picks; i += 1) {
@@ -1285,6 +1290,7 @@ function resolveLlmSocialDirective(actor, peer, fallbackIntent = 'ally') {
     subject: roomSubjectName(entityRoom(actor)),
     speaker: actor.name,
     speakerRole: roleLabelForLlm(actor.role),
+    speakerSex: actor.sex || 'unspecified',
     traitSummary: summarizeTraitBundle(actor.traits),
     socialSummary: `${actor.name} relationships: ${topRelationshipSummary(actor)}; ${peer?.name || 'peer'} reputation with Eric:${Math.round(peer?.ericReputation || 0)}`,
     interestSummary: `${summarizeInterests(actor)} | ${summarizeInterests(peer)}`,
@@ -1837,10 +1843,12 @@ function llmCacheKey({
   interestSummary = '',
   addresseeName = '',
   addresseeRole = '',
+  speakerSex = '',
+  addresseeSex = '',
   conversationContext = '',
   conversationTurn = 0,
 }) {
-  return `${llmProviderLabel()}|${channel}|${subject}|${speaker}|${speakerRole}|${traitSummary}|social:${String(socialSummary).toLowerCase().slice(0, 90)}|interests:${String(interestSummary).toLowerCase().slice(0, 70)}|${room}|${addresseeName}|${addresseeRole}|turn:${conversationTurn}|ctx:${String(conversationContext).toLowerCase().slice(0, 90)}|${String(fallback).toLowerCase().slice(0, 120)}`;
+  return `${llmProviderLabel()}|${channel}|${subject}|${speaker}|${speakerRole}|${traitSummary}|social:${String(socialSummary).toLowerCase().slice(0, 90)}|interests:${String(interestSummary).toLowerCase().slice(0, 70)}|${room}|sex:${speakerSex}|${addresseeName}|${addresseeRole}|sex:${addresseeSex}|turn:${conversationTurn}|ctx:${String(conversationContext).toLowerCase().slice(0, 90)}|${String(fallback).toLowerCase().slice(0, 120)}`;
 }
 
 function summarizeTraitBundle(traits = {}) {
@@ -1877,6 +1885,8 @@ function buildLlmPrompt({
   traitSummary = 'balanced traits',
   addresseeName = '',
   addresseeRole = '',
+  speakerSex = '',
+  addresseeSex = '',
   socialSummary = '',
   interestSummary = '',
   conversationContext = '',
@@ -1917,7 +1927,7 @@ function buildLlmPrompt({
           : channel === 'trade'
             ? 'Respond ONLY as JSON: {"target":"name","give":"item","take":"item","reason":"..."}.'
             : channel === 'preload'
-              ? 'Respond ONLY as JSON: {"roles":{},"traits":{},"inventory":{},"relationships":[]}. Keys in roles/traits/inventory are character names.'
+              ? 'Respond ONLY as JSON: {"roles":{},"traits":{},"inventory":{},"relationships":[]}. Keys in roles/traits/inventory are character names. Inventories may contain many (up to 200) brand-new school-appropriate items per character, including phones/camera usage.'
               : 'Respond ONLY as JSON: {"q":"...","choices":["A","B","C","D"],"answer":"..."}.',
       channel === 'hymn'
         ? 'Each field should be one short singable line (under 14 words). No markdown.'
@@ -1925,11 +1935,11 @@ function buildLlmPrompt({
           ? 'Keep line under 12 words and in-character. No markdown.'
           : 'The answer must exactly match one of the choices. No markdown.',
       `Subject: ${subject}. Room: ${room}. Teacher context: ${speaker}.`,
-      `Teacher role: ${speakerRole}. Traits snapshot: ${traitSummary}.`,
+      `Teacher role: ${speakerRole}. Speaker sex: ${speakerSex || 'unspecified'}. Traits snapshot: ${traitSummary}.`,
       game.llm.prePrompt ? `Player pre-prompt: ${game.llm.prePrompt}` : null,
       socialSummary ? `Reputation/relationships: ${socialSummary}` : null,
       interestSummary ? `Common interests: ${interestSummary}` : null,
-      addresseeName ? `Directed at: ${addresseeName} (${addresseeRole || 'character'}).` : null,
+      addresseeName ? `Directed at: ${addresseeName} (${addresseeRole || 'character'}, sex: ${addresseeSex || 'unspecified'}).` : null,
       conversationContext ? `Recent conversation: ${conversationContext}` : null,
       conversationTurn ? `Conversation turn: ${conversationTurn}` : null,
       `Fallback question for reference: ${fallback}`,
@@ -1961,8 +1971,8 @@ function buildLlmPrompt({
     styleGuide,
     'Keep the line short, snappy, and in-character.',
     safetyLine,
-    `Speaker: ${speaker}. Role: ${speakerRole}. Traits: ${traitSummary}.`,
-    addresseeName ? `Addressee: ${addresseeName}. Addressee role: ${addresseeRole || 'character'}.` : null,
+    `Speaker: ${speaker}. Role: ${speakerRole}. Sex: ${speakerSex || 'unspecified'}. Traits: ${traitSummary}.`,
+    addresseeName ? `Addressee: ${addresseeName}. Addressee role: ${addresseeRole || 'character'}. Addressee sex: ${addresseeSex || 'unspecified'}.` : null,
     socialSummary ? `Reputation/relationship context: ${socialSummary}` : null,
     interestSummary ? `Shared interests and quirks: ${interestSummary}` : null,
     conversationContext ? `Recent conversation thread: ${conversationContext}` : null,
@@ -2074,6 +2084,12 @@ function queueLlmText(payload, options = {}) {
   }
   if (llmBacklogHasKey(key)) return;
   const maxInFlight = effectiveLlmMaxInFlight();
+  const llmGapMs = normalizedNpcChatterDelay(game.npcChatterDelayMs || 1000);
+  const now = performance.now();
+  if ((now - (game.llm.lastRequestQueuedAt || -Infinity)) < llmGapMs) {
+    if (!options.fromBacklog) game.llm.backlog.push({ key, payload });
+    return;
+  }
   if (game.llm.inFlight.size >= maxInFlight) {
     if (!options.fromBacklog) {
       game.llm.backlog.push({ key, payload });
@@ -2083,6 +2099,7 @@ function queueLlmText(payload, options = {}) {
     return;
   }
   game.llm.inFlight.add(key);
+  game.llm.lastRequestQueuedAt = now;
   generateLlmText(payload).then((result) => {
     if (result?.text) {
       game.llm.cache.set(key, result.text);
@@ -2331,7 +2348,7 @@ function applyLlmWorldPreloadConfig(config = {}) {
     }
 
     if (Array.isArray(inventoryMap[entity.name]) && inventoryMap[entity.name].length) {
-      entity.inventory = inventoryMap[entity.name].slice(0, 8).map((item) => sanitizeLlmLine(item, '')).filter(Boolean);
+      entity.inventory = inventoryMap[entity.name].slice(0, 200).map((item) => sanitizeLlmLine(item, '')).filter(Boolean);
     }
   }
 
@@ -2427,6 +2444,7 @@ const game = {
     sessionPrimedForProvider: '',
     worldPreloadedForProvider: '',
     backlog: [],
+    lastRequestQueuedAt: -Infinity,
   },
   rng: Math.random,
   quizActive: null,
@@ -2528,6 +2546,24 @@ loadSplashSettings();
 let seatCounter = 0;
 const roomSeatCache = new Map();
 const STUDENT_ROLES = new Set(['player', 'hero', 'swot', 'bully', 'weird']);
+const FEMALE_STUDENT_NAME_HINTS = ['ruby', 'harriet', 'lizzy', 'greta', 'chloe', 'sadie', 'tina', 'penny', 'bex', 'noor', 'rae', 'nia', 'mae', 'juno', 'wren', 'mina', 'olive', 'skye', 'elle', 'dot', 'pam'];
+
+function detectStudentSex(name = '', profile = {}) {
+  const explicit = String(profile?.sex || '').toLowerCase();
+  if (explicit === 'female' || explicit === 'male') return explicit;
+  const normalized = String(name || '').toLowerCase();
+  return FEMALE_STUDENT_NAME_HINTS.some((hint) => normalized.includes(hint)) ? 'female' : 'male';
+}
+
+function applySexAppearanceTraits(entity) {
+  if (!entity?.appearance) return;
+  const sex = entity.sex || 'male';
+  // Exaggerate silhouette diversity while keeping male/female reads obvious at sprite scale.
+  if (sex === 'female') {
+    entity.appearance.hairLength = Math.max(entity.appearance.hairLength || 1, 2);
+    entity.appearance.eyeShape = entity.appearance.eyeShape || 'round';
+  }
+}
 
 function isStudentCharacter(entity) {
   return STUDENT_ROLES.has(entity?.role);
@@ -2544,42 +2580,51 @@ function buildAppearanceProfile(name, role, traitProfile, profile = {}) {
     green: '#6fbc5f',
     red: '#d76363',
   };
-  const hairPalette = ['#1b1713', '#4a2f1e', '#7a4f2f', '#b56d3f', '#f0d7a5', '#4f2546', '#2e6f95', '#8a5cff'];
+  const hairPalette = ['#1b1713', '#4a2f1e', '#7a4f2f', '#b56d3f', '#f0d7a5', '#4f2546', '#2e6f95', '#8a5cff', '#ff6fa8', '#c25cff'];
   const skinToneKey = profile.appearanceOverrides?.skinTone || 'white';
   const skinTone = skinPalette[skinToneKey] || skinPalette.white;
   const eyeHue = (seed * 47 + Math.round(traitProfile.wit * 2.1)) % 360;
 
   // Students get stronger silhouette variation so personalities read visually.
-  const roleBuild = role === 'bully' ? 1 : role === 'swot' ? -0.4 : role === 'weird' ? -0.15 : 0;
+  const roleBuild = role === 'bully' ? 1.15 : role === 'swot' ? -0.5 : role === 'weird' ? -0.25 : 0;
   const bodyType = clampScore((traitProfile.strength - 50) / 34 + roleBuild + ((traitProfile.weightValue - 50) / 120), -1.1, 1.2);
   const armType = clampScore((traitProfile.strength - 50) / 40 + (traitProfile.aggression - 50) / 110, -1, 1);
   const legType = clampScore((traitProfile.speed - 50) / 40 + (traitProfile.skill - 50) / 130, -1, 1);
 
   const overrides = profile.appearanceOverrides || {};
+  const sex = detectStudentSex(name, profile);
+  const femaleBias = sex === 'female' ? 1 : 0;
+  const wildHair = (traitProfile.mood < 35 || traitProfile.discipline < 34 || role === 'weird');
   return {
     skinTone,
     hairColor: overrides.hairColor || hairPalette[seed % hairPalette.length],
     eyeColor: overrides.eyeColor || `hsl(${eyeHue} 72% 54%)`,
     // Keep heads in the normal range even for extreme body types.
-    headWidth: overrides.headWidth || (9 + (seed % 4)),
-    headHeight: overrides.headHeight || (6 + (seed % 2)),
-    earSize: overrides.earSize || (1 + (seed % 2)),
+    headWidth: overrides.headWidth || (8 + (seed % 6)),
+    headHeight: overrides.headHeight || (5 + (seed % 4)),
+    earSize: overrides.earSize || (1 + (seed % 4)),
     noseType: overrides.noseType || ['dot', 'stubby', 'long', 'button'][seed % 4],
-    eyeSpread: overrides.eyeSpread || (1 + (seed % 2)),
-    jawType: overrides.jawType || ['soft', 'round', 'square'][seed % 3],
+    eyeSpread: overrides.eyeSpread || (1 + (seed % 3)),
+    eyeShape: overrides.eyeShape || ['narrow', 'round', 'sleepy'][seed % 3],
+    jawType: overrides.jawType || ['soft', 'round', 'square', 'pointed'][seed % 4],
     acne: overrides.acne ?? (traitProfile.mood < 43 || traitProfile.luck < 38),
     heightOffset: overrides.heightOffset ?? Math.round(clampScore(((traitProfile.speed - 50) / 25) + ((seed % 5) - 2) * 0.25, -2, 2)),
-    bodyWidth: overrides.bodyWidth || (12 + Math.round(bodyType * 2)),
-    armWidth: overrides.armWidth || (2 + (armType > 0.45 ? 1 : 0)),
+    bodyWidth: overrides.bodyWidth || (11 + Math.round(bodyType * 4) - femaleBias),
+    torsoShape: overrides.torsoShape || ['rect', 'tapered', 'barrel', 'lean'][seed % 4],
+    armWidth: overrides.armWidth || (2 + (armType > 0.35 ? 2 : 0)),
     armLength: overrides.armLength || (7 + (armType < -0.35 ? -1 : armType > 0.45 ? 1 : 0)),
     legWidth: overrides.legWidth || (4 + (legType > 0.35 ? 1 : 0)),
-    legLength: overrides.legLength || (8 + (legType > 0.45 ? 1 : legType < -0.45 ? -1 : 0)),
+    legLength: overrides.legLength || (8 + (legType > 0.35 ? 2 : legType < -0.45 ? -1 : 0)),
+    hairLength: overrides.hairLength || (femaleBias ? 2 + (seed % 2) : 1 + (seed % 2)),
+    hairStyle: overrides.hairStyle || (wildHair ? 'wild' : ['tidy', 'parted', 'fringe'][seed % 3]),
+    sex,
   };
 }
 
 function mkEntity(name, role, x, y, color, traits = {}) {
   const traitProfile = buildTraitProfile(role, traits.traitOverrides || {});
   const appearance = buildAppearanceProfile(name, role, traitProfile, traits);
+  const sex = traits.sex || appearance.sex || detectStudentSex(name, traits);
   const basePersonality = personalities[role] || personalities.hero;
   const personality = {
     ...basePersonality,
@@ -2589,7 +2634,7 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     focus: clampScore(basePersonality.focus + ((traitProfile.intelligence - 50) / 120), 0, 1.25),
   };
 
-  return {
+  const entity = {
     name,
     role,
     x,
@@ -2606,6 +2651,7 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     profile: traits,
     traits: traitProfile,
     appearance,
+    sex,
     relationships: role === 'player' ? {} : { Eric: Math.round(((traitProfile.friendly + traitProfile.honor) / 8) - (traitProfile.aggression / 7) + ((Math.random() * 16) - 8)) },
     // Everyone now carries school-day possessions and pocket money for lunch/trading.
     inventory: randomInventoryFor(role),
@@ -2684,6 +2730,8 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     lunchSeatIndex: -1,
     lunchEatUntil: 0,
   };
+  applySexAppearanceTraits(entity);
+  return entity;
 }
 
 const player = mkEntity('Eric', 'player', 48, 64, '#ffe04d', {
@@ -3007,6 +3055,8 @@ function persistSplashSettings() {
       ratioSwot: Number(optRatioSwotEl?.value || 25),
       ratioWeird: Number(optRatioWeirdEl?.value || 25),
       npcChatterDelay: normalizedNpcChatterDelay(optNpcChatterDelayEl?.value || 1000),
+      schoolIntake: String(optSchoolIntakeEl?.value || 'mixed'),
+      girlsRatio: Math.max(0, Math.min(100, Number(optGirlsRatioEl?.value || 50))),
     }));
   } catch (error) {
     // Ignore storage failures so startup still works in private browsing contexts.
@@ -3027,6 +3077,8 @@ function loadSplashSettings() {
     if (optRatioSwotEl && Number.isFinite(Number(saved.ratioSwot))) optRatioSwotEl.value = String(Math.max(0, Math.min(100, Number(saved.ratioSwot))));
     if (optRatioWeirdEl && Number.isFinite(Number(saved.ratioWeird))) optRatioWeirdEl.value = String(Math.max(0, Math.min(100, Number(saved.ratioWeird))));
     if (optNpcChatterDelayEl && Number.isFinite(Number(saved.npcChatterDelay))) optNpcChatterDelayEl.value = String(normalizedNpcChatterDelay(saved.npcChatterDelay));
+    if (optSchoolIntakeEl && ['mixed', 'boys', 'girls'].includes(String(saved.schoolIntake))) optSchoolIntakeEl.value = String(saved.schoolIntake);
+    if (optGirlsRatioEl && Number.isFinite(Number(saved.girlsRatio))) optGirlsRatioEl.value = String(Math.max(0, Math.min(100, Number(saved.girlsRatio))));
   } catch (error) {
     // Ignore malformed splash settings and use HTML defaults.
   }
@@ -3040,7 +3092,7 @@ function applyTeacherCount(desiredCount) {
   game.entities = game.entities.filter((entity) => entity.role !== 'teacher' || keepNames.has(entity.name));
 }
 
-function applyStudentMix(studentCount, ratios) {
+function applyStudentMix(studentCount, ratios, options = {}) {
   const students = allNonPlayerStudents();
   const maxCount = students.length;
   const desired = Math.max(8, Math.min(maxCount, Math.round(studentCount || students.length)));
@@ -3068,6 +3120,18 @@ function applyStudentMix(studentCount, ratios) {
     student.color = ROLE_VISUALS[role] || student.color;
     student.personality = { ...(personalities[role] || personalities.hero) };
   });
+
+  const intake = options.schoolIntake === 'boys' || options.schoolIntake === 'girls' ? options.schoolIntake : 'mixed';
+  const girlsRatio = Math.max(0, Math.min(100, Number(options.girlsRatio ?? 50)));
+  const targetGirls = intake === 'girls' ? activeStudents.length : intake === 'boys' ? 0 : Math.round((girlsRatio / 100) * activeStudents.length);
+  const sorted = [...activeStudents].sort((a, b) => styleSeedFromName(a.name) - styleSeedFromName(b.name));
+  sorted.forEach((student, idx) => {
+    student.sex = idx < targetGirls ? 'female' : 'male';
+    student.profile = student.profile || {};
+    student.profile.sex = student.sex;
+    student.appearance.sex = student.sex;
+    applySexAppearanceTraits(student);
+  });
 }
 
 function applyStartupOptions() {
@@ -3076,6 +3140,8 @@ function applyStartupOptions() {
   const speedMultiplier = Math.max(0.5, Math.min(2, Number(optGameSpeedEl?.value || 1)));
   const weatherSetting = optWeatherEl?.value || 'auto';
   const npcChatterDelayMs = normalizedNpcChatterDelay(optNpcChatterDelayEl?.value || game.npcChatterDelayMs || 1000);
+  const schoolIntake = String(optSchoolIntakeEl?.value || 'mixed');
+  const girlsRatio = Math.max(0, Math.min(100, Number(optGirlsRatioEl?.value || 50)));
   const llmEnabled = Boolean(optLlmEnabledEl?.checked);
   const llmSource = String(optLlmSourceEl?.value || 'local');
   const llmNsfw = Boolean(optLlmNsfwEl?.checked);
@@ -4404,12 +4470,14 @@ function say(entity, text, opts = {}) {
     subject: roomSubjectName(entityRoom(entity)),
     speaker: entity.name,
     speakerRole: roleLabelForLlm(entity.role),
+    speakerSex: entity.sex || 'unspecified',
     traitSummary: summarizeTraitBundle(entity.traits),
     socialSummary: `${entity.name} relationships: ${topRelationshipSummary(entity)}; Eric reputation:${Math.round(entity.ericReputation || 0)}`,
     interestSummary: `${summarizeInterests(entity)}${addressee ? ` | ${summarizeInterests(addressee)}` : ''}`,
     room: entityRoom(entity),
     addresseeName: addressee?.name || '',
     addresseeRole: addressee ? roleLabelForLlm(addressee.role) : '',
+    addresseeSex: addressee?.sex || '',
     conversationContext: threadContext,
     conversationTurn: threadTurn,
     fallback: String(text),
@@ -4444,12 +4512,14 @@ function think(entity, text, durationMs = 3200, opts = {}) {
     subject: roomSubjectName(entityRoom(entity)),
     speaker: entity.name,
     speakerRole: roleLabelForLlm(entity.role),
+    speakerSex: entity.sex || 'unspecified',
     traitSummary: summarizeTraitBundle(entity.traits),
     socialSummary: `${entity.name} relationships: ${topRelationshipSummary(entity)}; Eric reputation:${Math.round(entity.ericReputation || 0)}`,
     interestSummary: summarizeInterests(entity),
     room: entityRoom(entity),
     addresseeName: '',
     addresseeRole: '',
+    addresseeSex: '',
     fallback: String(text),
   };
   const shouldDefer = llmModeEnabled() && game.llm.noFallback;
@@ -4476,6 +4546,7 @@ function chooseTradeItemsWithLlm(actor, partner) {
     subject: roomSubjectName(entityRoom(actor)),
     speaker: actor.name,
     speakerRole: roleLabelForLlm(actor.role),
+    speakerSex: actor.sex || 'unspecified',
     traitSummary: summarizeTraitBundle(actor.traits),
     socialSummary: `${actor.name} relationships:${topRelationshipSummary(actor)}; ${partner.name} relationships:${topRelationshipSummary(partner)}`,
     interestSummary: `${summarizeInterests(actor)} | ${summarizeInterests(partner)}`,
@@ -4721,6 +4792,7 @@ function announce(message, options = {}) {
     subject: source ? roomSubjectName(entityRoom(source)) : roomSubjectName(schedule[game.periodIndex]?.room),
     speaker: source?.name || 'Narrator',
     speakerRole: source ? roleLabelForLlm(source.role) : 'narrator',
+    speakerSex: source?.sex || 'unspecified',
     traitSummary: source ? summarizeTraitBundle(source.traits) : 'neutral',
     room: source ? entityRoom(source) : (schedule[game.periodIndex]?.room || 'School'),
     fallback: String(message),
@@ -8461,7 +8533,16 @@ function drawEntities() {
       ctx.fillStyle = skinTone;
       ctx.fillRect(px - Math.floor(headW / 2), py - 24 + bob - heightShift, headW, headH);
       ctx.fillStyle = hairColor;
+      const hairLength = Math.max(1, appearance.hairLength || 1);
       ctx.fillRect(px - Math.floor(headW / 2), py - 24 + bob - heightShift, headW, 2);
+      if (appearance.hairStyle === 'wild') {
+        ctx.fillRect(px - Math.floor(headW / 2) - 1, py - 25 + bob - heightShift, headW + 2, 1);
+        ctx.fillRect(px - Math.floor(headW / 2) + ((now / 120) % 3), py - 23 + bob - heightShift, headW - 2, 1);
+      }
+      if (hairLength > 1) {
+        ctx.fillRect(px - Math.floor(headW / 2), py - 22 + bob - heightShift, 2, hairLength);
+        ctx.fillRect(px + Math.floor(headW / 2) - 1, py - 22 + bob - heightShift, 2, hairLength);
+      }
       // Ears and nose shapes make pupils less identical.
       const earSize = appearance.earSize || 1;
       ctx.fillStyle = skinTone;
@@ -8478,7 +8559,7 @@ function drawEntities() {
         entity.nextBlinkAt = now + (8000 + game.rng() * 4000);
       }
       const isBlinking = now < (entity.blinkUntil || 0);
-      const eyeY = py - 22 + bob - heightShift;
+      const eyeY = py - 22 + bob - heightShift + (appearance.eyeShape === 'sleepy' ? 1 : 0);
       if (isBlinking) {
         ctx.fillStyle = '#2f2f2f';
         ctx.fillRect(px - eyeSpread - 2, eyeY, 3, 1);
@@ -8512,12 +8593,19 @@ function drawEntities() {
 
       // School uniform: white shirt + blue tie + black trousers/shoes for students.
       ctx.fillStyle = useUniform ? '#f8f9fa' : body;
-      ctx.fillRect(px - Math.floor(bodyW / 2), py - 18 + bob - heightShift, bodyW, 12);
+      const torsoTopW = appearance.torsoShape === 'tapered' ? Math.max(8, bodyW - 3) : bodyW;
+      ctx.fillRect(px - Math.floor(torsoTopW / 2), py - 18 + bob - heightShift, torsoTopW, 5);
+      ctx.fillRect(px - Math.floor(bodyW / 2), py - 13 + bob - heightShift, bodyW, 7);
       if (useUniform) {
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(px - 2, py - 18 + bob - heightShift, 4, 4);
         ctx.fillStyle = '#2b59c3';
         ctx.fillRect(px - 1, py - 14 + bob - heightShift, 2, 4);
+        if ((entity.sex || appearance.sex) === 'female') {
+          ctx.fillStyle = '#ff6fa8';
+          ctx.fillRect(px - 2, py - 14 + bob - heightShift, 1, 2);
+          ctx.fillRect(px + 1, py - 14 + bob - heightShift, 1, 2);
+        }
       }
 
       // Arms reflect skinny/thick build while keeping animation timing.
@@ -9046,7 +9134,7 @@ function updateEntityTooltip(event) {
     const strongestLabel = strongest ? `${strongest.peer.name} (${relationshipLabel(strongest.score)})` : 'none';
     const socialTag = hovered.socialProfile?.cliqueId ? ` | 🧑‍🤝‍🧑 ${hovered.socialProfile.cliqueId}` : '';
     const quirkTag = hovered.socialProfile?.evolvingQuirks?.length ? hovered.socialProfile.evolvingQuirks.slice(-1)[0] : 'settling in';
-    entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>📍 ${room} | 🤝 ${relationText}${socialTag}<br>⚡ Energy ${tooltipBar(hovered.energy, '#ffd166')}<br>🚻 Bladder ${tooltipBar(hovered.bladder, '#ff9f1c')}<br>🧼 Hygiene ${tooltipBar(hovered.hygiene || 0, '#72efdd')}<br>❤️ HP ${tooltipBar(hovered.hp, '#ef476f')}<br>🧠 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>💷 £${Math.round(hovered.money || 0)} | 🤝 Trade ${Math.round(hovered.traits?.trading || 0)} | 🗣️ Barter ${Math.round(hovered.traits?.barter || 0)}<br>🧲 Strongest bond: ${strongestLabel}<br>🧬 Social quirk: ${quirkTag}<br>📝 Notes: ${hovered.title || hovered.profile?.title || 'No public notes yet'}<br>🎒 ${pocketItems || 'nothing useful'}${moreItems}`;
+    entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>📍 ${room} | ⚧ ${hovered.sex || 'unspecified'} | 🤝 ${relationText}${socialTag}<br>⚡ Energy ${tooltipBar(hovered.energy, '#ffd166')}<br>🚻 Bladder ${tooltipBar(hovered.bladder, '#ff9f1c')}<br>🧼 Hygiene ${tooltipBar(hovered.hygiene || 0, '#72efdd')}<br>❤️ HP ${tooltipBar(hovered.hp, '#ef476f')}<br>🧠 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>💷 £${Math.round(hovered.money || 0)} | 🤝 Trade ${Math.round(hovered.traits?.trading || 0)} | 🗣️ Barter ${Math.round(hovered.traits?.barter || 0)}<br>🧲 Strongest bond: ${strongestLabel}<br>🧬 Social quirk: ${quirkTag}<br>📝 Notes: ${hovered.title || hovered.profile?.title || 'No public notes yet'}<br>🎒 ${pocketItems || 'nothing useful'}${moreItems}`;
     positionTooltip(pointer, 118, 260);
     entityTooltipEl.hidden = false;
     return;
@@ -9393,6 +9481,17 @@ closeInteractionPanelBtn.onclick = () => {
 if (openSplashSettingsBtn && splashSettingsDialog) {
   openSplashSettingsBtn.addEventListener('click', () => splashSettingsDialog.showModal());
 }
+
+function syncGirlsRatioOptionState() {
+  if (!optGirlsRatioEl || !optSchoolIntakeEl) return;
+  const mixed = optSchoolIntakeEl.value === 'mixed';
+  optGirlsRatioEl.disabled = !mixed;
+  optGirlsRatioEl.title = mixed
+    ? 'Girls-to-boys ratio for mixed intake. 50 means equal split.'
+    : 'Girls ratio is only used when school intake is Mixed.';
+}
+if (optSchoolIntakeEl) optSchoolIntakeEl.addEventListener('change', syncGirlsRatioOptionState);
+syncGirlsRatioOptionState();
 if (closeSplashSettingsBtn && splashSettingsDialog) {
   closeSplashSettingsBtn.addEventListener('click', () => splashSettingsDialog.close());
 }
