@@ -137,6 +137,15 @@ body {
   color: #ffd2d2;
 }
 
+.llm-actions-wrap {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+#optLlmRemoteModel {
+  width: 100%;
+}
+
 .floor-clock-group {
   display: inline-flex;
   align-items: center;
