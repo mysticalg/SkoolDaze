@@ -1353,14 +1353,14 @@ function resolveLlmSocialDirective(actor, peer, fallbackIntent = 'ally') {
   if (!llmModeEnabled()) return null;
   const now = performance.now();
   if (now < (actor.socialNextLlmAt || 0)) return null;
-  const cached = game.llm.cache.get(key);
+  const cached = game.llm.responseBuffer.get(key);
   if (!cached) {
     actor.socialNextLlmAt = now + 6000 + (Math.random() * 2500);
     queueLlmText(payload);
     return null;
   }
   // Consume once so social directives stay dynamic rather than replaying old responses.
-  game.llm.cache.delete(key);
+  game.llm.responseBuffer.delete(key);
   try {
     const parsed = parseJsonFromLlm(cached);
     const allowed = new Set(['ally', 'tease', 'avoid', 'follow', 'defend']);
@@ -2054,7 +2054,7 @@ async function generateLocalOllamaText(payload) {
   }
   const data = await response.json();
   const output = sanitizeLlmLine(data?.response);
-  pushLlmDebug(`✅ Local response [${payload.channel}] ${llmActorLabel(payload)} (cached, shown when used): ${summarizeForLlmDebug(output)}`);
+  pushLlmDebug(`✅ Local response [${payload.channel}] ${llmActorLabel(payload)} (queued for next delivery tick): ${summarizeForLlmDebug(output)}`);
   return output;
 }
 
@@ -2089,7 +2089,7 @@ async function generateRemoteProviderText(payload) {
   const data = await response.json();
   const text = data?.choices?.[0]?.message?.content;
   const output = sanitizeLlmLine(text);
-  pushLlmDebug(`✅ Remote response [${payload.channel}] ${llmActorLabel(payload)} (cached, shown when used): ${summarizeForLlmDebug(output)}`);
+  pushLlmDebug(`✅ Remote response [${payload.channel}] ${llmActorLabel(payload)} (queued for next delivery tick): ${summarizeForLlmDebug(output)}`);
   return output;
 }
 
@@ -2151,8 +2151,8 @@ function queueLlmText(payload, options = {}) {
   game.llm.lastRequestQueuedAt = now;
   generateLlmText(payload).then((result) => {
     if (result?.text) {
-      game.llm.cache.set(key, result.text);
-      pushLlmDebug(`💾 Cached [${payload.channel}] ${llmActorLabel(payload)} key=${summarizeForLlmDebug(key, 64)}`);
+      game.llm.responseBuffer.set(key, result.text);
+      pushLlmDebug(`📥 Response ready [${payload.channel}] ${llmActorLabel(payload)} key=${summarizeForLlmDebug(key, 64)}`);
     } else if (result?.reason === 'timeout') {
       // Timeout already logged with channel-specific detail; avoid duplicate spam lines.
     } else if (result?.reason !== 'disabled') {
@@ -2208,13 +2208,13 @@ function resolveLlmDailyHymn() {
     fallback: `verse:${fallback.verse} chorus:${fallback.chorus}`,
   };
   const key = llmCacheKey(payload);
-  const cached = game.llm.cache.get(key);
+  const cached = game.llm.responseBuffer.get(key);
   if (!cached) {
     queueLlmText(payload);
     return fallback;
   }
   // Consume once so next assembly day requests a fresh hymn draft.
-  game.llm.cache.delete(key);
+  game.llm.responseBuffer.delete(key);
   const parsed = parseJsonFromLlm(cached);
   if (!parsed) return fallback;
   return {
@@ -2278,10 +2278,10 @@ function resolveLlmText(payload, options = {}) {
   const suppressMissLog = Boolean(options.suppressMissLog);
   if (!llmModeEnabled()) return fallback;
   const key = llmCacheKey(payload);
-  if (game.llm.cache.has(key)) {
-    const fresh = game.llm.cache.get(key);
+  if (game.llm.responseBuffer.has(key)) {
+    const fresh = game.llm.responseBuffer.get(key);
     // LLM results are one-shot: consume once so future lines always fetch fresh text.
-    game.llm.cache.delete(key);
+    game.llm.responseBuffer.delete(key);
     pushLlmDebug(`🟢 Fresh LLM line ready [${payload.channel}] ${llmActorLabel(payload)}.`);
     return fresh;
   }
@@ -2302,13 +2302,13 @@ function resolveLlmQuizQuestion(fallbackQuiz) {
     fallback: fallbackQuiz.q,
   };
   const key = llmCacheKey(payload);
-  const cached = game.llm.cache.get(key);
+  const cached = game.llm.responseBuffer.get(key);
   if (!cached) {
     queueLlmText(payload);
     return fallbackQuiz;
   }
   // Consume once so each classroom prompt can request a new variant.
-  game.llm.cache.delete(key);
+  game.llm.responseBuffer.delete(key);
   try {
     const parsed = parseJsonFromLlm(cached);
     if (!parsed) return fallbackQuiz;
@@ -2347,7 +2347,7 @@ function primeLlmSessionContext() {
   game.llm.sessionPrimedForProvider = llmProviderLabel();
 }
 
-function warmupLlmCache() {
+function warmupLlmResponses() {
   if (!llmModeEnabled()) return;
   primeLlmSessionContext();
   const sampleEntities = game.entities
@@ -2377,11 +2377,18 @@ function warmupLlmCache() {
 }
 
 
-async function requestLlmJson(payload) {
+async function requestLlmJson(payload, options = {}) {
   if (!llmModeEnabled()) return null;
-  const result = await generateLlmText(payload);
-  if (!result?.text) return null;
-  return parseJsonFromLlm(result.text);
+  const maxAttempts = Math.max(1, Number(options.maxAttempts) || 1);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = await generateLlmText(payload);
+    if (!result?.text) continue;
+    const parsed = parseJsonFromLlm(result.text);
+    if (parsed) return parsed;
+    // Startup world preload expects strict JSON; retry a few times before deterministic fallback.
+    pushLlmDebug(`⚠️ Invalid JSON from LLM [${payload.channel}] attempt ${attempt}/${maxAttempts}; retrying.`, 'warn');
+  }
+  return null;
 }
 
 function applyLlmWorldPreloadConfig(config = {}) {
@@ -2533,7 +2540,7 @@ async function preloadLlmWorldSetup() {
   pushLlmDebug(game.llm.npcNames
     ? '🧩 Requesting LLM world preload for traits, roles, inventory, relationships, and NPC naming.'
     : '🧩 Requesting LLM world preload for traits, roles, inventory and relationships.');
-  const parsed = await requestLlmJson(payload);
+  const parsed = await requestLlmJson(payload, { maxAttempts: 3 });
   if (parsed) {
     applyLlmWorldPreloadConfig(parsed);
     // Name changes affect locker assignments and class rosters, so regenerate these maps.
@@ -2586,7 +2593,8 @@ const game = {
     noFallback: false,
     npcNames: true,
     prePrompt: '',
-    cache: new Map(),
+    // Transient handoff buffer for in-flight responses (not reusable caching).
+    responseBuffer: new Map(),
     inFlight: new Set(),
     debugLog: [],
     sessionPrimedForProvider: '',
@@ -3339,7 +3347,7 @@ function applyStartupOptions() {
     || game.llm.npcNames !== llmNpcNames
     || game.llm.prePrompt !== llmPrePrompt;
   if (providerChanged) {
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     game.llm.worldPreloadedForProvider = '';
   }
   game.llm.enabled = llmEnabled;
@@ -3368,7 +3376,7 @@ function applyStartupOptions() {
   game.playerStuckMs = 0;
 
   assignDailyDutyTeacher();
-  warmupLlmCache();
+  warmupLlmResponses();
 }
 
 createLockerPlanForStudents(game.entities);
@@ -4609,9 +4617,9 @@ function flushDeferredLlmDialogue(now = performance.now()) {
     const pendingSpeech = entity.pendingSpeech;
     if (pendingSpeech) {
       const key = llmCacheKey(pendingSpeech.payload);
-      const cached = game.llm.cache.get(key);
+      const cached = game.llm.responseBuffer.get(key);
       if (cached) {
-        game.llm.cache.delete(key);
+        game.llm.responseBuffer.delete(key);
         const delivered = deliverResolvedSpeech(entity, cached, pendingSpeech.addressee, pendingSpeech.opts, now);
         if (delivered) {
           pushLlmDebug(`🗣️ Delivered deferred speech bubble for ${llmActorLabel(pendingSpeech.payload)}.`, 'info');
@@ -4630,9 +4638,9 @@ function flushDeferredLlmDialogue(now = performance.now()) {
     const pendingThought = entity.pendingThought;
     if (pendingThought) {
       const key = llmCacheKey(pendingThought.payload);
-      const cached = game.llm.cache.get(key);
+      const cached = game.llm.responseBuffer.get(key);
       if (cached) {
-        game.llm.cache.delete(key);
+        game.llm.responseBuffer.delete(key);
         const delivered = deliverResolvedThought(entity, cached, pendingThought.durationMs, pendingThought.opts, now);
         if (delivered) {
           pushLlmDebug(`💭 Delivered deferred thought bubble for ${pendingThought.payload?.speaker || entity.name}.`, 'info');
@@ -4717,9 +4725,14 @@ function say(entity, text, opts = {}) {
     fallback: String(text),
   };
 
-  const shouldDefer = llmModeEnabled() && (game.llm.noFallback || opts.force !== true);
-  const spokenText = resolveLlmText(payload, { allowFallback: !shouldDefer });
-  if (!spokenText && shouldDefer) {
+  // Some lines (like registration roll call) must stay deterministic for gameplay clarity.
+  // `useLlm: false` bypasses model generation and uses the provided line immediately.
+  const allowLlmRewrite = opts.useLlm !== false;
+  const shouldDefer = allowLlmRewrite && llmModeEnabled() && (game.llm.noFallback || opts.force !== true);
+  const spokenText = allowLlmRewrite
+    ? resolveLlmText(payload, { allowFallback: !shouldDefer })
+    : sanitizeLlmLine(text, '...');
+  if (allowLlmRewrite && !spokenText && shouldDefer) {
     const pendingKey = entity.pendingSpeech ? llmCacheKey(entity.pendingSpeech.payload) : '';
     const requestKey = llmCacheKey(payload);
     if (pendingKey === requestKey) return;
@@ -6277,7 +6290,9 @@ function updateTutorialRollCall(now = performance.now()) {
     } else {
       // Keep tutorial roll call consistent: every student (including Eric) responds identically.
       const line = registrationReplyForTeacher(teacher);
-      say(student, line, { durationMs: 2100 });
+      // Registration responses should be immediate and consistent, not LLM-rewritten chatter.
+      markEntityHandRaised(student, now, 1850);
+      say(student, line, { durationMs: 2100, force: true, useLlm: false });
       roll.waitingForReply = false;
       roll.index += 1;
       roll.nextAt = now + 600 + (game.rng() * 400);
@@ -7106,7 +7121,7 @@ function updateAI(dt) {
   const assignedTeacherName = assignedTeacherForRoom(current.room);
   const now = performance.now();
   const headmaster = game.entities.find((entity) => entity.role === 'teacher' && entity.name === 'Mr Wacker');
-  // Deliver any deferred LLM-only dialogue once responses arrive in cache.
+  // Deliver any deferred LLM-only dialogue once responses are ready.
   flushDeferredLlmDialogue(now);
 
   if (isAssemblyPeriod(current) && headmaster && now >= game.assemblyNextSpeechAt) {
@@ -9944,8 +9959,8 @@ if (optLlmPrePromptEl) {
   optLlmPrePromptEl.addEventListener('change', () => {
     game.llm.prePrompt = sanitizeLlmPrePrompt(optLlmPrePromptEl.value || '');
     optLlmPrePromptEl.value = game.llm.prePrompt;
-    // Prompt content changes output style; clear pending one-shot results for consistency.
-    game.llm.cache.clear();
+    // Prompt content changes output style; clear pending one-shot responses for consistency.
+    game.llm.responseBuffer.clear();
     persistLlmSettings();
     setLlmStatus(game.llm.prePrompt
       ? '🧩 AI pre-prompt updated. Pending LLM results cleared for consistent style.'
@@ -9976,9 +9991,9 @@ if (optLlmEnabledEl) {
 if (optLlmNsfwEl) {
   optLlmNsfwEl.checked = Boolean(game.llm.nsfw);
   optLlmNsfwEl.addEventListener('change', () => {
-    // Prompt options affect output style; clear pending one-shot results immediately.
+    // Prompt options affect output style; clear pending one-shot responses immediately.
     game.llm.nsfw = Boolean(optLlmNsfwEl.checked);
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     persistLlmSettings();
     setLlmStatus(game.llm.nsfw
       ? '🔞 NSFW prompt style enabled for local AI responses.'
@@ -9990,9 +10005,9 @@ if (optLlmNsfwEl) {
 if (optLlmNoFallbackEl) {
   optLlmNoFallbackEl.checked = Boolean(game.llm.noFallback);
   optLlmNoFallbackEl.addEventListener('change', () => {
-    // No-fallback mode uses deferred LLM delivery; clear pending one-shot results to avoid mixed behaviour.
+    // No-fallback mode uses deferred LLM delivery; clear pending one-shot responses to avoid mixed behaviour.
     game.llm.noFallback = Boolean(optLlmNoFallbackEl.checked);
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     persistLlmSettings();
     setLlmStatus(game.llm.noFallback
       ? '🧵 No-fallback mode enabled. Dialogue waits for LLM replies.'
@@ -10005,7 +10020,7 @@ if (optLlmNpcNamesEl) {
   optLlmNpcNamesEl.addEventListener('change', () => {
     // Naming strategy changes preload output shape, so clear cached world preload state.
     game.llm.npcNames = Boolean(optLlmNpcNamesEl.checked);
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     game.llm.worldPreloadedForProvider = '';
     persistLlmSettings();
     setLlmStatus(game.llm.npcNames
@@ -10018,11 +10033,11 @@ if (optLlmSourceEl) {
   optLlmSourceEl.value = game.llm.source;
   optLlmSourceEl.addEventListener('change', () => {
     game.llm.source = optLlmSourceEl.value === 'remote' ? 'remote' : 'local';
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     game.llm.sessionPrimedForProvider = '';
     applyLlmUiState();
     persistLlmSettings();
-    setLlmStatus(`🧭 LLM source set to ${game.llm.source}. Cache refreshed.`);
+    setLlmStatus(`🧭 LLM source set to ${game.llm.source}. Response buffer refreshed.`);
   });
 }
 
@@ -10032,10 +10047,10 @@ if (optLlmModelEl) {
     const selected = String(optLlmModelEl.value || '').trim();
     if (selected && selected !== game.llm.selectedModel) {
       game.llm.selectedModel = selected;
-      game.llm.cache.clear();
+      game.llm.responseBuffer.clear();
       game.llm.sessionPrimedForProvider = '';
       persistLlmSettings();
-      setLlmStatus(`✅ Local model set to ${selected}. Cache reset for fresh responses.`);
+      setLlmStatus(`✅ Local model set to ${selected}. Response buffer reset for fresh responses.`);
     }
   });
 }
@@ -10045,7 +10060,7 @@ if (optLlmLocalEndpointEl) {
   optLlmLocalEndpointEl.addEventListener('change', () => {
     game.llm.localEndpoint = normalizeLocalEndpoint(optLlmLocalEndpointEl.value || game.llm.localEndpoint);
     optLlmLocalEndpointEl.value = game.llm.localEndpoint;
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     game.llm.sessionPrimedForProvider = '';
     persistLlmSettings();
     setLlmStatus(`🔌 Local endpoint set to ${game.llm.localEndpoint}. Use refresh to load models.`);
@@ -10060,7 +10075,7 @@ if (optLlmRemoteProviderEl) {
       optLlmRemoteModelEl.value = game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini';
     }
     game.llm.remoteModel = String(optLlmRemoteModelEl?.value || '').trim() || (game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini');
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     game.llm.sessionPrimedForProvider = '';
     applyLlmUiState();
     persistLlmSettings();
@@ -10072,7 +10087,7 @@ if (optLlmRemoteModelEl) {
   optLlmRemoteModelEl.value = game.llm.remoteModel || 'gpt-4.1-mini';
   optLlmRemoteModelEl.addEventListener('change', () => {
     game.llm.remoteModel = String(optLlmRemoteModelEl.value || '').trim();
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     game.llm.sessionPrimedForProvider = '';
     persistLlmSettings();
     setLlmStatus(`🧾 Remote model set to ${game.llm.remoteModel || 'default'}.`);
@@ -10083,7 +10098,7 @@ if (optLlmRemoteTokenEl) {
   optLlmRemoteTokenEl.value = game.llm.remoteToken;
   optLlmRemoteTokenEl.addEventListener('change', () => {
     game.llm.remoteToken = String(optLlmRemoteTokenEl.value || '').trim();
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     game.llm.sessionPrimedForProvider = '';
     updateLlmTokenUi();
     persistLlmSettings();
@@ -10107,7 +10122,7 @@ if (optLlmClearTokenEl) {
   optLlmClearTokenEl.addEventListener('click', () => {
     game.llm.remoteToken = '';
     if (optLlmRemoteTokenEl) optLlmRemoteTokenEl.value = '';
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     game.llm.sessionPrimedForProvider = '';
     updateLlmTokenUi();
     persistLlmSettings();

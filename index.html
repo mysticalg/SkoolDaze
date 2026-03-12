@@ -144,7 +144,7 @@
           <button id="optLlmClearToken" type="button" class="secondary-btn" title="Clear saved cloud token from this browser" disabled>🧹 Clear token</button>
         </div>
         <p id="optLlmTokenStatus" class="todo-help" aria-live="polite">🔒 No remote token saved.</p>
-        <p id="optLlmStatus" class="todo-help" aria-live="polite">ℹ️ LLM mode uses default game text until AI replies are cached.</p>
+        <p id="optLlmStatus" class="todo-help" aria-live="polite">ℹ️ LLM mode uses default game text until AI replies are ready.</p>
 
         <div class="settings-footer-actions">
           <button id="closeSplashSettings" class="dialog-close" type="button" aria-label="Close splash settings">✖ Close Settings</button>
@@ -221,8 +221,8 @@
       </div>
       <div id="events" class="events" aria-live="polite"></div>
 
-      <h3 title="Verbose diagnostics for every LLM request, cache hit, and error.">🧪 LLM Debug Log</h3>
-      <p class="todo-help">💡 Use this when tuning prompts/models. It is diagnostics only (not the in-world activity feed): lines show who is speaking (from → to), cache state, and whether text was actually delivered as a bubble/feed event.</p>
+      <h3 title="Verbose diagnostics for every LLM request, response readiness, and error.">🧪 LLM Debug Log</h3>
+      <p class="todo-help">💡 Use this when tuning prompts/models. It is diagnostics only (not the in-world activity feed): lines show who is speaking (from → to), response-buffer state, and whether text was actually delivered as a bubble/feed event.</p>
       <div id="llmDebugLog" class="llm-debug-log" aria-live="polite"></div>
       <button id="llmDebugClearBtn" class="secondary-btn" type="button" title="Clear verbose LLM debug lines">🧹 Clear LLM log</button>
 
