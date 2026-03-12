@@ -3981,6 +3981,22 @@ function resolvePersistentOverlap(entity, currentPeriod, dtSeconds) {
   teleportEntityToTarget(entity, seatTarget || roomCenter(currentPeriod.room), 'overlap');
 }
 
+function corridorCenterlineY(floor = 'ground') {
+  if (floor === 'upper') return 17;
+  if (floor === 'middle') return 52;
+  if (floor === 'lower') return 112;
+  return 78;
+}
+
+function shouldCruiseCorridorCenter(entity, currentRoom, destinationRoom, entryDoor) {
+  if (!entity || !currentRoom || currentRoom.type !== 'corridor' || !destinationRoom || !entryDoor) return false;
+  if (destinationRoom.type === 'corridor' || destinationRoom.type === 'outdoor') return false;
+  if (currentRoom.floor !== destinationRoom.floor) return false;
+  const horizontalGapToDoor = Math.abs(entity.x - entryDoor.x);
+  // Stay in corridor center while travelling; only peel toward the wall when close to the door.
+  return horizontalGapToDoor > 2.15;
+}
+
 function routeWaypoint(entity, destination) {
   const currentRoom = roomAtPosition(entity);
   const destinationRoom = roomAtPosition(destination);
@@ -4006,6 +4022,11 @@ function routeWaypoint(entity, destination) {
 
   if (destinationRoom && destinationRoom.type !== 'corridor' && destinationRoom.type !== 'outdoor') {
     const entryDoor = roomDoorway(destinationRoom);
+    if (shouldCruiseCorridorCenter(entity, currentRoom, destinationRoom, entryDoor)) {
+      const laneY = corridorCenterlineY(currentRoom.floor);
+      // Center-lane cruise prevents students/Eric scraping corridor walls before the final door approach.
+      return { x: entryDoor.x, y: laneY };
+    }
     const stagedDoor = doorwayStagingPoint(entity, entryDoor, destinationRoom);
     if (stagedDoor && distance(entity, stagedDoor) > 1.1) return stagedDoor;
   }
