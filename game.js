@@ -18,6 +18,8 @@ const weatherEl = document.getElementById('weather');
 const attendanceEl = document.getElementById('attendance');
 const missionEl = document.getElementById('mission');
 const eventsEl = document.getElementById('events');
+const llmDebugLogEl = document.getElementById('llmDebugLog');
+const llmDebugClearBtn = document.getElementById('llmDebugClearBtn');
 const todoEl = document.getElementById('todo');
 const todoCarouselBtn = document.getElementById('todoCarousel');
 const todoCarouselTextEl = document.getElementById('todoCarouselText');
@@ -1133,6 +1135,16 @@ const GROK_API_BASE = 'https://api.x.ai/v1';
 const LLM_DEFAULT_TIMEOUT_MS = 2200;
 const LLM_STORAGE_KEY = 'skooldaze.llm.settings.v1';
 
+const LLM_GAME_PRIMER = [
+  'You are the text engine for Skool Daze Tribute, a real-time British school simulation game.',
+  'Core channels: speech bubbles, thought bubbles, public announcements, and quiz JSON content.',
+  'Output must be fast, concise, and safe to parse: no markdown wrappers, no roleplay preambles.',
+  'Speech/thought should stay under 14 words and preserve NPC personality from provided traits.',
+  'Student speech should address the given addressee by name when one is supplied.',
+  'Announcements should read like school PA updates. Quiz output must remain strict JSON only.',
+  'If context is unclear, adapt fallback text instead of inventing long new lore.',
+].join(' ');
+
 // OAuth configuration for browser-side OpenAI sign-in.
 // NOTE: If your OAuth app uses a custom auth URL/client id, update these constants.
 const OPENAI_OAUTH_AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize';
@@ -1150,6 +1162,33 @@ function setLlmTokenStatus(text, isError = false) {
   if (!optLlmTokenStatusEl) return;
   optLlmTokenStatusEl.textContent = text;
   optLlmTokenStatusEl.classList.toggle('llm-status-error', Boolean(isError));
+}
+
+
+function summarizeForLlmDebug(text, maxLen = 120) {
+  const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+  if (cleaned.length <= maxLen) return cleaned;
+  return `${cleaned.slice(0, maxLen - 1)}…`;
+}
+
+function renderLlmDebugLog() {
+  if (!llmDebugLogEl) return;
+  const visible = (game.llm.debugLog || []).slice(0, 90);
+  llmDebugLogEl.innerHTML = visible
+    .map((entry) => `<div class="llm-debug-line llm-debug-${entry.level}">[${entry.time}] ${entry.message}</div>`)
+    .join('');
+}
+
+function pushLlmDebug(message, level = 'info') {
+  if (!game?.llm) return;
+  const entry = {
+    level,
+    message: String(message),
+    time: formatTime(game.timeMinutes),
+  };
+  game.llm.debugLog.unshift(entry);
+  game.llm.debugLog = game.llm.debugLog.slice(0, 260);
+  renderLlmDebugLog();
 }
 
 function sanitizeLlmLine(text, fallback = '...') {
@@ -1516,6 +1555,7 @@ function buildLlmPrompt({
     : null;
 
   return [
+    LLM_GAME_PRIMER,
     'You write concise text for a school simulation game.',
     'Pretend you are the exact character below speaking in first person voice.',
     styleGuide,
@@ -1530,6 +1570,7 @@ function buildLlmPrompt({
 }
 
 async function generateLocalOllamaText(payload) {
+  pushLlmDebug(`📤 Local request queued [${payload.channel}] model=${effectiveLocalModelName()} speaker=${payload.speaker}`);
   const response = await fetchWithTimeout(`${game.llm.localEndpoint}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1540,13 +1581,19 @@ async function generateLocalOllamaText(payload) {
       prompt: buildLlmPrompt({ ...payload, uncensored: Boolean(game.llm.nsfw && game.llm.source === 'local') }),
     }),
   }, LLM_DEFAULT_TIMEOUT_MS);
-  if (!response.ok) return null;
+  if (!response.ok) {
+    pushLlmDebug(`❌ Local request failed (${response.status}) channel=${payload.channel}`, 'error');
+    return null;
+  }
   const data = await response.json();
-  return sanitizeLlmLine(data?.response);
+  const output = sanitizeLlmLine(data?.response);
+  pushLlmDebug(`✅ Local response [${payload.channel}] ${summarizeForLlmDebug(output)}`);
+  return output;
 }
 
 async function generateRemoteProviderText(payload) {
   const provider = game.llm.remoteProvider;
+  pushLlmDebug(`📤 Remote request queued [${payload.channel}] provider=${provider} model=${game.llm.remoteModel} speaker=${payload.speaker}`);
   const endpoint = provider === 'grok' ? `${GROK_API_BASE}/chat/completions` : `${OPENAI_API_BASE}/chat/completions`;
   const response = await fetchWithTimeout(endpoint, {
     method: 'POST',
@@ -1565,6 +1612,7 @@ async function generateRemoteProviderText(payload) {
   }, LLM_DEFAULT_TIMEOUT_MS + 800);
 
   if (!response.ok) {
+    pushLlmDebug(`❌ Remote request failed (${response.status}) provider=${provider} channel=${payload.channel}`, 'error');
     if (response.status === 401) {
       setLlmTokenStatus(`❌ ${provider.toUpperCase()} token rejected. Re-authenticate.` , true);
     }
@@ -1573,7 +1621,9 @@ async function generateRemoteProviderText(payload) {
 
   const data = await response.json();
   const text = data?.choices?.[0]?.message?.content;
-  return sanitizeLlmLine(text);
+  const output = sanitizeLlmLine(text);
+  pushLlmDebug(`✅ Remote response [${payload.channel}] ${summarizeForLlmDebug(output)}`);
+  return output;
 }
 
 async function generateLlmText(payload) {
@@ -1584,6 +1634,7 @@ async function generateLlmText(payload) {
     }
     return await generateLocalOllamaText(payload);
   } catch (error) {
+    pushLlmDebug(`❌ LLM generation error: ${error?.message || 'unknown error'}`, 'error');
     return null;
   }
 }
@@ -1591,10 +1642,22 @@ async function generateLlmText(payload) {
 function queueLlmText(payload) {
   if (!llmModeEnabled()) return;
   const key = llmCacheKey(payload);
-  if (game.llm.cache.has(key) || game.llm.inFlight.has(key)) return;
+  if (game.llm.cache.has(key)) {
+    pushLlmDebug(`🗂️ Cache already primed [${payload.channel}] key=${summarizeForLlmDebug(key, 64)}`);
+    return;
+  }
+  if (game.llm.inFlight.has(key)) {
+    pushLlmDebug(`⏳ Request already in-flight [${payload.channel}] key=${summarizeForLlmDebug(key, 64)}`);
+    return;
+  }
   game.llm.inFlight.add(key);
   generateLlmText(payload).then((text) => {
-    if (text) game.llm.cache.set(key, text);
+    if (text) {
+      game.llm.cache.set(key, text);
+      pushLlmDebug(`💾 Cached [${payload.channel}] key=${summarizeForLlmDebug(key, 64)}`);
+    } else {
+      pushLlmDebug(`⚠️ Empty LLM output, fallback kept [${payload.channel}]`, 'warn');
+    }
   }).finally(() => {
     game.llm.inFlight.delete(key);
   });
@@ -1604,7 +1667,11 @@ function resolveLlmText(payload) {
   const fallback = sanitizeLlmLine(payload.fallback, '...');
   if (!llmModeEnabled()) return fallback;
   const key = llmCacheKey(payload);
-  if (game.llm.cache.has(key)) return game.llm.cache.get(key);
+  if (game.llm.cache.has(key)) {
+    pushLlmDebug(`🎯 Cache hit [${payload.channel}] speaker=${payload.speaker}`);
+    return game.llm.cache.get(key);
+  }
+  pushLlmDebug(`🪫 Cache miss [${payload.channel}] speaker=${payload.speaker}; fallback used.`,'warn');
   queueLlmText(payload);
   return fallback;
 }
@@ -1643,8 +1710,29 @@ function resolveLlmQuizQuestion(fallbackQuiz) {
   }
 }
 
+
+function primeLlmSessionContext() {
+  if (!llmModeEnabled()) return;
+  if (game.llm.sessionPrimedForProvider === llmProviderLabel()) return;
+  const primerPayload = {
+    channel: 'announcement',
+    subject: 'School Day Startup',
+    speaker: 'Narrator',
+    speakerRole: 'narrator',
+    traitSummary: 'discipline:60, friendly:60, intelligence:60',
+    room: 'School',
+    addresseeName: '',
+    addresseeRole: '',
+    fallback: 'System check complete. Bell schedule running smoothly.',
+  };
+  pushLlmDebug(`🚀 Priming LLM session context for ${llmProviderLabel()}.`);
+  queueLlmText(primerPayload);
+  game.llm.sessionPrimedForProvider = llmProviderLabel();
+}
+
 function warmupLlmCache() {
   if (!llmModeEnabled()) return;
+  primeLlmSessionContext();
   const sampleEntities = game.entities.filter((entity) => entity.role !== 'player').slice(0, 8);
   sampleEntities.forEach((entity) => {
     ensureDialogueSetup(entity);
@@ -1703,6 +1791,8 @@ const game = {
     nsfw: false,
     cache: new Map(),
     inFlight: new Set(),
+    debugLog: [],
+    sessionPrimedForProvider: '',
   },
   rng: Math.random,
   quizActive: null,
@@ -8221,6 +8311,7 @@ function startGameFromSplash() {
   assignDailyDutyTeacher();
   announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
   if (llmModeEnabled()) {
+    primeLlmSessionContext();
     announce(`🤖 LLM mode active via ${llmProviderLabel()}. Dialogue cache warming in background.`, { force: true, feedType: 'world' });
   }
   if (game.dutyTeacherName) {
@@ -8238,6 +8329,15 @@ function startGameFromSplash() {
   requestAnimationFrame(loop);
 }
 
+
+if (llmDebugClearBtn) {
+  llmDebugClearBtn.addEventListener('click', () => {
+    game.llm.debugLog = [];
+    renderLlmDebugLog();
+    pushLlmDebug('🧹 LLM debug log cleared by player.');
+  });
+}
+
 if (startGameBtn) startGameBtn.addEventListener('click', startGameFromSplash);
 
 if (optLlmEnabledEl) {
@@ -8249,6 +8349,12 @@ if (optLlmEnabledEl) {
     setLlmStatus(game.llm.enabled
       ? '🤖 LLM mode enabled. First lines may use fallback text while cache warms up.'
       : 'ℹ️ LLM mode disabled. Using original built-in text.');
+    if (game.llm.enabled) {
+      pushLlmDebug(`🟢 LLM enabled with ${llmProviderLabel()}.`);
+      primeLlmSessionContext();
+    } else {
+      pushLlmDebug('⚪ LLM disabled; deterministic fallback text active.', 'warn');
+    }
   });
 }
 
@@ -8270,6 +8376,7 @@ if (optLlmSourceEl) {
   optLlmSourceEl.addEventListener('change', () => {
     game.llm.source = optLlmSourceEl.value === 'remote' ? 'remote' : 'local';
     game.llm.cache.clear();
+    game.llm.sessionPrimedForProvider = '';
     applyLlmUiState();
     persistLlmSettings();
     setLlmStatus(`🧭 LLM source set to ${game.llm.source}. Cache refreshed.`);
@@ -8287,6 +8394,7 @@ if (optLlmModelEl) {
       }
       if (!game.llm.manualModelName) game.llm.manualModelName = selected;
       game.llm.cache.clear();
+      game.llm.sessionPrimedForProvider = '';
       persistLlmSettings();
       setLlmStatus(`✅ Local model set to ${selected}. Cache reset for fresh responses.`);
     }
@@ -8299,6 +8407,7 @@ if (optLlmLocalEndpointEl) {
     game.llm.localEndpoint = normalizeLocalEndpoint(optLlmLocalEndpointEl.value || game.llm.localEndpoint);
     optLlmLocalEndpointEl.value = game.llm.localEndpoint;
     game.llm.cache.clear();
+    game.llm.sessionPrimedForProvider = '';
     persistLlmSettings();
     setLlmStatus(`🔌 Local endpoint set to ${game.llm.localEndpoint}. Use refresh to load models.`);
   });
@@ -8315,6 +8424,7 @@ if (optLlmManualModelEl) {
     }
     if (typed) game.llm.selectedModel = typed;
     game.llm.cache.clear();
+    game.llm.sessionPrimedForProvider = '';
     persistLlmSettings();
     setLlmStatus(typed
       ? `⌨️ Manual Ollama model set to ${typed}.`
@@ -8331,6 +8441,7 @@ if (optLlmRemoteProviderEl) {
     }
     game.llm.remoteModel = String(optLlmRemoteModelEl?.value || '').trim() || (game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini');
     game.llm.cache.clear();
+    game.llm.sessionPrimedForProvider = '';
     applyLlmUiState();
     persistLlmSettings();
     setLlmStatus(`☁️ Remote provider set to ${game.llm.remoteProvider.toUpperCase()}.`);
@@ -8342,6 +8453,7 @@ if (optLlmRemoteModelEl) {
   optLlmRemoteModelEl.addEventListener('change', () => {
     game.llm.remoteModel = String(optLlmRemoteModelEl.value || '').trim();
     game.llm.cache.clear();
+    game.llm.sessionPrimedForProvider = '';
     persistLlmSettings();
     setLlmStatus(`🧾 Remote model set to ${game.llm.remoteModel || 'default'}.`);
   });
@@ -8352,6 +8464,7 @@ if (optLlmRemoteTokenEl) {
   optLlmRemoteTokenEl.addEventListener('change', () => {
     game.llm.remoteToken = String(optLlmRemoteTokenEl.value || '').trim();
     game.llm.cache.clear();
+    game.llm.sessionPrimedForProvider = '';
     updateLlmTokenUi();
     persistLlmSettings();
     setLlmStatus('🔐 Remote token updated and saved in this browser.');
@@ -8375,6 +8488,7 @@ if (optLlmClearTokenEl) {
     game.llm.remoteToken = '';
     if (optLlmRemoteTokenEl) optLlmRemoteTokenEl.value = '';
     game.llm.cache.clear();
+    game.llm.sessionPrimedForProvider = '';
     updateLlmTokenUi();
     persistLlmSettings();
     setLlmStatus('🧹 Cleared saved remote token.');

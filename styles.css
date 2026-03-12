@@ -317,6 +317,28 @@ canvas {
 .event-line.thought { color: #c9e8ff; }
 .event-line.world { color: #ffe8a6; }
 
+
+.llm-debug-log {
+  margin-top: 0.35rem;
+  max-height: 170px;
+  overflow: auto;
+  border: 1px dashed #43597d;
+  border-radius: 8px;
+  padding: 0.35rem 0.45rem;
+  font-size: 0.7rem;
+  background: rgba(9, 16, 28, 0.7);
+}
+
+.llm-debug-line {
+  margin-bottom: 0.22rem;
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+.llm-debug-info { color: #bfe3ff; }
+.llm-debug-warn { color: #ffe4a1; }
+.llm-debug-error { color: #ffc4c4; }
+
 dialog {
   max-width: 560px;
   border-radius: 12px;
