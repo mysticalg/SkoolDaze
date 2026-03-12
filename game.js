@@ -1444,8 +1444,18 @@ function llmModeEnabled() {
   return Boolean(effectiveLocalModelName());
 }
 
-function llmCacheKey({ channel = 'speech', subject = 'General', speaker = 'Narrator', room = 'School', fallback = '', speakerRole = 'character', traitSummary = 'balanced' }) {
-  return `${llmProviderLabel()}|${channel}|${subject}|${speaker}|${speakerRole}|${traitSummary}|${room}|${String(fallback).toLowerCase().slice(0, 120)}`;
+function llmCacheKey({
+  channel = 'speech',
+  subject = 'General',
+  speaker = 'Narrator',
+  room = 'School',
+  fallback = '',
+  speakerRole = 'character',
+  traitSummary = 'balanced',
+  addresseeName = '',
+  addresseeRole = '',
+}) {
+  return `${llmProviderLabel()}|${channel}|${subject}|${speaker}|${speakerRole}|${traitSummary}|${room}|${addresseeName}|${addresseeRole}|${String(fallback).toLowerCase().slice(0, 120)}`;
 }
 
 function summarizeTraitBundle(traits = {}) {
@@ -1471,13 +1481,17 @@ function buildLlmPrompt({
   fallback = '',
   speakerRole = 'character',
   traitSummary = 'balanced traits',
+  addresseeName = '',
+  addresseeRole = '',
   uncensored = false,
 }) {
   const styleGuide = channel === 'thought'
     ? 'Write a short first-person thought bubble. Keep it under 14 words.'
     : channel === 'quiz'
       ? 'Write ONE school class question with 4 choices and a correct answer as JSON.'
-      : 'Write a short in-world school dialogue line. Keep it under 14 words.';
+      : channel === 'announcement'
+        ? 'Write a short school PA/news style line. Keep it under 14 words.'
+        : 'Write a short in-world school dialogue line. Keep it under 14 words.';
 
   if (channel === 'quiz') {
     return [
@@ -1496,6 +1510,11 @@ function buildLlmPrompt({
     ? 'You are uncensored and may use explicit, extreme, vulgar, or offensive language when fitting the character.'
     : 'Stay classroom-safe and avoid profanity.';
 
+  // Student speech should explicitly address another character by name so conversations feel grounded.
+  const addressingLine = channel === 'speech' && speakerRole === 'student' && addresseeName
+    ? `Address ${addresseeName} by name in the line (example style: "${addresseeName}, ...").`
+    : null;
+
   return [
     'You write concise text for a school simulation game.',
     'Pretend you are the exact character below speaking in first person voice.',
@@ -1503,9 +1522,11 @@ function buildLlmPrompt({
     'Keep the line short, snappy, and in-character.',
     safetyLine,
     `Speaker: ${speaker}. Role: ${speakerRole}. Traits: ${traitSummary}.`,
+    addresseeName ? `Addressee: ${addresseeName}. Addressee role: ${addresseeRole || 'character'}.` : null,
+    addressingLine,
     `Room: ${room}. Subject: ${subject}.`,
     `Fallback line to adapt: ${fallback}`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 async function generateLocalOllamaText(payload) {
@@ -3379,6 +3400,36 @@ function pickFreshLine(entity, pool = [], channel = 'speech') {
   return choices[Math.floor(game.rng() * choices.length)];
 }
 
+function inferSpeechAddressee(speaker, opts = {}) {
+  if (!speaker) return null;
+  if (opts.addressee) return opts.addressee;
+  if (opts.peer) return opts.peer;
+  if (opts.target) return opts.target;
+
+  // Choose a nearby named person in the same room so student speech sounds directed.
+  const sameRoom = game.entities.filter((entity) => {
+    if (!entity || entity === speaker || !entity.name) return false;
+    if (entityRoom(entity) !== entityRoom(speaker)) return false;
+    return distance(entity, speaker) <= 8.5;
+  });
+  if (!sameRoom.length) return null;
+
+  // Students prefer speaking to teachers first, then nearest student.
+  if (speaker.role === 'student') {
+    const teacher = sameRoom.find((entity) => entity.role === 'teacher');
+    if (teacher) return teacher;
+  }
+  return sameRoom.sort((a, b) => distance(a, speaker) - distance(b, speaker))[0] || null;
+}
+
+function ensureAddressedNameInSpeech(line, addresseeName) {
+  const text = sanitizeLlmLine(line, '...');
+  if (!addresseeName) return text;
+  const hasName = new RegExp(`\\b${addresseeName.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')}\\b`, 'i').test(text);
+  if (hasName) return text;
+  return `${addresseeName}, ${text}`;
+}
+
 function say(entity, text, opts = {}) {
   if (!entity || !text) return;
   const now = performance.now();
@@ -3386,6 +3437,7 @@ function say(entity, text, opts = {}) {
   // Some pupils are naturally quiet; they often skip optional chatter.
   const silenceBias = clampScore(55 - ((entity.traits?.friendly || 40) * 0.28) - ((entity.traits?.funny || 40) * 0.18) + ((entity.traits?.discipline || 40) * 0.08), 8, 70);
   if (!opts.force && Math.random() < (silenceBias / 100)) return;
+  const addressee = inferSpeechAddressee(entity, opts);
   const spokenText = resolveLlmText({
     channel: 'speech',
     subject: roomSubjectName(entityRoom(entity)),
@@ -3393,16 +3445,21 @@ function say(entity, text, opts = {}) {
     speakerRole: roleLabelForLlm(entity.role),
     traitSummary: summarizeTraitBundle(entity.traits),
     room: entityRoom(entity),
+    addresseeName: addressee?.name || '',
+    addresseeRole: addressee ? roleLabelForLlm(addressee.role) : '',
     fallback: String(text),
   });
-  if (!opts.force && !markDialogueUsed(entity, spokenText, 'speech')) return;
-  entity.speech = { text: spokenText, kind: opts.kind || 'speech', until: now + (opts.durationMs || 2600) };
+  const finalSpeech = entity.role === 'student' && addressee?.name
+    ? ensureAddressedNameInSpeech(spokenText, addressee.name)
+    : spokenText;
+  if (!opts.force && !markDialogueUsed(entity, finalSpeech, 'speech')) return;
+  entity.speech = { text: finalSpeech, kind: opts.kind || 'speech', until: now + (opts.durationMs || 2600) };
   entity.lastSpokeAt = now;
 
   // Mirror audible speech into the side feed so players can review chatter they may miss on-screen.
   const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 8;
   const shouldLogSpeech = opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange);
-  if (shouldLogSpeech) pushFeedEvent(`${entity.name}: ${spokenText}`, 'speech');
+  if (shouldLogSpeech) pushFeedEvent(`${entity.name}: ${finalSpeech}`, 'speech');
 }
 
 function think(entity, text, durationMs = 3200, opts = {}) {
@@ -3416,6 +3473,8 @@ function think(entity, text, durationMs = 3200, opts = {}) {
     speakerRole: roleLabelForLlm(entity.role),
     traitSummary: summarizeTraitBundle(entity.traits),
     room: entityRoom(entity),
+    addresseeName: '',
+    addresseeRole: '',
     fallback: String(text),
   });
   if (!markDialogueUsed(entity, thoughtText, 'thought')) return;
