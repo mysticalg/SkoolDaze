@@ -41,6 +41,8 @@ const classQuestionPromptEl = document.getElementById('classQuestionPrompt');
 const classQuestionChoicesEl = document.getElementById('classQuestionChoices');
 const filterActionsEl = document.getElementById('filterActions');
 const filterSpeechEl = document.getElementById('filterSpeech');
+const filterThoughtsEl = document.getElementById('filterThoughts');
+const filterWorldEl = document.getElementById('filterWorld');
 const startOverlayEl = document.getElementById('startOverlay');
 const startGameBtn = document.getElementById('startGameBtn');
 const optStudentCountEl = document.getElementById('optStudentCount');
@@ -120,12 +122,12 @@ const rooms = [
   // Taller + wider hall improves assembly spacing and row alignment readability.
   { name: 'Assembly Hall', x: 68, y: 58, w: 30, h: 18, floor: 'ground', type: 'hall' },
   // Dining hall sits beside assembly for fast lunchtime flow.
-  { name: 'Dining Hall', x: 100, y: 66, w: 24, h: 10, floor: 'ground', type: 'hall' },
+  { name: 'Dining Hall', x: 100, y: 62, w: 36, h: 14, floor: 'ground', type: 'hall' },
   { name: 'Geography', x: 8, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
   { name: 'Art Room', x: 34, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
   { name: 'History', x: 60, y: 80, w: 24, h: 14, floor: 'ground', type: 'classroom' },
   // Kitchen is attached to dining hall and still next to assembly for intuitive wayfinding.
-  { name: 'Kitchen', x: 126, y: 66, w: 16, h: 10, floor: 'ground', type: 'hall' },
+  { name: 'Kitchen', x: 138, y: 62, w: 12, h: 14, floor: 'ground', type: 'hall' },
   { name: 'P.E. Field', x: 90, y: 80, w: 70, h: 28, floor: 'ground', type: 'outdoor' },
   { name: 'Bike Sheds', x: 92, y: 94, w: 22, h: 12, floor: 'ground', type: 'outdoor' },
   { name: 'School Gates', x: 148, y: 80, w: 18, h: 28, floor: 'ground', type: 'outdoor' },
@@ -161,6 +163,60 @@ const stairs = [
 const STAIR_ENTRY_HALF_WIDTH = 1.95;
 const STAIR_ENTRY_HALF_HEIGHT = 1.5;
 const STAIR_INTERACT_RADIUS = 2.2;
+
+
+// Dining hall service points + seating grid keep lunch flow deterministic and readable.
+function diningHallLayout() {
+  const hall = roomByName('Dining Hall');
+  if (!hall) return null;
+
+  const plateStand = { x: hall.x + 3.2, y: hall.y + 2.3 };
+  const servingPoint = { x: hall.x + 8.6, y: hall.y + 2.4 };
+  const queueStart = { x: hall.x + 13.3, y: hall.y + 2.5 };
+  const queueSpacing = 1.55;
+  const queueSlots = Array.from({ length: 8 }, (_, idx) => ({
+    x: queueStart.x + (idx * queueSpacing),
+    y: queueStart.y,
+  }));
+
+  const seats = [];
+  const tableCols = [hall.x + 9.5, hall.x + 17.5, hall.x + 25.5, hall.x + 33.5];
+  const tableRows = [hall.y + 6.1, hall.y + 10.0];
+  for (const rowY of tableRows) {
+    for (const colX of tableCols) {
+      seats.push({ x: colX - 1.2, y: rowY, tableX: colX, tableY: rowY, side: 'left' });
+      seats.push({ x: colX + 1.2, y: rowY, tableX: colX, tableY: rowY, side: 'right' });
+    }
+  }
+
+  const patrolRoute = [
+    { x: hall.x + 6, y: hall.y + hall.h - 2.3 },
+    { x: hall.x + hall.w - 3, y: hall.y + hall.h - 2.2 },
+    { x: hall.x + hall.w - 4.5, y: hall.y + 4.6 },
+    { x: hall.x + 8.3, y: hall.y + 4.8 },
+  ];
+
+  return {
+    hall,
+    plateStand,
+    servingPoint,
+    queueSlots,
+    serviceDurationMs: 2000,
+    seats,
+    patrolRoute,
+  };
+}
+
+function resetLunchState(entity) {
+  if (!entity) return;
+  entity.lunchState = 'idle';
+  entity.hasLunchPlate = false;
+  entity.queuedForLunch = false;
+  entity.lunchQueueIndex = -1;
+  entity.lunchServedAt = 0;
+  entity.lunchSeatIndex = -1;
+  entity.lunchEatUntil = 0;
+}
 
 // Lightweight synth SFX keeps interactions responsive without external assets.
 const sfxState = { ctx: null, enabled: true };
@@ -608,8 +664,8 @@ const personalities = {
 };
 
 // Dialogue pacing keeps chatter readable and prevents instant back-to-back spam.
-const MIN_DIALOGUE_INTERVAL_MS = 5000;
-const CLASSROOM_DIALOGUE_INTERVAL_MS = 7600;
+const MIN_DIALOGUE_INTERVAL_MS = 5600;
+const CLASSROOM_DIALOGUE_INTERVAL_MS = 9400;
 const INTERACTION_COOLDOWN_HOURS = 3;
 
 // Everyday school items can move through student pockets via trading and bartering.
@@ -976,18 +1032,26 @@ function createThoughtVariants(entity) {
   const topic = entity.dialogueProfile?.preferredTopic || 'class';
   const confidence = ((entity.traits?.wit || 50) + (entity.traits?.intelligence || 50)) / 2;
   const confidenceTag = confidence > 62 ? 'I have got this' : 'please let this go smoothly';
-  const tones = ['🍕', '⚽', '🎮', '☁️', '🧠', '📝', '👟', '🎧'];
+  const tones = ['🍕', '⚽', '🎮', '☁️', '🧠', '📝', '👟', '🎧', '📓', '💡', '🫧', '🎯'];
   const thoughtTemplates = [
     `${confidenceTag}... maybe ${topic} will come up.`,
-    `Need to remember my planner this time.`,
-    `If I finish quickly, break will feel longer.`,
-    `Focus now, dream later.`,
-    `One good answer and I am safe today.`,
-    `Why is the bell always slower before lunch?`,
-    `Stay calm, walk in, look prepared.`,
+    'Need to remember my planner this time.',
+    'If I finish quickly, break will feel longer.',
+    'Focus now, dream later.',
+    'One good answer and I am safe today.',
+    'Why is the bell always slower before lunch?',
+    'Stay calm, walk in, look prepared.',
     `I should ask about ${topic} later.`,
+    'Do not laugh at the next bad joke. Keep a straight face.',
+    'If I sit near the window I might actually listen better.',
+    'Remember: write the date first, panic second.',
+    'Lunch plan: queue early, avoid chaos, guard the chips.',
+    'If the teacher asks, I definitely revised... probably.',
+    'Need one clean answer and a confident nod.',
+    'Must stop doodling spaceships in the margin.',
+    'If I survive this period, I deserve legendary snacks.',
   ];
-  return Array.from({ length: 24 }, (_, idx) => {
+  return Array.from({ length: 36 }, (_, idx) => {
     const tone = tones[(idx + styleSeedFromName(entity.name || 'npc')) % tones.length];
     const template = thoughtTemplates[(idx * 2 + styleSeedFromName(entity.name || 'npc')) % thoughtTemplates.length];
     return `${tone} ${template}`;
@@ -1060,7 +1124,7 @@ const game = {
   keys: {},
   announcements: [],
   eventLog: [],
-  eventFilters: { action: true, speech: true },
+  eventFilters: { action: true, speech: true, thought: true, world: true },
   rng: Math.random,
   quizActive: null,
   lastClassQuestionAt: 0,
@@ -1285,6 +1349,14 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     nextBlinkAt: performance.now() + 2000 + Math.random() * 7000,
     dailyCards: [],
     refusesEricUntilDay: 0,
+    // Lunch-service state machine: plate -> queue -> serve -> sit -> eat.
+    lunchState: 'idle',
+    hasLunchPlate: false,
+    queuedForLunch: false,
+    lunchQueueIndex: -1,
+    lunchServedAt: 0,
+    lunchSeatIndex: -1,
+    lunchEatUntil: 0,
   };
 }
 
@@ -1927,7 +1999,7 @@ function pickWeeklyWeather() {
   game.weatherWeek = week;
   const keys = Object.keys(weatherModes);
   game.weather = keys[Math.floor(game.rng() * keys.length)] || 'sunny';
-  announce(`${weatherModes[game.weather].icon} New week weather: ${weatherModes[game.weather].label}.`, { force: true });
+  announce(`${weatherModes[game.weather].icon} New week weather: ${weatherModes[game.weather].label}.`, { force: true, feedType: 'world' });
   playSfx('weather');
   updateWeatherHud();
 }
@@ -2560,7 +2632,7 @@ function resetToSchoolMorning() {
   updateBladderHud();
   updateHygieneHud();
   updateWeatherHud();
-  announce('🌅 New school day: teachers arrive from the gate and form a single line left of the black divider while students queue to the right.');
+  announce('🌅 New school day: teachers arrive from the gate and form a single line left of the black divider while students queue to the right.', { feedType: 'world' });
   announce(`🗄️ Lockers ready: ${game.lockerCapacity} total, ${game.lockerCoverage}% of students issued keys.`, { force: true });
   if (game.dutyTeacherName) {
     announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
@@ -2571,11 +2643,14 @@ function updateAutoPilot(dt) {
   const current = schedule[game.periodIndex];
   const destination = chooseAutoDestination();
   const waypoint = routeWaypoint(player, destination);
-  // Auto mode should move at student pace (not superhuman speed).
-  // NPC students use a hallway multiplier near 3.0 and move with dt/1000,
-  // while Eric uses dt*0.011, so we convert with /11 for parity.
-  const studentHallwayBoost = 3.05 / 11;
-  const speed = ((player.personality.speed * game.energy) / 100) * studentHallwayBoost;
+  // Auto mode should mirror student travel speed so Eric no longer trails behind.
+  // NPC students use hallwayBoost 3.3 with movement integrated at dt/1000,
+  // while Eric's movement is integrated with dt*0.011, so divide by 11 for parity.
+  const studentHallwayBoost = 3.3 / 11;
+  // Match student "late for lesson" urgency so auto mode keeps up with corridor traffic.
+  const lateForClass = current.mode === 'lesson' && entityRoom(player) !== current.room;
+  const runBoost = lateForClass && player.energy > 20 ? 1.45 : 1;
+  const speed = ((player.personality.speed * game.energy) / 100) * studentHallwayBoost * runBoost;
 
   const dx = waypoint.x - player.x;
   const dy = waypoint.y - player.y;
@@ -2671,7 +2746,18 @@ function canPlayerHearSpeaker(source, range) {
   return sameRoom || distance(source, player) <= range;
 }
 
+function isHeadmasterAddressActive(now = performance.now()) {
+  const current = schedule[game.periodIndex];
+  if (!isAssemblyPeriod(current)) return false;
+  const headmaster = game.entities.find((entity) => entity.role === 'teacher' && entity.name === 'Mr Wacker');
+  return Boolean(headmaster?.speech && headmaster.speech.until > now && entityRoom(headmaster) === 'Assembly Hall');
+}
+
 function canUseDialogue(entity, now, channel = 'speech') {
+  // During headmaster address windows, everyone else stays quiet in assembly.
+  if (channel === 'speech' && entity?.name !== 'Mr Wacker' && isHeadmasterAddressActive(now) && entityRoom(entity) === 'Assembly Hall') {
+    return false;
+  }
   const lastAt = channel === 'thought' ? (entity.lastThoughtAt || 0) : (entity.lastSpokeAt || 0);
   const inClassroom = channel === 'speech' && isSupervisedPeriod(schedule[game.periodIndex]) && entityRoom(entity) === schedule[game.periodIndex].room;
   const minInterval = inClassroom ? CLASSROOM_DIALOGUE_INTERVAL_MS : MIN_DIALOGUE_INTERVAL_MS;
@@ -2719,7 +2805,7 @@ function say(entity, text, opts = {}) {
   if (shouldLogSpeech) pushFeedEvent(`${entity.name}: ${spokenText}`, 'speech');
 }
 
-function think(entity, text, durationMs = 3200) {
+function think(entity, text, durationMs = 3200, opts = {}) {
   if (!entity || !text) return;
   const now = performance.now();
   if (!canUseDialogue(entity, now, 'thought')) return;
@@ -2727,6 +2813,12 @@ function think(entity, text, durationMs = 3200) {
   if (!markDialogueUsed(entity, thoughtText, 'thought')) return;
   entity.thought = { text: thoughtText, until: now + durationMs };
   entity.lastThoughtAt = now;
+
+  // Optional thought-feed mirror helps debug AI intent while staying filterable.
+  const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 7.2;
+  if (opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange)) {
+    pushFeedEvent(`💭 ${entity.name}: ${thoughtText}`, 'thought');
+  }
 }
 
 function tradeChanceFor(actor, partner, isPlayerInitiated = false) {
@@ -2867,6 +2959,7 @@ function drawRoundedBubble(x, y, lines, style) {
     paddingX, paddingY, lineHeight, radius,
     fillColor, strokeColor, shadowColor, shadowBlur,
     textColor, font, tailOffsetX = 10,
+    bubblyTail = false,
   } = style;
 
   ctx.font = font;
@@ -2888,15 +2981,32 @@ function drawRoundedBubble(x, y, lines, style) {
   ctx.restore();
 
   // Tail keeps speech/thought ownership clear while preserving the rounded card style.
-  ctx.fillStyle = fillColor;
-  ctx.strokeStyle = strokeColor;
-  ctx.beginPath();
-  ctx.moveTo(left + tailOffsetX, top + bubbleHeight);
-  ctx.lineTo(left + tailOffsetX + 8, top + bubbleHeight);
-  ctx.lineTo(left + tailOffsetX + 4, top + bubbleHeight + 8);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
+  if (bubblyTail) {
+    // Thought bubbles get smaller trailing circles so they read as "thinking" at a glance.
+    const bubbleTrail = [
+      { x: left + tailOffsetX + 6, y: top + bubbleHeight + 4, r: 3.6 },
+      { x: left + tailOffsetX + 11, y: top + bubbleHeight + 9, r: 2.7 },
+      { x: left + tailOffsetX + 15, y: top + bubbleHeight + 13, r: 2.1 },
+    ];
+    ctx.fillStyle = fillColor;
+    ctx.strokeStyle = strokeColor;
+    for (const bubble of bubbleTrail) {
+      ctx.beginPath();
+      ctx.arc(bubble.x, bubble.y, bubble.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  } else {
+    ctx.fillStyle = fillColor;
+    ctx.strokeStyle = strokeColor;
+    ctx.beginPath();
+    ctx.moveTo(left + tailOffsetX, top + bubbleHeight);
+    ctx.lineTo(left + tailOffsetX + 8, top + bubbleHeight);
+    ctx.lineTo(left + tailOffsetX + 4, top + bubbleHeight + 8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
 
   ctx.fillStyle = textColor;
   ctx.font = font;
@@ -2926,6 +3036,7 @@ function announce(message, options = {}) {
     source = null,
     range = 6.5,
     force = false,
+    feedType = 'action',
   } = options;
 
   // Speech-style events can be local so the feed reflects what Eric can realistically hear.
@@ -2937,7 +3048,7 @@ function announce(message, options = {}) {
 
   game.announcements.unshift(`[${formatTime(game.timeMinutes)}] ${message}`);
   game.announcements = game.announcements.slice(0, 12);
-  pushFeedEvent(message, 'action');
+  pushFeedEvent(message, feedType);
 }
 
 function getSfxContext() {
@@ -3420,16 +3531,23 @@ function setPeriod(index) {
   }
 
   game.bellRingingUntil = performance.now() + 3000;
-  announce(`🔔 Bell! ${current.period} in ${current.room}`);
+  announce(`🔔 Bell! ${current.period} in ${current.room}`, { feedType: 'world' });
   if (current.period === 'Lunch Break') {
-    announce('🍽️ Lunch service is open in the dining hall for 30 minutes.');
+    announce('🍽️ Lunch service is open in the dining hall for 30 minutes.', { feedType: 'world' });
+    for (const entity of game.entities) {
+      if (isStudentCharacter(entity)) resetLunchState(entity);
+    }
+  } else {
+    for (const entity of game.entities) {
+      if (isStudentCharacter(entity)) resetLunchState(entity);
+    }
   }
   if (isAssemblyPeriod(current)) {
     const headmaster = game.entities.find((entity) => entity.role === 'teacher' && entity.name === 'Mr Wacker');
     game.assemblyNextSpeechAt = performance.now() + 1400;
     game.assemblyHymnAt = performance.now() + 10000;
     game.assemblyUsedThoughts = new Set();
-    announce('🎤 Assembly begins: all students to seats, teachers behind the Headmaster.');
+    announce('🎤 Assembly begins: all students to seats, teachers behind the Headmaster.', { feedType: 'world' });
     if (headmaster) {
       say(headmaster, '📢 Good morning! Sit smartly for today\'s thought and hymn.', { force: true, durationMs: 3600 });
     }
@@ -3445,7 +3563,7 @@ function setPeriod(index) {
     }
   }
   if (current.period === 'Home Time') {
-    announce('🏠 Home time! Students may leave through the school gates.');
+    announce('🏠 Home time! Students may leave through the school gates.', { feedType: 'world' });
     announce('🎮 Want extra computer time? At the gates, press E to stay for one extra hour.', { force: true });
     game.choseToStayAfterSchool = false;
     game.stayingAfterSchoolUntil = 0;
@@ -4406,6 +4524,48 @@ function dinnerLadyCanObserve(dinnerLady) {
   return entityRoom(dinnerLady) === 'Dining Hall' && !isTeacherBackTurned(dinnerLady);
 }
 
+
+function lunchQueueOrder(students, layout) {
+  return students
+    .slice()
+    .sort((a, b) => {
+      const aQueued = a.lunchState === 'queue' || a.lunchState === 'beingServed' ? 0 : 1;
+      const bQueued = b.lunchState === 'queue' || b.lunchState === 'beingServed' ? 0 : 1;
+      if (aQueued !== bQueued) return aQueued - bQueued;
+      const aDist = distance(a, layout.queueSlots[0]);
+      const bDist = distance(b, layout.queueSlots[0]);
+      if (Math.abs(aDist - bDist) > 0.01) return aDist - bDist;
+      return a.seatIndex - b.seatIndex;
+    });
+}
+
+function nearestFreeDiningSeat(layout, eater) {
+  if (!layout) return null;
+  const occupiedIndices = new Set();
+  for (const candidate of game.entities) {
+    if (!candidate || candidate === eater) continue;
+    const idx = candidate.lunchSeatIndex;
+    if (typeof idx === 'number' && idx >= 0 && idx < layout.seats.length) {
+      occupiedIndices.add(idx);
+    }
+  }
+
+  let best = null;
+  let bestIndex = -1;
+  let bestDist = Infinity;
+  for (let i = 0; i < layout.seats.length; i += 1) {
+    if (occupiedIndices.has(i)) continue;
+    const seat = layout.seats[i];
+    const d = distance(eater, seat);
+    if (d < bestDist) {
+      bestDist = d;
+      best = seat;
+      bestIndex = i;
+    }
+  }
+  return best ? { seat: best, seatIndex: bestIndex } : null;
+}
+
 function calmNearbyStudents(observer, radius = 8.5, movementScale = 0.32) {
   for (const student of game.entities) {
     if (!isStudentCharacter(student) || student === player) continue;
@@ -4496,8 +4656,14 @@ function chooseTarget(entity, currentPeriod) {
   }
 
   if (entity.role === 'dinnerLady') {
-    // Dinner ladies serve in kitchen+dining hall and supervise students during lunch service.
-    if (isLunchtimePeriod(currentPeriod)) return roomCenter('Dining Hall');
+    // Dinner ladies split roles: one serves at the food bar, one patrols tables.
+    if (isLunchtimePeriod(currentPeriod)) {
+      const layout = diningHallLayout();
+      if (!layout) return roomCenter('Dining Hall');
+      const allDinnerLadies = game.entities.filter((candidate) => candidate.role === 'dinnerLady');
+      const servingLady = allDinnerLadies[0];
+      return entity === servingLady ? layout.servingPoint : (layout.patrolRoute[0] || roomCenter('Dining Hall'));
+    }
     return roomCenter('Kitchen');
   }
 
@@ -4539,7 +4705,8 @@ function chooseTarget(entity, currentPeriod) {
 
   // Lunch hall routine: all students head to the dining hall to eat during lunch service.
   if (isLunchtimePeriod(currentPeriod) && isStudentCharacter(entity)) {
-    return roomCenter('Dining Hall');
+    const layout = diningHallLayout();
+    return layout?.plateStand || roomCenter('Dining Hall');
   }
 
   if (entity.role === 'teacher') {
@@ -4641,6 +4808,11 @@ function updateNpcVitals(entity, dt, isRunning) {
   // moments and appear to crawl for the rest of the day.
   const dtSeconds = dt / 1000;
   const deltaMins = (dt / 1000) * game.timeScale;
+
+  // Mr Mop and dinner ladies are service NPCs and should always stay responsive.
+  if (entity.role === 'janitor' || entity.role === 'dinnerLady') {
+    entity.energy = 100;
+  }
   // NPC bladder rises over time, slightly quicker while running.
   entity.bladder = Math.min(100, entity.bladder + deltaMins * (0.34 + (isRunning ? 0.2 : 0)));
 
@@ -4674,7 +4846,9 @@ function updateNpcVitals(entity, dt, isRunning) {
     && !isLunch;
 
   if (canRecoverFromMeal) {
-    entity.energy = Math.min(100, entity.energy + dtSeconds * recoverPerSecond);
+    entity.energy = entity.role === "janitor" || entity.role === "dinnerLady"
+      ? 100
+      : Math.min(100, entity.energy + dtSeconds * recoverPerSecond);
     return;
   }
 
@@ -4683,13 +4857,19 @@ function updateNpcVitals(entity, dt, isRunning) {
   const netDrainPerSecond = studentSeatedRecovery
     ? (drainRate - NPC_SEATED_RECOVER_PER_SECOND)
     : drainRate;
-  entity.energy = Math.max(16, Math.min(100, entity.energy - (dtSeconds * netDrainPerSecond)));
+  entity.energy = entity.role === "janitor" || entity.role === "dinnerLady"
+    ? 100
+    : Math.max(16, Math.min(100, entity.energy - (dtSeconds * netDrainPerSecond)));
 
   // Keep end-of-day fatigue believable: students should usually finish around ~30%.
   // This softly nudges energy toward a line from 100 at the start of day to 30 at home time.
   const dayProgress = schoolDayProgress();
   const baselineEnergy = 100 - ((100 - NPC_END_OF_DAY_ENERGY_TARGET) * dayProgress);
-  entity.energy = Math.max(16, Math.min(entity.energy, baselineEnergy));
+  if (entity.role === "janitor" || entity.role === "dinnerLady") {
+    entity.energy = 100;
+  } else {
+    entity.energy = Math.max(16, Math.min(entity.energy, baselineEnergy));
+  }
 
   const emotionDrift = entity.mood === 'furious' || entity.mood === 'angry' ? -0.9 : 0.35;
   entity.emotion = Math.max(0, Math.min(100, entity.emotion + (emotionDrift * dtSeconds)));
@@ -4863,6 +5043,99 @@ function updateAI(dt) {
     const isOutside = ['P.E. Field', 'School Gates', 'Bike Sheds'].includes(entityRoom(entity));
     const lunchDutyLady = dinnerLadyEntity();
     const dinnerLadyWatchingField = dinnerLadyCanObserve(lunchDutyLady);
+
+
+    if (isLunchtimePeriod(current) && isStudent) {
+      const layout = diningHallLayout();
+      if (layout) {
+        // Lunch routine: collect plate, queue for serving, then sit at a long table to eat.
+        if (entity.lunchState === 'idle') {
+          entity.lunchState = 'toPlate';
+          entity.target = layout.plateStand;
+        }
+
+        if (entity.lunchState === 'toPlate') {
+          entity.target = layout.plateStand;
+          if (distance(entity, layout.plateStand) < 1.05) {
+            entity.hasLunchPlate = true;
+            entity.lunchState = 'queue';
+          }
+        }
+
+        const lunchStudents = game.entities.filter((candidate) => (
+          candidate !== player
+          && candidate.role !== 'teacher'
+          && candidate.role !== 'janitor'
+          && candidate.role !== 'nurse'
+          && candidate.role !== 'dinnerLady'
+          && candidate.arrivedForDay
+          && entityRoom(candidate) === 'Dining Hall'
+          && (candidate.lunchState === 'queue' || candidate.lunchState === 'beingServed' || candidate.lunchState === 'toPlate')
+        ));
+        const queueOrder = lunchQueueOrder(lunchStudents, layout);
+        for (let i = 0; i < queueOrder.length; i += 1) {
+          queueOrder[i].lunchQueueIndex = i;
+          if (queueOrder[i].lunchState === 'queue') {
+            queueOrder[i].target = layout.queueSlots[Math.min(i, layout.queueSlots.length - 1)];
+          }
+        }
+
+        if (entity.lunchState === 'queue') {
+          const frontSlot = layout.queueSlots[0];
+          const atFront = entity.lunchQueueIndex === 0 && distance(entity, frontSlot) < 0.9;
+          if (atFront) {
+            entity.lunchState = 'beingServed';
+            entity.lunchServedAt = now + layout.serviceDurationMs;
+          }
+        }
+
+        if (entity.lunchState === 'beingServed') {
+          entity.target = layout.queueSlots[0];
+          if (now >= (entity.lunchServedAt || 0)) {
+            entity.queuedForLunch = true;
+            entity.lunchState = 'toSeat';
+            const freeSeat = nearestFreeDiningSeat(layout, entity);
+            if (freeSeat) {
+              entity.lunchSeatIndex = freeSeat.seatIndex;
+              entity.target = freeSeat.seat;
+            }
+          }
+        }
+
+        if (entity.lunchState === 'toSeat') {
+          const seat = layout.seats[entity.lunchSeatIndex] || nearestFreeDiningSeat(layout, entity)?.seat;
+          if (seat) {
+            entity.target = seat;
+            if (distance(entity, seat) < 0.75) {
+              entity.x = seat.x;
+              entity.y = seat.y;
+              entity.isSeated = true;
+              entity.seatedRoom = 'Dining Hall';
+              entity.lunchState = 'eating';
+              entity.lunchEatUntil = now + (6200 + (game.rng() * 3400));
+            }
+          } else {
+            entity.target = roomCenter('Dining Hall');
+          }
+        }
+
+        if (entity.lunchState === 'eating') {
+          const seat = layout.seats[entity.lunchSeatIndex];
+          if (seat) {
+            entity.x = seat.x;
+            entity.y = seat.y;
+            entity.target = seat;
+          }
+          entity.isSeated = true;
+          entity.seatedRoom = 'Dining Hall';
+          if (now >= (entity.lunchEatUntil || 0)) {
+            entity.lunchState = 'done';
+            entity.hasLunchPlate = false;
+            entity.target = roomCenter('P.E. Field');
+          }
+        }
+      }
+    }
 
     if (isStudent && entity.displacedFromSeatUntil && performance.now() < entity.displacedFromSeatUntil) {
       entity.target = entity.displacedSeatPos || { x: entity.x, y: entity.y };
@@ -5046,7 +5319,7 @@ function updateAI(dt) {
       : (inLesson ? (entity.lessonRoom || current.room) : current.room);
     const inAssignedClassroom = inLesson && isStudent && entityRoom(entity) === expectedRoomNow;
     const walkingToClass = inLesson && isStudent && !inAssignedClassroom;
-    if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home' || walkingToClass) && isStudent && game.rng() < 0.018) {
+    if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home' || walkingToClass) && isStudent && game.rng() < 0.011) {
       ensureDialogueSetup(entity);
       const hallwayChatter = entity.dialogue.hallwayChatter || ['😆 Wait up, I am coming too!'];
       const line = pickFreshLine(entity, hallwayChatter, 'speech');
@@ -5078,13 +5351,13 @@ function updateAI(dt) {
         `🔕 ${entity.name}: volume down, or everyone gets lines.`,
       ];
       say(entity, quietCalls[Math.floor(game.rng() * quietCalls.length)], { durationMs: 3400 });
-      game.lessonQuietUntil = now + 4200;
+      game.lessonQuietUntil = now + 9000;
       game.lessonNoiseLevel = 0.04;
     }
 
     // Witty teacher comeback when a student asks a silly question.
-    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < 0.0009) {
-      const sillyQuestions = ['🙃 Sir, can we do homework in our dreams?', '😅 Miss, is zero afraid of minus numbers?', '🤔 If I eat my notes, do I absorb the lesson?'];
+    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < 0.00055) {
+      const sillyQuestions = ['🙃 Sir, can we do homework in our dreams?', '😅 Miss, is zero afraid of minus numbers?', '🤔 If I eat my notes, do I absorb the lesson?', '🧪 If we mix maths and music, do we get algebra beats?', '📏 Can I measure effort with a ruler and hand that in?', '🛰️ If I answer in space-voice, is it still correct?', '🍟 Is lunch technically a science experiment?', '🎭 If I act confident, do I get confidence marks?', '🦆 Is a duck in uniform allowed in assembly?', '📚 If I highlight everything, does that count as revision?', '🧠 Can my future self come sit this test for me?', '⏰ Can we have a two-minute break every two minutes?'];
       say(entity, sillyQuestions[Math.floor(game.rng() * sillyQuestions.length)], { durationMs: 3600 });
       const classTeacher = game.entities.find((candidate) => (
         candidate.role === 'teacher'
@@ -5093,7 +5366,7 @@ function updateAI(dt) {
       ));
       if (classTeacher) {
         classTeacher.speech = null;
-        say(classTeacher, ['😏 Nice try. If that worked, I would eat the exam keys.', '🧠 Creative, but knowledge still needs actual study.', '😂 Brilliant joke. Now give me the real answer.'][Math.floor(game.rng() * 3)], { durationMs: 3900 });
+        say(classTeacher, ['😏 Nice try. If that worked, I would eat the exam keys.', '🧠 Creative, but knowledge still needs actual study.', '😂 Brilliant joke. Now give me the real answer.', '📘 Funny. Write that in your comedy notebook, then answer properly.', '🪑 Stand-up career later, seat-work now.', '🎯 Good energy — aim it at the actual question.', '🧮 If jokes solved equations, you would be top set already.', '⏱️ Ten out of ten for timing, zero for accuracy so far.', '📝 Excellent imagination. I also need excellent handwriting and a real answer.', '🔍 I admire the chaos. I still need evidence and working out.', '🧑‍🏫 Gold star for confidence, now earn one for correctness.', '🎓 Keep the wit, lose the waffle. Answer the task.'][Math.floor(game.rng() * 12)], { durationMs: 3900 });
       }
     }
 
@@ -5166,7 +5439,7 @@ function updateAI(dt) {
     }
 
     // Weather drives break-time choices and social reactions.
-    if (current.mode === 'break' && isStudent && game.rng() < 0.011) {
+    if (current.mode === 'break' && !isLunchtimePeriod(current) && isStudent && game.rng() < 0.011) {
       if (game.weather === 'rain') {
         entity.target = roomCenter('Assembly Hall');
         if (isOutside) think(entity, '🌧️ No thanks, staying inside today.');
@@ -5209,8 +5482,24 @@ function updateAI(dt) {
     }
 
     if (entity.role === 'dinnerLady') {
-      // Dinner ladies whistle to keep lunch queues moving and the hall calm.
+      // Dinner ladies split lunch duty: one serves from the bar, the other patrols tables.
       if (isLunchtimePeriod(current) && entityRoom(entity) === 'Dining Hall') {
+        const layout = diningHallLayout();
+        const allDinnerLadies = game.entities.filter((candidate) => candidate.role === 'dinnerLady');
+        const servingLady = allDinnerLadies[0];
+        const isServingLady = entity === servingLady;
+
+        if (layout) {
+          if (isServingLady) {
+            entity.target = layout.servingPoint;
+          } else {
+            entity.patrolIndex = typeof entity.patrolIndex === 'number' ? entity.patrolIndex : 0;
+            if (!entity.target || distance(entity, entity.target) < 1.05) {
+              entity.patrolIndex = (entity.patrolIndex + 1) % layout.patrolRoute.length;
+              entity.target = layout.patrolRoute[entity.patrolIndex];
+            }
+          }
+        }
         // Briefly looking away creates small windows where fights can flare back up.
         if (entity.writingUntil < performance.now() && game.rng() < 0.0012) {
           entity.writingUntil = performance.now() + 1400;
@@ -5224,6 +5513,19 @@ function updateAI(dt) {
           game.lessonNoiseLevel = Math.max(0, game.lessonNoiseLevel - 0.35);
         }
 
+
+
+        if (layout && isServingLady && game.rng() < 0.0065) {
+          const servingStudent = game.entities.find((candidate) => (
+            isStudentCharacter(candidate)
+            && candidate.lunchState === 'beingServed'
+            && entityRoom(candidate) === 'Dining Hall'
+            && distance(candidate, layout.queueSlots[0]) < 1.1
+          ));
+          if (servingStudent && game.rng() < 0.45) {
+            say(entity, `🍛 Next! ${servingStudent.name}, tray up please.`, { durationMs: 1800 });
+          }
+        }
         // Close-range intervention: drag one rowdy pupil to the Headmaster Office.
         const rowdy = game.entities.find((candidate) => (
           candidate !== entity
@@ -5361,9 +5663,10 @@ function updateAI(dt) {
     // During lessons all teachers should be seated in their designated classroom,
     // not just the currently assigned teacher in the active period room.
     const seatedTarget = inLesson && entityRoom(entity) === expectedRoom;
-    const wasSeated = entity.isSeated && entity.seatedRoom === expectedRoom;
+    const lunchSeatTarget = isLunchtimePeriod(current) && isStudent && entity.lunchState === 'eating' && entityRoom(entity) === 'Dining Hall';
+    const wasSeated = entity.isSeated && (entity.seatedRoom === expectedRoom || entity.seatedRoom === 'Dining Hall');
     // Add a small hysteresis window: sitting is easy to maintain, harder to flip off.
-    entity.isSeated = seatedTarget && (len < 0.4 || (wasSeated && len < 0.85));
+    entity.isSeated = (seatedTarget || lunchSeatTarget) && (len < 0.4 || (wasSeated && len < 0.85));
 
     // Assembly-specific settle pass: lock teachers at their final standing/seated marker
     // to stop micro path corrections that look like hopping on the spot.
@@ -5390,7 +5693,7 @@ function updateAI(dt) {
         entity.isSeated = true;
       }
     }
-    entity.seatedRoom = entity.isSeated ? expectedRoom : null;
+    entity.seatedRoom = entity.isSeated ? (lunchSeatTarget ? 'Dining Hall' : expectedRoom) : null;
     const lateForClass = entity.role === 'teacher'
       ? (inLesson && entityRoom(entity) !== expectedRoom)
       : (inLesson && entityRoom(entity) !== expectedRoom);
@@ -5911,6 +6214,48 @@ function drawWorld() {
         ctx.fillRect(teacherChair.sx - 4, teacherChair.sy + 1, 8, 2);
         ctx.fillRect(teacherChair.sx - 4, teacherChair.sy - 1, 2, 2);
         ctx.fillRect(teacherChair.sx + 2, teacherChair.sy - 1, 2, 2);
+      }
+    }
+
+    if (room.name === 'Dining Hall') {
+      const layout = diningHallLayout();
+      if (layout) {
+        const plate = worldToScreen(layout.plateStand.x, layout.plateStand.y);
+        const serve = worldToScreen(layout.servingPoint.x, layout.servingPoint.y);
+        // Plate stand + serving bar make lunch flow readable for players.
+        fillDitherRect(plate.sx - 10, plate.sy - 8, 20, 10, '#f8f1d3', '#e9d8a6', 2);
+        ctx.fillStyle = '#495057';
+        ctx.fillRect(plate.sx - 6, plate.sy - 5, 12, 2);
+        ctx.fillStyle = '#ffffff';
+        for (let i = 0; i < 5; i += 1) ctx.fillRect(plate.sx - 6 + (i * 3), plate.sy - 3, 2, 1);
+        fillDitherRect(serve.sx - 20, serve.sy - 8, 40, 11, '#ffd6a5', '#f4a261', 3);
+        ctx.fillStyle = '#6d4c41';
+        ctx.fillRect(serve.sx - 20, serve.sy + 2, 40, 2);
+
+        // Queue lane markers help communicate where students line up.
+        for (const slot of layout.queueSlots) {
+          const q = worldToScreen(slot.x, slot.y);
+          ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+          ctx.strokeRect(q.sx - 5, q.sy - 4, 10, 8);
+        }
+
+        // Long tables + paired chairs for seated lunch behaviour.
+        for (let i = 0; i < layout.seats.length; i += 2) {
+          const a = layout.seats[i];
+          const b = layout.seats[i + 1];
+          if (!a || !b) continue;
+          const table = worldToScreen(a.tableX, a.tableY);
+          ctx.fillStyle = '#8d6e63';
+          ctx.fillRect(table.sx - 10, table.sy - 4, 20, 8);
+          ctx.fillStyle = '#6d4c41';
+          ctx.fillRect(table.sx - 9, table.sy - 3, 18, 1);
+
+          const leftChair = worldToScreen(a.x, a.y);
+          const rightChair = worldToScreen(b.x, b.y);
+          ctx.fillStyle = '#5c6b73';
+          ctx.fillRect(leftChair.sx - 3, leftChair.sy - 3, 6, 5);
+          ctx.fillRect(rightChair.sx - 3, rightChair.sy - 3, 6, 5);
+        }
       }
     }
 
@@ -6509,6 +6854,7 @@ function drawEntities() {
         textColor: '#1d3557',
         font: '8px monospace',
         tailOffsetX: 12,
+        bubblyTail: true,
       });
     }
 
@@ -7157,6 +7503,18 @@ if (filterActionsEl) {
 if (filterSpeechEl) {
   filterSpeechEl.addEventListener('change', () => {
     game.eventFilters.speech = filterSpeechEl.checked;
+    renderEventFeed();
+  });
+}
+if (filterThoughtsEl) {
+  filterThoughtsEl.addEventListener('change', () => {
+    game.eventFilters.thought = filterThoughtsEl.checked;
+    renderEventFeed();
+  });
+}
+if (filterWorldEl) {
+  filterWorldEl.addEventListener('change', () => {
+    game.eventFilters.world = filterWorldEl.checked;
     renderEventFeed();
   });
 }
