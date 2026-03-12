@@ -9649,8 +9649,12 @@ function loop(now) {
     for (const entity of game.entities) {
       if (!hasArrivedForCurrentPeriod(entity)) continue;
       const moveMagnitude = Math.abs(entity.vx) + Math.abs(entity.vy);
+      // Eric's movement is integrated with a larger dt factor (dt * 0.011) than NPCs
+      // (dt / 1000). Normalize his animation speed to world displacement so his walk
+      // cycle cadence matches pupils during auto mode and no longer looks slow-motion.
+      const animationMoveMagnitude = entity === player ? moveMagnitude * 11 : moveMagnitude;
       // Keep walk cycle readable: slightly slower leg animation while movement speed is higher.
-      entity.animPhase += dt * (0.0027 + moveMagnitude * 0.0042);
+      entity.animPhase += dt * (0.0027 + animationMoveMagnitude * 0.0042);
     }
 
     updateAI(dt);
