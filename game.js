@@ -3936,9 +3936,17 @@ function teleportEntityOutsideCurrentDoor(entity, destination) {
 function teleportEntityToTarget(entity, target, reason = 'stuck') {
   if (!target) return;
 
+  // Teleport rescue always lands on valid floor tiles so NPCs do not reappear in corners/walls.
+  const fallbackRoomName = entity.lessonRoom || entityRoom(entity);
+  const fallbackRoomCenter = fallbackRoomName ? roomCenter(fallbackRoomName) : null;
+  const safeTarget = nearestWalkablePoint(target, [
+    routeWaypoint(entity, target),
+    fallbackRoomCenter,
+  ]) || target;
+
   // Teleporting is a last-resort recovery so NPCs never remain blocked forever.
-  entity.x = target.x;
-  entity.y = target.y;
+  entity.x = safeTarget.x;
+  entity.y = safeTarget.y;
   entity.vx = 0;
   entity.vy = 0;
   entity.jamSeconds = 0;
@@ -4826,8 +4834,14 @@ function drawRoundedBubble(x, y, lines, style) {
   ctx.font = font;
   const bubbleWidth = Math.max(...lines.map((line) => ctx.measureText(line).width), 28) + (paddingX * 2);
   const bubbleHeight = (lines.length * lineHeight) + (paddingY * 2);
-  const left = Math.round(x - bubbleWidth / 2);
-  const top = Math.round(y - bubbleHeight);
+  const unclampedLeft = x - bubbleWidth / 2;
+  const unclampedTop = y - bubbleHeight;
+  // Keep social bubbles fully visible even for pupils stood at classroom edges/corners.
+  const left = Math.round(Math.max(4, Math.min(canvas.width - bubbleWidth - 4, unclampedLeft)));
+  const top = Math.round(Math.max(4, Math.min(canvas.height - bubbleHeight - 16, unclampedTop)));
+  // Tail anchor follows speaker while respecting bubble bounds after clamping.
+  const rawTailX = Math.round(left + tailOffsetX + 4);
+  const tailAnchorX = Math.max(left + 8, Math.min(left + bubbleWidth - 8, rawTailX));
 
   ctx.save();
   ctx.shadowColor = shadowColor;
@@ -4845,9 +4859,9 @@ function drawRoundedBubble(x, y, lines, style) {
   if (bubblyTail) {
     // Thought bubbles get smaller trailing circles so they read as "thinking" at a glance.
     const bubbleTrail = [
-      { x: left + tailOffsetX + 6, y: top + bubbleHeight + 4, r: 3.6 },
-      { x: left + tailOffsetX + 11, y: top + bubbleHeight + 9, r: 2.7 },
-      { x: left + tailOffsetX + 15, y: top + bubbleHeight + 13, r: 2.1 },
+      { x: tailAnchorX - 4, y: top + bubbleHeight + 4, r: 3.6 },
+      { x: tailAnchorX + 1, y: top + bubbleHeight + 9, r: 2.7 },
+      { x: tailAnchorX + 5, y: top + bubbleHeight + 13, r: 2.1 },
     ];
     ctx.fillStyle = fillColor;
     ctx.strokeStyle = strokeColor;
@@ -4861,9 +4875,9 @@ function drawRoundedBubble(x, y, lines, style) {
     ctx.fillStyle = fillColor;
     ctx.strokeStyle = strokeColor;
     ctx.beginPath();
-    ctx.moveTo(left + tailOffsetX, top + bubbleHeight);
-    ctx.lineTo(left + tailOffsetX + 8, top + bubbleHeight);
-    ctx.lineTo(left + tailOffsetX + 4, top + bubbleHeight + 8);
+    ctx.moveTo(tailAnchorX - 4, top + bubbleHeight);
+    ctx.lineTo(tailAnchorX + 4, top + bubbleHeight);
+    ctx.lineTo(tailAnchorX, top + bubbleHeight + 8);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
