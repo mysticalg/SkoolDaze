@@ -8882,6 +8882,19 @@ function drawEntities() {
     } else {
       const moving = Math.abs(entity.vx) + Math.abs(entity.vy) > 0.05;
       const seated = Boolean(entity.isSeated);
+      // Preserve last front/back orientation while idle so sprites do not flicker each frame.
+      if (entity.verticalFacing !== 'front' && entity.verticalFacing !== 'back') {
+        entity.verticalFacing = 'front';
+      }
+      if (entity.vy < -0.035) entity.verticalFacing = 'back';
+      else if (entity.vy > 0.035) entity.verticalFacing = 'front';
+
+      // Classroom-seated pupils always face the board; moving up also shows a back view.
+      const seatedFacingAway = seated
+        && isStudentCharacter(entity)
+        && entity.seatedRoom
+        && roomByName(entity.seatedRoom)?.type === 'classroom';
+      const facingBack = seatedFacingAway || entity.verticalFacing === 'back';
       // 5-frame walk cycle to replace the previous 2-pose sine swing.
       const walkFrame = moving && !seated ? Math.floor(entity.animPhase) % 5 : 2;
       const walkBobOffsets = [-1.5, -0.5, 0.75, -0.5, -1.5];
@@ -8920,6 +8933,7 @@ function drawEntities() {
       ctx.fillRect(px - Math.floor(headW / 2), py - 24 + bob - heightShift, headW, headH);
       ctx.fillStyle = hairColor;
       const hairLength = Math.max(1, appearance.hairLength || 1);
+      const backHairDrop = Math.max(0, hairLength - 1);
       ctx.fillRect(px - Math.floor(headW / 2), py - 24 + bob - heightShift, headW, 2);
       if (appearance.hairStyle === 'wild') {
         ctx.fillRect(px - Math.floor(headW / 2) - 1, py - 25 + bob - heightShift, headW + 2, 1);
@@ -8943,44 +8957,56 @@ function drawEntities() {
       ctx.fillStyle = skinTone;
       ctx.fillRect(px - Math.floor(headW / 2) - 1, py - 21 + bob - heightShift, earSize, 2);
       ctx.fillRect(px + Math.floor(headW / 2), py - 21 + bob - heightShift, earSize, 2);
-      ctx.fillStyle = '#6d4c41';
-      const noseX = appearance.noseType === 'long' ? px : px - 1;
-      const noseH = appearance.noseType === 'button' ? 1 : appearance.noseType === 'long' ? 2 : 1;
-      ctx.fillRect(noseX, py - 20 + bob - heightShift, 1, noseH);
-      // Eyes: white + iris color + black pupil pixels; blink every ~10s randomly.
-      const eyeSpread = appearance.eyeSpread || 1;
-      if (now >= (entity.nextBlinkAt || 0)) {
-        entity.blinkUntil = now + 130;
-        entity.nextBlinkAt = now + (8000 + game.rng() * 4000);
-      }
-      const isBlinking = now < (entity.blinkUntil || 0);
-      const eyeY = py - 22 + bob - heightShift + (appearance.eyeShape === 'sleepy' ? 1 : 0);
       const makeupStyle = appearance.makeupStyle || 'none';
-      if (isBlinking) {
-        ctx.fillStyle = '#2f2f2f';
-        ctx.fillRect(px - eyeSpread - 2, eyeY, 3, 1);
-        ctx.fillRect(px + eyeSpread - 1, eyeY, 3, 1);
-      } else {
-        if (isFemaleStudent && makeupStyle !== 'none') {
-          // Eyeshadow accent for female variants keeps faces distinct.
-          ctx.fillStyle = makeupStyle === 'bold' ? '#b565d9' : '#8aa0ff';
-          ctx.fillRect(px - eyeSpread - 2, eyeY - 1, 2, 1);
-          ctx.fillRect(px + eyeSpread - 1, eyeY - 1, 2, 1);
+      if (facingBack) {
+        // Back-facing frame: hide front-face features and render length-dependent rear hair.
+        ctx.fillStyle = hairColor;
+        ctx.fillRect(px - Math.floor(headW / 2), py - 22 + bob - heightShift, headW, 3);
+        if (backHairDrop > 0) {
+          const backHairWidth = Math.max(4, Math.floor(headW * 0.65));
+          ctx.fillRect(px - Math.floor(backHairWidth / 2), py - 19 + bob - heightShift, backHairWidth, backHairDrop + 1);
         }
-        // Left eye triplet.
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(px - eyeSpread - 2, eyeY, 1, 1);
-        ctx.fillStyle = appearance.eyeColor || '#1d3557';
-        ctx.fillRect(px - eyeSpread - 1, eyeY, 1, 1);
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(px - eyeSpread, eyeY, 1, 1);
-        // Right eye triplet.
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(px + eyeSpread - 1, eyeY, 1, 1);
-        ctx.fillStyle = appearance.eyeColor || '#1d3557';
-        ctx.fillRect(px + eyeSpread, eyeY, 1, 1);
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(px + eyeSpread + 1, eyeY, 1, 1);
+        ctx.fillStyle = '#5b4636';
+        ctx.fillRect(px - 2, py - 19 + bob - heightShift, 4, 1);
+      } else {
+        ctx.fillStyle = '#6d4c41';
+        const noseX = appearance.noseType === 'long' ? px : px - 1;
+        const noseH = appearance.noseType === 'button' ? 1 : appearance.noseType === 'long' ? 2 : 1;
+        ctx.fillRect(noseX, py - 20 + bob - heightShift, 1, noseH);
+        // Eyes: white + iris color + black pupil pixels; blink every ~10s randomly.
+        const eyeSpread = appearance.eyeSpread || 1;
+        if (now >= (entity.nextBlinkAt || 0)) {
+          entity.blinkUntil = now + 130;
+          entity.nextBlinkAt = now + (8000 + game.rng() * 4000);
+        }
+        const isBlinking = now < (entity.blinkUntil || 0);
+        const eyeY = py - 22 + bob - heightShift + (appearance.eyeShape === 'sleepy' ? 1 : 0);
+        if (isBlinking) {
+          ctx.fillStyle = '#2f2f2f';
+          ctx.fillRect(px - eyeSpread - 2, eyeY, 3, 1);
+          ctx.fillRect(px + eyeSpread - 1, eyeY, 3, 1);
+        } else {
+          if (isFemaleStudent && makeupStyle !== 'none') {
+            // Eyeshadow accent for female variants keeps faces distinct.
+            ctx.fillStyle = makeupStyle === 'bold' ? '#b565d9' : '#8aa0ff';
+            ctx.fillRect(px - eyeSpread - 2, eyeY - 1, 2, 1);
+            ctx.fillRect(px + eyeSpread - 1, eyeY - 1, 2, 1);
+          }
+          // Left eye triplet.
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(px - eyeSpread - 2, eyeY, 1, 1);
+          ctx.fillStyle = appearance.eyeColor || '#1d3557';
+          ctx.fillRect(px - eyeSpread - 1, eyeY, 1, 1);
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(px - eyeSpread, eyeY, 1, 1);
+          // Right eye triplet.
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(px + eyeSpread - 1, eyeY, 1, 1);
+          ctx.fillStyle = appearance.eyeColor || '#1d3557';
+          ctx.fillRect(px + eyeSpread, eyeY, 1, 1);
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(px + eyeSpread + 1, eyeY, 1, 1);
+        }
       }
       if (appearance.acne) {
         ctx.fillStyle = '#d98f8f';
@@ -8989,9 +9015,11 @@ function drawEntities() {
 
       // Mouth opens while speaking to make dialogue readable from sprites.
       const isSpeaking = Boolean(entity.speech && entity.speech.until > now);
-      ctx.fillStyle = isFemaleStudent && makeupStyle !== 'none' ? '#c93b65' : '#4a1e1e';
-      if (isSpeaking) ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 2);
-      else ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 1);
+      if (!facingBack) {
+        ctx.fillStyle = isFemaleStudent && makeupStyle !== 'none' ? '#c93b65' : '#4a1e1e';
+        if (isSpeaking) ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 2);
+        else ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 1);
+      }
 
       // School uniform base: shirt/tie first, then role/sex overlays (e.g., blazer/skirt).
       ctx.fillStyle = useUniform ? '#f8f9fa' : body;
@@ -9260,6 +9288,33 @@ function drawEntities() {
   for (const pellet of game.pellets) {
     ctx.fillStyle = pellet.kind === 'item' ? (pellet.itemColor || '#f28482') : '#f8f9fa';
     ctx.fillRect((pellet.x - CAMERA.x - 0.08) * sx, (pellet.y - CAMERA.y - 0.08) * sy, 3, 3);
+  }
+}
+
+function drawClassroomChairOverlays() {
+  const sx = canvas.width / CAMERA.w;
+  const sy = canvas.height / CAMERA.h;
+  const current = schedule[game.periodIndex];
+
+  for (const entity of game.entities) {
+    if (!hasArrivedForCurrentPeriod(entity, current)) continue;
+    if (!entity.isSeated || !entity.seatedRoom) continue;
+    if (!isStudentCharacter(entity)) continue;
+    const room = roomByName(entity.seatedRoom);
+    if (!room || room.type !== 'classroom') continue;
+
+    const seat = getSeatPosition(entity.seatedRoom, entity.seatIndex, entity);
+    if (!seat) continue;
+    // Only overlay when the student is visually above their chair to sell depth.
+    const isAboveChair = entity.y <= seat.y + 0.5;
+    if (!isAboveChair) continue;
+
+    const seatPx = Math.floor((seat.x - CAMERA.x) * sx);
+    const seatPy = Math.floor((seat.y - CAMERA.y) * sy);
+    ctx.fillStyle = '#435b7a';
+    ctx.fillRect(seatPx - 4, seatPy + 3, 8, 2);
+    ctx.fillRect(seatPx - 4, seatPy + 1, 2, 2);
+    ctx.fillRect(seatPx + 2, seatPy + 1, 2, 2);
   }
 }
 
@@ -9857,6 +9912,7 @@ function loop(now) {
 
   drawWorld();
   drawEntities();
+  drawClassroomChairOverlays();
   drawMiniMap();
   drawStatusOverlay();
   updateDayTransitionOverlay(now);
