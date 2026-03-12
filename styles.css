@@ -314,6 +314,26 @@ dialog h3 {
   vertical-align: middle;
 }
 
+/* Support callout is styled as a compact card for clear discoverability in Help. */
+.help-support {
+  margin: 0.3rem 0 0.65rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid #4a628c;
+  border-radius: 8px;
+  background: #101f35;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.help-support a {
+  color: #9dd2ff;
+  font-weight: 700;
+}
+
+.help-support a:hover {
+  color: #c8e7ff;
+}
+
 /* Prominent close control improves discoverability and touch usability. */
 .dialog-close {
   margin-top: 0.4rem;
