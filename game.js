@@ -2420,6 +2420,7 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     socialNextLlmAt: 0,
     pendingSpeech: null,
     pendingThought: null,
+    assemblyReleaseAt: 0,
     // Wrong-room excuse throttle keeps corridor chatter readable.
     lastWrongRoomExcuseAt: 0,
     // Facial animation timers keep eyes/mouth lively without expensive sprite swaps.
@@ -2985,6 +2986,7 @@ function hasArrivedForCurrentPeriod(entity, currentPeriod = schedule[game.period
 function bullyFightChance(currentPeriod) {
   // Keep mornings civil: fights are very unlikely until break starts.
   if (isStartDayPeriod(currentPeriod) || isRegistrationPeriod(currentPeriod)) return 0.0001;
+  if (isLunchtimePeriod(currentPeriod)) return 0.0011;
   if (currentPeriod.mode !== 'break') return 0.00035;
   return 0.006;
 }
@@ -3220,10 +3222,55 @@ function nearestStairTarget(entity, fromFloor, targetFloor) {
   return best;
 }
 
+function stableNameHash(text = '') {
+  return Array.from(String(text)).reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) % 1000003, 7);
+}
+
+function holdAssemblyDismissalPosition(entity) {
+  const room = entityRoom(entity);
+  if (room !== 'Assembly Hall') return null;
+  if (entity.role === 'teacher') {
+    if (entity.name === 'Mr Wacker') return assemblyHeadmasterSpot();
+    const allTeachers = teachersInRoster();
+    const lineOrder = allTeachers.filter((teacher) => teacher.name !== 'Mr Wacker');
+    const lineIndex = Math.max(0, lineOrder.findIndex((teacher) => teacher.name === entity.name));
+    return assemblyTeacherLineSpot(lineIndex, allTeachers.length);
+  }
+  return getSeatPosition('Assembly Hall', entity.seatIndex, entity) || roomCenter('Assembly Hall');
+}
+
+function lunchFieldSpotForEntity(entity) {
+  const field = roomByName('P.E. Field');
+  if (!field) return roomCenter('P.E. Field');
+
+  // Social groups naturally cluster at deterministic pockets around the field.
+  const clusterSeed = entity.socialProfile?.cliqueId
+    ? stableNameHash(entity.socialProfile.cliqueId)
+    : stableNameHash(entity.name || entity.role || 'student');
+  const band = clusterSeed % 6;
+  const col = band % 3;
+  const row = Math.floor(band / 3);
+  const jitterX = ((clusterSeed % 9) - 4) * 0.22;
+  const jitterY = (((Math.floor(clusterSeed / 10)) % 9) - 4) * 0.18;
+  return {
+    x: field.x + 8 + (col * 19) + jitterX,
+    y: field.y + 6 + (row * 11) + jitterY,
+  };
+}
+
+function shouldAvoidLunchFight(entity) {
+  if (!entity || !isStudentCharacter(entity)) return true;
+  if (entity.role === 'bully') return false;
+  if (entity.role === 'swot' || entity.role === 'hero') return true;
+  const calmScore = ((entity.traits?.friendly || 50) + (entity.traits?.honor || 50) + (entity.traits?.discipline || 50)) / 3;
+  return calmScore >= 52;
+}
+
 function chooseAutoDestination() {
   // Toilets become top priority when bladder is urgent.
   if (game.bladder >= 75 && !game.toiletsBlocked) return roomCenter('Toilets');
   const current = schedule[game.periodIndex];
+  if (performance.now() < (player.assemblyReleaseAt || 0)) return holdAssemblyDismissalPosition(player) || roomCenter('Assembly Hall');
   if (current.mode === 'lesson') {
     // Auto Eric prefers his assigned desk; if blocked, wait beside it for player action.
     const reservedSeat = getSeatPosition(current.room, player.seatIndex) || roomCenter(current.room);
@@ -4767,6 +4814,7 @@ function recoverPlayerIfWallStuck(dt) {
 }
 
 function setPeriod(index) {
+  const previous = schedule[game.periodIndex];
   game.periodIndex = index % schedule.length;
   game.periodElapsed = 0;
   game.periodHoldMinutes = 0;
@@ -4774,16 +4822,43 @@ function setPeriod(index) {
   game.ericSeatBlockedWarned = false;
   game.ericSeatDecisionPrompted = false;
   const current = schedule[game.periodIndex];
+  const orderlyAssemblyDismissal = isAssemblyPeriod(previous) && !isAssemblyPeriod(current);
   // Bell changes stand everyone up and clears stale routes between periods.
   player.isSeated = false;
   player.seatedRoom = null;
+  const nowBell = performance.now();
+  const studentsDismissOrder = game.entities
+    .filter((entity) => entity !== player && isStudentCharacter(entity))
+    .sort((a, b) => (a.seatIndex || 0) - (b.seatIndex || 0));
+  const teachersDismissOrder = game.entities
+    .filter((entity) => entity.role === 'teacher')
+    .sort((a, b) => (a.name === 'Mr Wacker' ? 1 : 0) - (b.name === 'Mr Wacker' ? 1 : 0));
+
   for (const entity of game.entities) {
     if (entity === player) continue;
     entity.target = null;
     entity.isSeated = false;
     entity.seatedRoom = null;
-    // Bell release: students instantly stand and transition toward the next room.
-    entity.bellRushUntil = performance.now() + 4200;
+    const studentIndex = studentsDismissOrder.findIndex((student) => student === entity);
+    const teacherIndex = teachersDismissOrder.findIndex((teacher) => teacher === entity);
+    if (orderlyAssemblyDismissal && studentIndex >= 0) {
+      entity.assemblyReleaseAt = nowBell + (studentIndex * 520);
+      entity.bellRushUntil = 0;
+    } else if (orderlyAssemblyDismissal && teacherIndex >= 0) {
+      entity.assemblyReleaseAt = nowBell + ((studentsDismissOrder.length + teacherIndex) * 620);
+      entity.bellRushUntil = 0;
+    } else {
+      entity.assemblyReleaseAt = 0;
+      // Bell release: students instantly stand and transition toward the next room.
+      entity.bellRushUntil = nowBell + 4200;
+    }
+  }
+
+  if (orderlyAssemblyDismissal && game.autoMode) {
+    const ericStudentOrder = Math.floor(studentsDismissOrder.length * 0.25);
+    player.assemblyReleaseAt = nowBell + (ericStudentOrder * 520);
+  } else {
+    player.assemblyReleaseAt = 0;
   }
   if (isRegistrationPeriod(current)) game.registrationTaken = false;
 
@@ -4804,6 +4879,9 @@ function setPeriod(index) {
 
   game.bellRingingUntil = performance.now() + 3000;
   announce(`🔔 Bell! ${current.period} in ${current.room}`, { feedType: 'world' });
+  if (orderlyAssemblyDismissal) {
+    announce('🚶 Assembly dismissed in order: students first, then teachers.', { force: true, feedType: 'world' });
+  }
   if (current.period === 'Lunch Break') {
     announce('🍽️ Lunch service is open in the dining hall for 30 minutes.', { feedType: 'world' });
     for (const entity of game.entities) {
@@ -5914,6 +5992,7 @@ function syncComputerStations() {
 }
 
 function chooseTarget(entity, currentPeriod) {
+  if (performance.now() < (entity.assemblyReleaseAt || 0)) return holdAssemblyDismissalPosition(entity);
   // Janitor idles in his room unless there is a cleanup callout.
   if (entity.role === 'janitor') {
     if (game.janitorTask) return { x: game.janitorTask.x, y: game.janitorTask.y };
@@ -6402,7 +6481,7 @@ function updateAI(dt) {
           if (now >= (entity.lunchEatUntil || 0)) {
             entity.lunchState = 'done';
             entity.hasLunchPlate = false;
-            entity.target = roomCenter('P.E. Field');
+            entity.target = lunchFieldSpotForEntity(entity);
           }
         }
       }
@@ -6487,7 +6566,11 @@ function updateAI(dt) {
         : roomCenter('Staff Room');
     } else if (!entity.target || game.rng() < 0.01) {
       entity.lessonRoom = null;
-      entity.target = chooseTarget(entity, current);
+      if (isLunchtimePeriod(current) && isStudent && entity.lunchState === 'done') {
+        entity.target = lunchFieldSpotForEntity(entity);
+      } else {
+        entity.target = chooseTarget(entity, current);
+      }
     }
 
     // General student misbehaviour: keep rare and mostly outside lessons.
@@ -6666,8 +6749,11 @@ function updateAI(dt) {
 
     // Bully behaviour is period-aware so mornings stay mostly calm.
     if (entity.role === 'bully') {
+      const inLunchField = isLunchtimePeriod(current) && entityRoom(entity) === 'P.E. Field';
       const supervisionSuppression = dinnerLadyWatchingField && entityRoom(entity) === 'Dining Hall' ? 0.22 : 1;
-      if (game.rng() < bullyFightChance(current) * supervisionSuppression) {
+      const fieldDeescalation = inLunchField ? 0.35 : 1;
+      const canStartFight = !shouldAvoidLunchFight(entity);
+      if (canStartFight && game.rng() < bullyFightChance(current) * supervisionSuppression * fieldDeescalation) {
         meleeAttack(entity);
       }
     }
