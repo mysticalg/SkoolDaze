@@ -3629,11 +3629,10 @@ function entityFloor(entity) {
 function updateFloorStatus() {
   if (!floorStatusEl) return;
   const meta = floorMeta[entityFloor(player)] || floorMeta.ground;
-  const toiletState = game.toiletsBlocked ? '⛔ Blocked/Flooded' : '✅ Open';
-  floorStatusEl.textContent = `🧭 Floor: ${meta.label} (${meta.color}) | 🚽 Dirt: ${Math.round(game.toiletDirt)}% | ${toiletState}`;
+  floorStatusEl.textContent = `🧭 Floor: ${meta.label} (${meta.color})`;
   floorStatusEl.title = game.toiletsBlocked
-    ? 'Toilets are currently blocked and flooded while Mr Mop cleans.'
-    : 'Toilets get dirtier as people use them. Mr Mop cleans them when they are grubby.';
+    ? `Current floor: ${meta.label}. Toilets blocked/flooded while Mr Mop cleans.`
+    : `Current floor: ${meta.label}. Toilet dirt: ${Math.round(game.toiletDirt)}%.`;
 }
 
 function updateAutoStatus() {
@@ -5019,7 +5018,9 @@ function renderEventFeed() {
     .filter((entry) => game.eventFilters[entry.type] !== false)
     .slice(0, 14);
   eventsEl.innerHTML = visible
-    .map((entry) => `<div class="event-line ${entry.type}">[${entry.time}] ${entry.message}</div>`)
+    .map((entry) => (
+      `<div class="event-line ${entry.type}"><span class="event-time">[${entry.time}]</span> <span class="event-msg">${entry.message}</span></div>`
+    ))
     .join('');
 }
 

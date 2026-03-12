@@ -383,6 +383,11 @@ canvas {
 .event-line.action { color: #f7f7f7; }
 .event-line.thought { color: #c9e8ff; }
 .event-line.world { color: #ffe8a6; }
+.event-line .event-time {
+  /* Keep timestamps readable but quieter than event text. */
+  color: #d6deea;
+}
+
 
 
 .llm-debug-log {
