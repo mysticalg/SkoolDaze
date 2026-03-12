@@ -34,6 +34,11 @@ const interactionTitleEl = document.getElementById('interactionTitle');
 const interactionMetaEl = document.getElementById('interactionMeta');
 const interactionOptionsEl = document.getElementById('interactionOptions');
 const closeInteractionPanelBtn = document.getElementById('closeInteractionPanel');
+const classQuestionPanelEl = document.getElementById('classQuestionPanel');
+const classQuestionTitleEl = document.getElementById('classQuestionTitle');
+const classQuestionCountdownEl = document.getElementById('classQuestionCountdown');
+const classQuestionPromptEl = document.getElementById('classQuestionPrompt');
+const classQuestionChoicesEl = document.getElementById('classQuestionChoices');
 const filterActionsEl = document.getElementById('filterActions');
 const filterSpeechEl = document.getElementById('filterSpeech');
 const startOverlayEl = document.getElementById('startOverlay');
@@ -228,6 +233,84 @@ const BOARD_DRAW = {
   maxLines: 4,
   maxCharsPerLine: 22,
 };
+
+// Rich subject question bank gives each lesson many possible prompts.
+const SUBJECT_QUESTION_SEEDS = {
+  Maths: [
+    { prompt: 'What is {a} + {b}?', answer: ({ a, b }) => String(a + b), wrong: ({ a, b }) => [String(a + b + 1), String(a + b - 1), String(a + b + 2)] },
+    { prompt: 'What is {a} × {b}?', answer: ({ a, b }) => String(a * b), wrong: ({ a, b }) => [String((a * b) + a), String((a * b) - b), String((a * b) + 2)] },
+    { prompt: 'What is {a} - {b}?', answer: ({ a, b }) => String(a - b), wrong: ({ a, b }) => [String(a + b), String((a - b) + 2), String((a - b) - 2)] },
+  ],
+  English: [
+    { prompt: 'Which word is a noun: {noun}, quickly, or beautifully?', answer: ({ a }) => a, wrong: () => ['quickly', 'beautifully', 'running'] },
+    { prompt: 'Pick the adjective: red, sprint, or calmly?', answer: () => 'red', wrong: () => ['sprint', 'calmly', 'ignore'] },
+    { prompt: 'Which punctuation ends a question?', answer: () => '?', wrong: () => ['.', ',', '!'] },
+  ],
+  Science: [
+    { prompt: 'Water freezes at what °C?', answer: () => '0', wrong: () => ['10', '-10', '100'] },
+    { prompt: 'Which gas do plants absorb?', answer: () => 'carbon dioxide', wrong: () => ['oxygen', 'helium', 'nitrogen'] },
+    { prompt: 'Which planet is known as the red planet?', answer: () => 'mars', wrong: () => ['venus', 'jupiter', 'mercury'] },
+  ],
+  History: [
+    { prompt: 'Which came first: Bronze Age or Iron Age?', answer: () => 'bronze age', wrong: () => ['iron age', 'stone age', 'roman age'] },
+    { prompt: 'A decade is how many years?', answer: () => '10', wrong: () => ['5', '12', '20'] },
+    { prompt: 'Who built Roman roads in Britain?', answer: () => 'romans', wrong: () => ['vikings', 'normans', 'tudors'] },
+  ],
+  Geography: [
+    { prompt: 'What is the largest ocean?', answer: () => 'pacific', wrong: () => ['atlantic', 'indian', 'arctic'] },
+    { prompt: 'A map uses which direction at the top?', answer: () => 'north', wrong: () => ['south', 'east', 'west'] },
+    { prompt: 'Which is a continent: Sahara or Europe?', answer: () => 'europe', wrong: () => ['sahara', 'amazon', 'nile'] },
+  ],
+  Computing: [
+    { prompt: 'Binary uses which two digits?', answer: () => '0 and 1', wrong: () => ['1 and 2', '2 and 3', '0 and 2'] },
+    { prompt: 'CPU stands for?', answer: () => 'central processing unit', wrong: () => ['computer power utility', 'core program unit', 'central program utility'] },
+    { prompt: 'Which is an input device: keyboard or monitor?', answer: () => 'keyboard', wrong: () => ['monitor', 'speaker', 'projector'] },
+  ],
+};
+
+const SUBJECT_WORD_BANK = {
+  nouns: ['book', 'school', 'planet', 'teacher', 'science', 'library', 'computer', 'volcano', 'history', 'river'],
+};
+
+function roomSubjectName(roomName = '') {
+  if (roomName === 'Maths') return 'Maths';
+  if (roomName === 'English') return 'English';
+  if (roomName === 'Science Lab' || roomName === 'Physics Lab' || roomName === 'Chem Prep') return 'Science';
+  if (roomName === 'History') return 'History';
+  if (roomName === 'Geography') return 'Geography';
+  if (roomName === 'Computer Room') return 'Computing';
+  return 'General';
+}
+
+// Build hundreds of unique class questions from subject templates each day.
+function buildSubjectQuestionBank() {
+  const bank = {};
+  const nounWords = SUBJECT_WORD_BANK.nouns;
+  const allSubjects = ['Maths', 'English', 'Science', 'History', 'Geography', 'Computing', 'General'];
+  for (const subject of allSubjects) {
+    const templates = SUBJECT_QUESTION_SEEDS[subject] || SUBJECT_QUESTION_SEEDS.Maths;
+    bank[subject] = [];
+    for (let i = 0; i < 180; i += 1) {
+      const a = 2 + (i % 11);
+      const b = 1 + ((i * 3) % 10);
+      const noun = nounWords[i % nounWords.length];
+      const template = templates[i % templates.length];
+      const vars = { a, b, noun };
+      const correct = String(template.answer(vars)).toLowerCase();
+      const distractors = Array.from(new Set((template.wrong(vars) || []).map((choice) => String(choice).toLowerCase()).filter((choice) => choice !== correct))).slice(0, 3);
+      while (distractors.length < 3) distractors.push(`${correct} ${distractors.length + 1}`);
+      const choices = [correct, ...distractors].sort(() => Math.random() - 0.5);
+      bank[subject].push({
+        q: template.prompt.replaceAll('{a}', String(a)).replaceAll('{b}', String(b)).replaceAll('{noun}', noun),
+        answer: correct,
+        choices,
+      });
+    }
+  }
+  return bank;
+}
+
+const SUBJECT_QUESTION_BANK = buildSubjectQuestionBank();
 
 const shields = [
   { x: 13, y: 6, letter: 'D', found: false },
@@ -974,6 +1057,7 @@ const game = {
   eventFilters: { action: true, speech: true },
   rng: Math.random,
   quizActive: null,
+  lastClassQuestionAt: 0,
   lastLateTick: 0,
   autoMode: false,
   idleMs: 0,
@@ -2876,6 +2960,183 @@ function setBoardText(board, text) {
   board.lastSfxAt = 0;
 }
 
+
+function normalizeAnswerText(text) {
+  return String(text || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function randomFunnyWrongAnswer() {
+  const funny = [
+    'my dog ate the textbook',
+    'definitely cheese',
+    'i blame gravity',
+    'banana squared',
+    'the answer is vibes',
+    '42-ish maybe?',
+    'ask the janitor',
+  ];
+  return funny[Math.floor(game.rng() * funny.length)];
+}
+
+function pickClassQuestion(roomName) {
+  const subject = roomSubjectName(roomName);
+  const bank = SUBJECT_QUESTION_BANK[subject] || SUBJECT_QUESTION_BANK.General || SUBJECT_QUESTION_BANK.Maths;
+  const idx = Math.floor(game.rng() * bank.length);
+  const base = bank[idx] || { q: 'What is 6 × 7?', answer: '42', choices: ['42', '36', '48', '54'] };
+  const choices = [...(base.choices || [])].slice(0, 4);
+  while (choices.length < 4) choices.push(randomFunnyWrongAnswer());
+  const shuffled = choices.sort(() => game.rng() - 0.5);
+  return {
+    ...base,
+    q: String(base.q || '').trim(),
+    answer: normalizeAnswerText(base.answer),
+    choices: shuffled.map((choice) => String(choice)),
+    subject,
+    roomName,
+  };
+}
+
+function clearClassQuestionUi() {
+  if (classQuestionPanelEl) classQuestionPanelEl.hidden = true;
+  if (classQuestionChoicesEl) classQuestionChoicesEl.innerHTML = '';
+}
+
+function teacherFeedbackLine(teacher, student, correct) {
+  const studentName = student?.name || 'Student';
+  if (correct) {
+    const praise = [
+      `Excellent work, ${studentName}.`,
+      `${studentName}, that is spot on.`,
+      `Brilliant answer, ${studentName}.`,
+      `${studentName}, keep that focus — correct.`,
+    ];
+    return `✅ ${teacher.name}: "${praise[Math.floor(game.rng() * praise.length)]}"`;
+  }
+  const corrections = [
+    `${studentName}, not this time — read the board carefully.`,
+    `${studentName}, close, but that is incorrect.`,
+    `${studentName}, brave attempt. Let us fix that together.`,
+    `${studentName}, wrong answer. Try the key idea first.`,
+  ];
+  return `❌ ${teacher.name}: "${corrections[Math.floor(game.rng() * corrections.length)]}"`;
+}
+
+function resolveClassQuestionAttempt(quiz, student, attemptText, forcedCorrect = false) {
+  if (!quiz || quiz.resolved) return;
+  const normalized = normalizeAnswerText(attemptText);
+  const isCorrect = forcedCorrect || normalized === quiz.answer;
+  quiz.resolved = true;
+  quiz.resolvedBy = student.name;
+  quiz.resolvedCorrect = isCorrect;
+  quiz.answerText = normalized;
+
+  say(student, normalized || randomFunnyWrongAnswer(), { durationMs: 3000, force: true });
+  announce(`📣 ${student.name} answers: "${normalized || '...'}"`, { source: student, range: 9, force: true });
+  announce(teacherFeedbackLine(quiz.teacher, student, isCorrect), { source: quiz.teacher, range: 9, force: true });
+  if (!isCorrect) addLines(10, `${student.name} gave a wrong class answer`);
+
+  if (student === player) {
+    game.charisma = Math.max(0, Math.min(100, game.charisma + (isCorrect ? 2 : -1)));
+    updateCharismaHud();
+  }
+
+  clearClassQuestionUi();
+  setTimeout(() => {
+    if (game.quizActive === quiz) game.quizActive = null;
+  }, 350);
+}
+
+function showClassQuestionUi(quiz) {
+  if (!classQuestionPanelEl || !classQuestionChoicesEl || !classQuestionPromptEl || !classQuestionCountdownEl || !classQuestionTitleEl) return;
+  classQuestionTitleEl.textContent = `🧑‍🏫 ${quiz.teacher.name} asks (${quiz.subject})`;
+  classQuestionPromptEl.textContent = quiz.q;
+  classQuestionChoicesEl.innerHTML = '';
+
+  quiz.choices.forEach((choice, idx) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'class-question-choice';
+    btn.title = `Answer option ${idx + 1}`;
+    btn.textContent = `${String.fromCharCode(65 + idx)}. ${choice}`;
+    btn.onclick = () => {
+      if (quiz.resolved) return;
+      resolveClassQuestionAttempt(quiz, player, choice);
+    };
+    classQuestionChoicesEl.appendChild(btn);
+  });
+
+  classQuestionPanelEl.hidden = false;
+  positionClassQuestionPanel(quiz.roomName || schedule[game.periodIndex]?.room);
+}
+
+function updateClassQuestionSystem(now = performance.now()) {
+  const quiz = game.quizActive;
+  if (!quiz) {
+    clearClassQuestionUi();
+    return;
+  }
+  if (quiz.resolved) return;
+
+  const msLeft = Math.max(0, Math.ceil((quiz.playerWindowUntil - now) / 1000));
+  if (classQuestionCountdownEl) classQuestionCountdownEl.textContent = msLeft > 0 ? `⏳ ${msLeft}s for Eric` : '⏳ Class can jump in';
+
+  if (now <= quiz.playerWindowUntil) return;
+  if (now < (quiz.nextNpcAttemptAt || 0)) return;
+
+  const current = schedule[game.periodIndex];
+  const students = game.entities.filter((entity) => entity !== player && isStudentCharacter(entity) && entityRoom(entity) === current.room && entity.knockedUntil < now);
+  if (!students.length) return;
+
+  const swots = students.filter((entity) => entity.role === 'swot');
+  const instantSwotChance = swots.length && game.rng() < 0.34;
+  const responder = instantSwotChance
+    ? swots[Math.floor(game.rng() * swots.length)]
+    : students[Math.floor(game.rng() * students.length)];
+
+  let spokenAnswer = randomFunnyWrongAnswer();
+  let correct = false;
+  if (responder.role === 'swot' && game.rng() < 0.72) {
+    spokenAnswer = quiz.answer;
+    correct = true;
+  } else if (responder.role === 'hero' && game.rng() < 0.35) {
+    spokenAnswer = quiz.answer;
+    correct = true;
+  } else if (game.rng() < 0.2) {
+    spokenAnswer = quiz.choices[Math.floor(game.rng() * quiz.choices.length)] || randomFunnyWrongAnswer();
+    correct = normalizeAnswerText(spokenAnswer) === quiz.answer;
+  }
+
+  resolveClassQuestionAttempt(quiz, responder, spokenAnswer, correct);
+}
+function maybeStartClassQuestion(current, now) {
+  if (!isSupervisedPeriod(current)) return;
+  if (game.quizActive) return;
+  if (now - (game.lastClassQuestionAt || 0) < 28000) return;
+  const teacher = assignedTeacherEntityForPeriod(current);
+  if (!teacher || entityRoom(teacher) !== current.room || teacher.knockedUntil > now) return;
+  if (!isAssignedTeacherSeatedForPeriod(current) && game.rng() < 0.5) return;
+  if (game.rng() > 0.0028 + (game.lessonNoiseLevel * 0.0015)) return;
+
+  const quiz = pickClassQuestion(current.room);
+  const board = blackboards.find((entry) => entry.room === current.room);
+  if (board) setBoardText(board, quiz.q);
+
+  game.quizActive = {
+    ...quiz,
+    teacher,
+    askedAt: now,
+    playerWindowUntil: now + 5600,
+    nextNpcAttemptAt: now + 5600 + (game.rng() * 1200),
+    resolved: false,
+    roomName: current.room,
+  };
+  game.lastClassQuestionAt = now;
+  showClassQuestionUi(game.quizActive);
+  announce(`🧑‍🏫 ${teacher.name}: "${quiz.subject} question for Eric first."`, { source: teacher, range: 9, force: true });
+}
+
+
+
 function boardLinesForText(text) {
   const words = String(text || '').toUpperCase().split(/\s+/).filter(Boolean);
   const lines = [];
@@ -3850,37 +4111,10 @@ function interact() {
     }
   }
 
-  // Interactive teacher quiz in class for extra detail.
-  const teacherNearby = game.entities.find((e) => e.role === 'teacher' && distance(e, player) < 1.7);
-  const current = schedule[game.periodIndex];
-  const now = performance.now();
-  if (
-    teacherNearby
-    && entityRoom(player) === current.room
-    && isAssignedTeacherSeatedForPeriod(current)
-    && !game.quizActive
-    // Slower questioning cadence so lessons feel less spammy.
-    && now - teacherNearby.lastQuizAt > 90000
-    && game.rng() < 0.45
-  ) {
-    const quiz = { q: 'What is 6 x 7?', answer: '42' };
-    game.quizActive = quiz;
-    teacherNearby.lastQuizAt = now;
-    const board = blackboards.find((b) => b.room === current.room);
-    if (board) {
-      teacherNearby.target = { x: board.x - 1.2, y: board.y + 1.3 };
-      teacherNearby.writingUntil = performance.now() + 1500;
-      setBoardText(board, quiz.q);
-    }
-    say(teacherNearby, 'Right class, question time.');
-    const response = prompt(`${teacherNearby.name} asks: ${quiz.q}`);
-    if ((response || '').trim() === quiz.answer) {
-      announce(`✅ Correct answer. ${teacherNearby.name} nods approvingly.`, { source: teacherNearby, range: 7 });
-    } else {
-      addLines(30, 'wrong answer in lesson');
-      announce(`❌ Wrong answer. ${teacherNearby.name}: "Concentrate!"`, { source: teacherNearby, range: 7 });
-    }
-    game.quizActive = null;
+  // Eric now answers class questions from the on-screen panel near the board.
+  if (game.quizActive && !game.quizActive.resolved && entityRoom(player) === schedule[game.periodIndex].room) {
+    showClassQuestionUi(game.quizActive);
+    announce('📝 Question panel opened — choose A, B, C, or D.');
   }
 }
 
@@ -4415,6 +4649,9 @@ function updateAI(dt) {
     game.lessonNoiseLevel = Math.min(1, game.lessonNoiseLevel + dt * 0.0005);
   }
 
+  maybeStartClassQuestion(current, now);
+  updateClassQuestionSystem(now);
+
   for (const entity of game.entities) {
     if (entity === player) continue;
     if (!hasArrivedForCurrentPeriod(entity, current)) {
@@ -4529,8 +4766,14 @@ function updateAI(dt) {
       if (game.rng() < (0.45 + (iqFactor * 0.28) + (witFactor * 0.12))) {
         ensureDialogueSetup(entity);
         const responseLine = contextualResponseFor(entity, assignedTeacherEntityForPeriod(current));
-        say(entity, responseLine);
-        announce(`📚 ${entity.name} attempted the class question.`, { source: entity, range: 7.5 });
+        const spokenAttempt = game.quizActive && !game.quizActive.resolved
+          ? (entity.role === 'swot' && game.rng() < 0.75 ? game.quizActive.answer : randomFunnyWrongAnswer())
+          : responseLine;
+        say(entity, spokenAttempt);
+        announce(`📚 ${entity.name} calls out: "${spokenAttempt}"`, { source: entity, range: 7.5 });
+        if (game.quizActive && !game.quizActive.resolved && now > game.quizActive.playerWindowUntil && game.rng() < (entity.role === 'swot' ? 0.38 : 0.07)) {
+          resolveClassQuestionAttempt(game.quizActive, entity, spokenAttempt, entity.role === 'swot' && normalizeAnswerText(spokenAttempt) === game.quizActive.answer);
+        }
         entity.emotion = Math.min(100, entity.emotion + 1.2);
       } else {
         ensureDialogueSetup(entity);
@@ -6298,6 +6541,24 @@ function positionTooltip(pointer, topOffset = 118, maxWidth = 260) {
   const top = Math.max(8, pointer.wrapY - topOffset);
   entityTooltipEl.style.left = `${left}px`;
   entityTooltipEl.style.top = `${top}px`;
+}
+
+
+function positionClassQuestionPanel(roomName) {
+  if (!classQuestionPanelEl) return;
+  const board = blackboards.find((entry) => entry.room === roomName);
+  if (!board) {
+    classQuestionPanelEl.style.left = '';
+    classQuestionPanelEl.style.right = '0.8rem';
+    return;
+  }
+  const boardPos = worldToScreen(board.x, board.y);
+  const wrap = canvas.parentElement.getBoundingClientRect();
+  const panelWidth = 340;
+  const preferredLeft = Math.min(Math.max(8, (boardPos.sx / canvas.width) * wrap.width + 22), wrap.width - panelWidth - 8);
+  classQuestionPanelEl.style.left = `${preferredLeft}px`;
+  classQuestionPanelEl.style.right = 'auto';
+  classQuestionPanelEl.style.top = '0.8rem';
 }
 
 function tooltipBar(value, color) {
