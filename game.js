@@ -5288,6 +5288,23 @@ function updateAI(dt) {
     const wasSeated = entity.isSeated && entity.seatedRoom === expectedRoom;
     // Add a small hysteresis window: sitting is easy to maintain, harder to flip off.
     entity.isSeated = seatedTarget && (len < 0.4 || (wasSeated && len < 0.85));
+
+    // Assembly-specific settle pass: lock teachers at their final standing/seated marker
+    // to stop micro path corrections that look like hopping on the spot.
+    if (inLesson && isAssemblyPeriod(current) && entity.role === 'teacher' && entityRoom(entity) === 'Assembly Hall') {
+      const roster = teachersInRoster();
+      const index = Math.max(0, roster.filter((teacher) => teacher.name !== 'Mr Wacker').findIndex((teacher) => teacher.name === entity.name));
+      const settleSpot = entity.name === 'Mr Wacker'
+        ? assemblyHeadmasterSpot()
+        : assemblyTeacherLineSpot(index, roster.length);
+      if (distance(entity, settleSpot) < 0.9) {
+        entity.x = settleSpot.x;
+        entity.y = settleSpot.y;
+        entity.target = settleSpot;
+        entity.isSeated = true;
+      }
+    }
+
     // Keep lessons visually correct: students sit once they are at their desk tile.
     if (seatedTarget && entity.role !== 'teacher') {
       const seatTarget = getSeatPosition(expectedRoom, entity.seatIndex, entity) || entity.target;
