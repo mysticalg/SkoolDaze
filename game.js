@@ -50,6 +50,10 @@ const filterThoughtsEl = document.getElementById('filterThoughts');
 const filterWorldEl = document.getElementById('filterWorld');
 const startOverlayEl = document.getElementById('startOverlay');
 const startGameBtn = document.getElementById('startGameBtn');
+const startupLoadingEl = document.getElementById('startupLoading');
+const startupLoadingLabelEl = document.getElementById('startupLoadingLabel');
+const startupLoadingPctEl = document.getElementById('startupLoadingPct');
+const startupLoadingBarEl = document.getElementById('startupLoadingBar');
 const openSplashSettingsBtn = document.getElementById('openSplashSettings');
 const splashSettingsDialog = document.getElementById('splashSettingsDialog');
 const closeSplashSettingsBtn = document.getElementById('closeSplashSettings');
@@ -1353,14 +1357,14 @@ function resolveLlmSocialDirective(actor, peer, fallbackIntent = 'ally') {
   if (!llmModeEnabled()) return null;
   const now = performance.now();
   if (now < (actor.socialNextLlmAt || 0)) return null;
-  const cached = game.llm.cache.get(key);
+  const cached = game.llm.responseBuffer.get(key);
   if (!cached) {
     actor.socialNextLlmAt = now + 6000 + (Math.random() * 2500);
     queueLlmText(payload);
     return null;
   }
   // Consume once so social directives stay dynamic rather than replaying old responses.
-  game.llm.cache.delete(key);
+  game.llm.responseBuffer.delete(key);
   try {
     const parsed = parseJsonFromLlm(cached);
     const allowed = new Set(['ally', 'tease', 'avoid', 'follow', 'defend']);
@@ -2054,7 +2058,7 @@ async function generateLocalOllamaText(payload) {
   }
   const data = await response.json();
   const output = sanitizeLlmLine(data?.response);
-  pushLlmDebug(`✅ Local response [${payload.channel}] ${llmActorLabel(payload)} (cached, shown when used): ${summarizeForLlmDebug(output)}`);
+  pushLlmDebug(`✅ Local response [${payload.channel}] ${llmActorLabel(payload)} (queued for next delivery tick): ${summarizeForLlmDebug(output)}`);
   return output;
 }
 
@@ -2089,7 +2093,7 @@ async function generateRemoteProviderText(payload) {
   const data = await response.json();
   const text = data?.choices?.[0]?.message?.content;
   const output = sanitizeLlmLine(text);
-  pushLlmDebug(`✅ Remote response [${payload.channel}] ${llmActorLabel(payload)} (cached, shown when used): ${summarizeForLlmDebug(output)}`);
+  pushLlmDebug(`✅ Remote response [${payload.channel}] ${llmActorLabel(payload)} (queued for next delivery tick): ${summarizeForLlmDebug(output)}`);
   return output;
 }
 
@@ -2151,8 +2155,8 @@ function queueLlmText(payload, options = {}) {
   game.llm.lastRequestQueuedAt = now;
   generateLlmText(payload).then((result) => {
     if (result?.text) {
-      game.llm.cache.set(key, result.text);
-      pushLlmDebug(`💾 Cached [${payload.channel}] ${llmActorLabel(payload)} key=${summarizeForLlmDebug(key, 64)}`);
+      game.llm.responseBuffer.set(key, result.text);
+      pushLlmDebug(`📥 Response ready [${payload.channel}] ${llmActorLabel(payload)} key=${summarizeForLlmDebug(key, 64)}`);
     } else if (result?.reason === 'timeout') {
       // Timeout already logged with channel-specific detail; avoid duplicate spam lines.
     } else if (result?.reason !== 'disabled') {
@@ -2208,13 +2212,13 @@ function resolveLlmDailyHymn() {
     fallback: `verse:${fallback.verse} chorus:${fallback.chorus}`,
   };
   const key = llmCacheKey(payload);
-  const cached = game.llm.cache.get(key);
+  const cached = game.llm.responseBuffer.get(key);
   if (!cached) {
     queueLlmText(payload);
     return fallback;
   }
   // Consume once so next assembly day requests a fresh hymn draft.
-  game.llm.cache.delete(key);
+  game.llm.responseBuffer.delete(key);
   const parsed = parseJsonFromLlm(cached);
   if (!parsed) return fallback;
   return {
@@ -2278,10 +2282,10 @@ function resolveLlmText(payload, options = {}) {
   const suppressMissLog = Boolean(options.suppressMissLog);
   if (!llmModeEnabled()) return fallback;
   const key = llmCacheKey(payload);
-  if (game.llm.cache.has(key)) {
-    const fresh = game.llm.cache.get(key);
+  if (game.llm.responseBuffer.has(key)) {
+    const fresh = game.llm.responseBuffer.get(key);
     // LLM results are one-shot: consume once so future lines always fetch fresh text.
-    game.llm.cache.delete(key);
+    game.llm.responseBuffer.delete(key);
     pushLlmDebug(`🟢 Fresh LLM line ready [${payload.channel}] ${llmActorLabel(payload)}.`);
     return fresh;
   }
@@ -2302,13 +2306,13 @@ function resolveLlmQuizQuestion(fallbackQuiz) {
     fallback: fallbackQuiz.q,
   };
   const key = llmCacheKey(payload);
-  const cached = game.llm.cache.get(key);
+  const cached = game.llm.responseBuffer.get(key);
   if (!cached) {
     queueLlmText(payload);
     return fallbackQuiz;
   }
   // Consume once so each classroom prompt can request a new variant.
-  game.llm.cache.delete(key);
+  game.llm.responseBuffer.delete(key);
   try {
     const parsed = parseJsonFromLlm(cached);
     if (!parsed) return fallbackQuiz;
@@ -2347,7 +2351,7 @@ function primeLlmSessionContext() {
   game.llm.sessionPrimedForProvider = llmProviderLabel();
 }
 
-function warmupLlmCache() {
+function warmupLlmResponses() {
   if (!llmModeEnabled()) return;
   primeLlmSessionContext();
   const sampleEntities = game.entities
@@ -2377,11 +2381,18 @@ function warmupLlmCache() {
 }
 
 
-async function requestLlmJson(payload) {
+async function requestLlmJson(payload, options = {}) {
   if (!llmModeEnabled()) return null;
-  const result = await generateLlmText(payload);
-  if (!result?.text) return null;
-  return parseJsonFromLlm(result.text);
+  const maxAttempts = Math.max(1, Number(options.maxAttempts) || 1);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = await generateLlmText(payload);
+    if (!result?.text) continue;
+    const parsed = parseJsonFromLlm(result.text);
+    if (parsed) return parsed;
+    // Startup world preload expects strict JSON; retry a few times before deterministic fallback.
+    pushLlmDebug(`⚠️ Invalid JSON from LLM [${payload.channel}] attempt ${attempt}/${maxAttempts}; retrying.`, 'warn');
+  }
+  return null;
 }
 
 function applyLlmWorldPreloadConfig(config = {}) {
@@ -2533,7 +2544,7 @@ async function preloadLlmWorldSetup() {
   pushLlmDebug(game.llm.npcNames
     ? '🧩 Requesting LLM world preload for traits, roles, inventory, relationships, and NPC naming.'
     : '🧩 Requesting LLM world preload for traits, roles, inventory and relationships.');
-  const parsed = await requestLlmJson(payload);
+  const parsed = await requestLlmJson(payload, { maxAttempts: 3 });
   if (parsed) {
     applyLlmWorldPreloadConfig(parsed);
     // Name changes affect locker assignments and class rosters, so regenerate these maps.
@@ -2586,7 +2597,8 @@ const game = {
     noFallback: false,
     npcNames: true,
     prePrompt: '',
-    cache: new Map(),
+    // Transient handoff buffer for in-flight responses (not reusable caching).
+    responseBuffer: new Map(),
     inFlight: new Set(),
     debugLog: [],
     sessionPrimedForProvider: '',
@@ -2711,7 +2723,8 @@ function applySexAppearanceTraits(entity) {
   const sex = entity.sex || 'male';
   // Exaggerate silhouette diversity while keeping male/female reads obvious at sprite scale.
   if (sex === 'female') {
-    entity.appearance.hairLength = Math.max(entity.appearance.hairLength || 1, 2);
+    // Keep girls' hairstyles visibly long at this sprite scale.
+    entity.appearance.hairLength = Math.max(entity.appearance.hairLength || 1, 3);
     entity.appearance.eyeShape = entity.appearance.eyeShape || 'round';
   }
 }
@@ -2744,8 +2757,12 @@ function buildAppearanceProfile(name, role, traitProfile, profile = {}) {
 
   const overrides = profile.appearanceOverrides || {};
   const sex = detectStudentSex(name, profile);
-  const femaleBias = sex === 'female' ? 1 : 0;
+  const femaleFrameBoost = sex === 'female' ? 1 : 0;
   const wildHair = (traitProfile.mood < 35 || traitProfile.discipline < 34 || role === 'weird');
+  const femaleHairStylePool = ['ponytail', 'pigtails', 'parted', 'fringe', 'tidy'];
+  const baseHairStyle = wildHair
+    ? 'wild'
+    : (sex === 'female' ? femaleHairStylePool[seed % femaleHairStylePool.length] : ['tidy', 'parted', 'fringe'][seed % 3]);
   return {
     skinTone,
     hairColor: overrides.hairColor || hairPalette[seed % hairPalette.length],
@@ -2760,14 +2777,19 @@ function buildAppearanceProfile(name, role, traitProfile, profile = {}) {
     jawType: overrides.jawType || ['soft', 'round', 'square', 'pointed'][seed % 4],
     acne: overrides.acne ?? (traitProfile.mood < 43 || traitProfile.luck < 38),
     heightOffset: overrides.heightOffset ?? Math.round(clampScore(((traitProfile.speed - 50) / 25) + ((seed % 5) - 2) * 0.25, -2, 2)),
-    bodyWidth: overrides.bodyWidth || (11 + Math.round(bodyType * 4) - femaleBias),
+    bodyWidth: overrides.bodyWidth || (11 + Math.round(bodyType * 4) + femaleFrameBoost),
+    chestWidth: overrides.chestWidth || (sex === 'female' ? 2 + (seed % 2) : 0),
+    hipWidth: overrides.hipWidth || (sex === 'female' ? 2 + (seed % 2) : 0),
     torsoShape: overrides.torsoShape || ['rect', 'tapered', 'barrel', 'lean'][seed % 4],
     armWidth: overrides.armWidth || (2 + (armType > 0.35 ? 2 : 0)),
     armLength: overrides.armLength || (7 + (armType < -0.35 ? -1 : armType > 0.45 ? 1 : 0)),
     legWidth: overrides.legWidth || (4 + (legType > 0.35 ? 1 : 0)),
     legLength: overrides.legLength || (8 + (legType > 0.35 ? 2 : legType < -0.45 ? -1 : 0)),
-    hairLength: overrides.hairLength || (femaleBias ? 2 + (seed % 2) : 1 + (seed % 2)),
-    hairStyle: overrides.hairStyle || (wildHair ? 'wild' : ['tidy', 'parted', 'fringe'][seed % 3]),
+    hairLength: overrides.hairLength || (sex === 'female' ? 3 + (seed % 3) : 1 + (seed % 2)),
+    hairStyle: overrides.hairStyle || baseHairStyle,
+    // Female uniform variant: mix short/long skirts for variety while staying in dress code.
+    skirtLength: overrides.skirtLength || (sex === 'female' ? (seed % 2 === 0 ? 'short' : 'long') : 'none'),
+    makeupStyle: overrides.makeupStyle || (sex === 'female' && (seed % 3 !== 0) ? (seed % 5 === 0 ? 'bold' : 'light') : 'none'),
     sex,
   };
 }
@@ -2887,6 +2909,8 @@ function mkEntity(name, role, x, y, color, traits = {}) {
 
 const player = mkEntity('Eric', 'player', 48, 64, '#ffe04d', {
   title: 'Troublemaker with potential',
+  // Keep Eric's baseline identity stable even when intake options are adjusted.
+  sex: 'male',
   prefers: ['P.E. Field'],
   quotes: ['Not me, sir!', 'I was only looking!'],
   traitOverrides: { trading: 72, barter: 70, friendly: 62, wit: 78 },
@@ -3339,7 +3363,7 @@ function applyStartupOptions() {
     || game.llm.npcNames !== llmNpcNames
     || game.llm.prePrompt !== llmPrePrompt;
   if (providerChanged) {
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     game.llm.worldPreloadedForProvider = '';
   }
   game.llm.enabled = llmEnabled;
@@ -3368,7 +3392,7 @@ function applyStartupOptions() {
   game.playerStuckMs = 0;
 
   assignDailyDutyTeacher();
-  warmupLlmCache();
+  warmupLlmResponses();
 }
 
 createLockerPlanForStudents(game.entities);
@@ -3621,11 +3645,10 @@ function entityFloor(entity) {
 function updateFloorStatus() {
   if (!floorStatusEl) return;
   const meta = floorMeta[entityFloor(player)] || floorMeta.ground;
-  const toiletState = game.toiletsBlocked ? '⛔ Blocked/Flooded' : '✅ Open';
-  floorStatusEl.textContent = `🧭 Floor: ${meta.label} (${meta.color}) | 🚽 Dirt: ${Math.round(game.toiletDirt)}% | ${toiletState}`;
+  floorStatusEl.textContent = `🧭 Floor: ${meta.label} (${meta.color})`;
   floorStatusEl.title = game.toiletsBlocked
-    ? 'Toilets are currently blocked and flooded while Mr Mop cleans.'
-    : 'Toilets get dirtier as people use them. Mr Mop cleans them when they are grubby.';
+    ? `Current floor: ${meta.label}. Toilets blocked/flooded while Mr Mop cleans.`
+    : `Current floor: ${meta.label}. Toilet dirt: ${Math.round(game.toiletDirt)}%.`;
 }
 
 function updateAutoStatus() {
@@ -4609,9 +4632,9 @@ function flushDeferredLlmDialogue(now = performance.now()) {
     const pendingSpeech = entity.pendingSpeech;
     if (pendingSpeech) {
       const key = llmCacheKey(pendingSpeech.payload);
-      const cached = game.llm.cache.get(key);
+      const cached = game.llm.responseBuffer.get(key);
       if (cached) {
-        game.llm.cache.delete(key);
+        game.llm.responseBuffer.delete(key);
         const delivered = deliverResolvedSpeech(entity, cached, pendingSpeech.addressee, pendingSpeech.opts, now);
         if (delivered) {
           pushLlmDebug(`🗣️ Delivered deferred speech bubble for ${llmActorLabel(pendingSpeech.payload)}.`, 'info');
@@ -4630,9 +4653,9 @@ function flushDeferredLlmDialogue(now = performance.now()) {
     const pendingThought = entity.pendingThought;
     if (pendingThought) {
       const key = llmCacheKey(pendingThought.payload);
-      const cached = game.llm.cache.get(key);
+      const cached = game.llm.responseBuffer.get(key);
       if (cached) {
-        game.llm.cache.delete(key);
+        game.llm.responseBuffer.delete(key);
         const delivered = deliverResolvedThought(entity, cached, pendingThought.durationMs, pendingThought.opts, now);
         if (delivered) {
           pushLlmDebug(`💭 Delivered deferred thought bubble for ${pendingThought.payload?.speaker || entity.name}.`, 'info');
@@ -4717,9 +4740,14 @@ function say(entity, text, opts = {}) {
     fallback: String(text),
   };
 
-  const shouldDefer = llmModeEnabled() && (game.llm.noFallback || opts.force !== true);
-  const spokenText = resolveLlmText(payload, { allowFallback: !shouldDefer });
-  if (!spokenText && shouldDefer) {
+  // Some lines (like registration roll call) must stay deterministic for gameplay clarity.
+  // `useLlm: false` bypasses model generation and uses the provided line immediately.
+  const allowLlmRewrite = opts.useLlm !== false;
+  const shouldDefer = allowLlmRewrite && llmModeEnabled() && (game.llm.noFallback || opts.force !== true);
+  const spokenText = allowLlmRewrite
+    ? resolveLlmText(payload, { allowFallback: !shouldDefer })
+    : sanitizeLlmLine(text, '...');
+  if (allowLlmRewrite && !spokenText && shouldDefer) {
     const pendingKey = entity.pendingSpeech ? llmCacheKey(entity.pendingSpeech.payload) : '';
     const requestKey = llmCacheKey(payload);
     if (pendingKey === requestKey) return;
@@ -5006,7 +5034,9 @@ function renderEventFeed() {
     .filter((entry) => game.eventFilters[entry.type] !== false)
     .slice(0, 14);
   eventsEl.innerHTML = visible
-    .map((entry) => `<div class="event-line ${entry.type}">[${entry.time}] ${entry.message}</div>`)
+    .map((entry) => (
+      `<div class="event-line ${entry.type}"><span class="event-time">[${entry.time}]</span> <span class="event-msg">${entry.message}</span></div>`
+    ))
     .join('');
 }
 
@@ -5022,8 +5052,11 @@ function announce(message, options = {}) {
     source = null,
     range = 6.5,
     force = false,
-    feedType = 'action',
   } = options;
+  const hasExplicitFeedType = Object.prototype.hasOwnProperty.call(options, 'feedType');
+  // If a caller provides a speaking source but no explicit feed type, classify as speech.
+  // This keeps the event-feed filters intuitive (speech lines hide with the speech toggle).
+  const resolvedFeedType = hasExplicitFeedType ? options.feedType : (source ? 'speech' : 'action');
 
   // Speech-style events can be local so the feed reflects what Eric can realistically hear.
   if (!force && source && !canPlayerHearSpeaker(source, range)) return;
@@ -5053,7 +5086,7 @@ function announce(message, options = {}) {
 
   game.announcements.unshift(`[${formatTime(game.timeMinutes)}] ${safeMessage}`);
   game.announcements = game.announcements.slice(0, 12);
-  pushFeedEvent(safeMessage, feedType);
+  pushFeedEvent(safeMessage, resolvedFeedType);
 }
 
 function getSfxContext() {
@@ -6277,7 +6310,9 @@ function updateTutorialRollCall(now = performance.now()) {
     } else {
       // Keep tutorial roll call consistent: every student (including Eric) responds identically.
       const line = registrationReplyForTeacher(teacher);
-      say(student, line, { durationMs: 2100 });
+      // Registration responses should be immediate and consistent, not LLM-rewritten chatter.
+      markEntityHandRaised(student, now, 1850);
+      say(student, line, { durationMs: 2100, force: true, useLlm: false });
       roll.waitingForReply = false;
       roll.index += 1;
       roll.nextAt = now + 600 + (game.rng() * 400);
@@ -7106,7 +7141,7 @@ function updateAI(dt) {
   const assignedTeacherName = assignedTeacherForRoom(current.room);
   const now = performance.now();
   const headmaster = game.entities.find((entity) => entity.role === 'teacher' && entity.name === 'Mr Wacker');
-  // Deliver any deferred LLM-only dialogue once responses arrive in cache.
+  // Deliver any deferred LLM-only dialogue once responses are ready.
   flushDeferredLlmDialogue(now);
 
   if (isAssemblyPeriod(current) && headmaster && now >= game.assemblyNextSpeechAt) {
@@ -8866,6 +8901,9 @@ function drawEntities() {
       const strikeDir = entity.facing >= 0 ? 1 : -1;
       const appearance = entity.appearance || {};
       const useUniform = isStudentCharacter(entity);
+      const isFemaleStudent = useUniform && (entity.sex || appearance.sex) === 'female';
+      // Keep uniforms weather-aware: cold days use blazers, warmer days use shirts.
+      const useBlazerUniform = useUniform && ['snow', 'windy', 'rain'].includes(game.weather);
       const headW = Math.max(8, appearance.headWidth || 10);
       const headH = Math.max(5, appearance.headHeight || 6);
       const bodyW = Math.max(11, appearance.bodyWidth || 14);
@@ -8891,6 +8929,15 @@ function drawEntities() {
         ctx.fillRect(px - Math.floor(headW / 2), py - 22 + bob - heightShift, 2, hairLength);
         ctx.fillRect(px + Math.floor(headW / 2) - 1, py - 22 + bob - heightShift, 2, hairLength);
       }
+      if (appearance.hairStyle === 'ponytail') {
+        // Ponytail reads as a single rear strand dropping behind the head.
+        ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, Math.max(3, hairLength + 1));
+      } else if (appearance.hairStyle === 'pigtails') {
+        // Pigtails: two side bundles for more variety among female students.
+        const pigLen = Math.max(2, hairLength);
+        ctx.fillRect(px - Math.floor(headW / 2) - 2, py - 21 + bob - heightShift, 2, pigLen);
+        ctx.fillRect(px + Math.floor(headW / 2), py - 21 + bob - heightShift, 2, pigLen);
+      }
       // Ears and nose shapes make pupils less identical.
       const earSize = appearance.earSize || 1;
       ctx.fillStyle = skinTone;
@@ -8908,11 +8955,18 @@ function drawEntities() {
       }
       const isBlinking = now < (entity.blinkUntil || 0);
       const eyeY = py - 22 + bob - heightShift + (appearance.eyeShape === 'sleepy' ? 1 : 0);
+      const makeupStyle = appearance.makeupStyle || 'none';
       if (isBlinking) {
         ctx.fillStyle = '#2f2f2f';
         ctx.fillRect(px - eyeSpread - 2, eyeY, 3, 1);
         ctx.fillRect(px + eyeSpread - 1, eyeY, 3, 1);
       } else {
+        if (isFemaleStudent && makeupStyle !== 'none') {
+          // Eyeshadow accent for female variants keeps faces distinct.
+          ctx.fillStyle = makeupStyle === 'bold' ? '#b565d9' : '#8aa0ff';
+          ctx.fillRect(px - eyeSpread - 2, eyeY - 1, 2, 1);
+          ctx.fillRect(px + eyeSpread - 1, eyeY - 1, 2, 1);
+        }
         // Left eye triplet.
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(px - eyeSpread - 2, eyeY, 1, 1);
@@ -8935,24 +8989,34 @@ function drawEntities() {
 
       // Mouth opens while speaking to make dialogue readable from sprites.
       const isSpeaking = Boolean(entity.speech && entity.speech.until > now);
-      ctx.fillStyle = '#4a1e1e';
+      ctx.fillStyle = isFemaleStudent && makeupStyle !== 'none' ? '#c93b65' : '#4a1e1e';
       if (isSpeaking) ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 2);
       else ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 1);
 
-      // School uniform: white shirt + blue tie + black trousers/shoes for students.
+      // School uniform base: shirt/tie first, then role/sex overlays (e.g., blazer/skirt).
       ctx.fillStyle = useUniform ? '#f8f9fa' : body;
       const torsoTopW = appearance.torsoShape === 'tapered' ? Math.max(8, bodyW - 3) : bodyW;
-      ctx.fillRect(px - Math.floor(torsoTopW / 2), py - 18 + bob - heightShift, torsoTopW, 5);
-      ctx.fillRect(px - Math.floor(bodyW / 2), py - 13 + bob - heightShift, bodyW, 7);
+      const chestW = isFemaleStudent ? (torsoTopW + (appearance.chestWidth || 1)) : torsoTopW;
+      const hipsW = isFemaleStudent ? (bodyW + (appearance.hipWidth || 1)) : bodyW;
+      ctx.fillRect(px - Math.floor(chestW / 2), py - 18 + bob - heightShift, chestW, 5);
+      ctx.fillRect(px - Math.floor(hipsW / 2), py - 13 + bob - heightShift, hipsW, 7);
       if (useUniform) {
+        const shirtColor = '#ffffff';
+        const tieColor = '#2b59c3';
+        const blazerColor = '#2f5fbf';
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(px - 2, py - 18 + bob - heightShift, 4, 4);
-        ctx.fillStyle = '#2b59c3';
+        ctx.fillStyle = tieColor;
         ctx.fillRect(px - 1, py - 14 + bob - heightShift, 2, 4);
-        if ((entity.sex || appearance.sex) === 'female') {
-          ctx.fillStyle = '#ff6fa8';
-          ctx.fillRect(px - 2, py - 14 + bob - heightShift, 1, 2);
-          ctx.fillRect(px + 1, py - 14 + bob - heightShift, 1, 2);
+        if (useBlazerUniform) {
+          // Cold-weather dress code: all pupils switch to blue blazers.
+          ctx.fillStyle = blazerColor;
+          ctx.fillRect(px - Math.floor(hipsW / 2), py - 17 + bob - heightShift, hipsW, 8);
+          // Keep a white shirt/tie slit visible in the center for readability.
+          ctx.fillStyle = shirtColor;
+          ctx.fillRect(px - 1, py - 16 + bob - heightShift, 2, 5);
+          ctx.fillStyle = '#234a97';
+          ctx.fillRect(px - Math.floor(hipsW / 2), py - 10 + bob - heightShift, hipsW, 2);
         }
       }
 
@@ -8973,19 +9037,43 @@ function drawEntities() {
         ctx.fillRect(chalkX, py - 15, 3, 2);
       }
 
-      // Legs vary by profile; student trousers remain black to enforce uniform.
+      // Legs vary by profile; girls in uniform use short/long skirt variants.
+      const skirtLength = appearance.skirtLength === 'long' ? 'long' : 'short';
       ctx.fillStyle = useUniform ? '#111827' : '#1f2a44';
       if (seated) {
-        ctx.fillRect(px - Math.floor(bodyW / 2), py - 8 - heightShift, 6, 3);
-        ctx.fillRect(px + Math.floor(bodyW / 2) - 6, py - 8 - heightShift, 6, 3);
-        ctx.fillRect(px - Math.floor(bodyW / 2), py - 5 - heightShift, legW, 6);
-        ctx.fillRect(px + Math.floor(bodyW / 2) - legW, py - 5 - heightShift, legW, 6);
+        if (isFemaleStudent) {
+          const seatedSkirtDrop = skirtLength === 'long' ? 5 : 3;
+          ctx.fillStyle = '#1f3f85';
+          ctx.fillRect(px - Math.floor(bodyW / 2), py - 9 - heightShift, bodyW, seatedSkirtDrop);
+          // Female skirts reveal skin-tone legs below hem line.
+          ctx.fillStyle = skinTone;
+          ctx.fillRect(px - Math.floor(bodyW / 2), py - 6 - heightShift, legW, 5);
+          ctx.fillRect(px + Math.floor(bodyW / 2) - legW, py - 6 - heightShift, legW, 5);
+        } else {
+          // Keep male/pants variants visually trouser-like, not skirt-like.
+          ctx.fillRect(px - Math.floor(bodyW / 2), py - 8 - heightShift, 5, 3);
+          ctx.fillRect(px + Math.floor(bodyW / 2) - 5, py - 8 - heightShift, 5, 3);
+          ctx.fillRect(px - Math.floor(bodyW / 2), py - 5 - heightShift, legW, 6);
+          ctx.fillRect(px + Math.floor(bodyW / 2) - legW, py - 5 - heightShift, legW, 6);
+        }
         ctx.fillStyle = '#000000';
         ctx.fillRect(px - Math.floor(bodyW / 2), py + 1 - heightShift, legW, 2);
         ctx.fillRect(px + Math.floor(bodyW / 2) - legW, py + 1 - heightShift, legW, 2);
       } else {
-        ctx.fillRect(px - legW - 1, py - 6 + legKick - heightShift, legW, legL);
-        ctx.fillRect(px + 1, py - 6 - legKick - heightShift, legW, legL);
+        if (isFemaleStudent) {
+          const standingSkirtDrop = skirtLength === 'long' ? 8 : 5;
+          ctx.fillStyle = '#1f3f85';
+          ctx.fillRect(px - Math.floor(bodyW / 2), py - 7 - heightShift, bodyW, standingSkirtDrop);
+          // Female skirts reveal skin-tone legs below hem line.
+          ctx.fillStyle = skinTone;
+          const legTop = py - 4 + (skirtLength === 'long' ? 2 : 0);
+          const legLen = skirtLength === 'long' ? Math.max(5, legL - 2) : legL;
+          ctx.fillRect(px - legW - 1, legTop + legKick - heightShift, legW, legLen);
+          ctx.fillRect(px + 1, legTop - legKick - heightShift, legW, legLen);
+        } else {
+          ctx.fillRect(px - legW - 1, py - 6 + legKick - heightShift, legW, legL);
+          ctx.fillRect(px + 1, py - 6 - legKick - heightShift, legW, legL);
+        }
         ctx.fillStyle = '#000000';
         ctx.fillRect(px - legW - 1, py + 2 + legKick + (legL - 8) - heightShift, legW, 2);
         ctx.fillRect(px + 1, py + 2 - legKick + (legL - 8) - heightShift, legW, 2);
@@ -9867,35 +9955,78 @@ if (splashSettingsDialog) {
   });
 }
 
+
+function setStartupLoadingProgress(percent = 0, label = '⏳ Preparing school day…') {
+  const clamped = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+  if (startupLoadingEl) startupLoadingEl.hidden = false;
+  if (startupLoadingLabelEl) startupLoadingLabelEl.textContent = label;
+  if (startupLoadingPctEl) startupLoadingPctEl.textContent = `${clamped}%`;
+  if (startupLoadingBarEl) startupLoadingBarEl.style.width = `${clamped}%`;
+  const track = startupLoadingBarEl?.parentElement;
+  if (track) track.setAttribute('aria-valuenow', String(clamped));
+}
+
+function hideStartupLoadingProgress() {
+  if (startupLoadingEl) startupLoadingEl.hidden = true;
+  if (startupLoadingBarEl) startupLoadingBarEl.style.width = '0%';
+  if (startupLoadingPctEl) startupLoadingPctEl.textContent = '0%';
+  if (startupLoadingLabelEl) startupLoadingLabelEl.textContent = '⏳ Preparing school day…';
+}
+
 async function startGameFromSplash() {
-  persistSplashSettings();
-  applyStartupOptions();
-  if (llmModeEnabled()) {
-    await preloadLlmWorldSetup();
-    initialiseFullRelationshipMesh();
-    initialiseNpcRelationships();
+  if (startGameBtn) {
+    startGameBtn.disabled = true;
+    startGameBtn.textContent = '⏳ Starting…';
   }
-  if (splashSettingsDialog?.open) splashSettingsDialog.close();
-  if (startOverlayEl) startOverlayEl.hidden = true;
-  assignDailyDutyTeacher();
-  announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
-  if (llmModeEnabled()) {
-    primeLlmSessionContext();
-    announce(`🤖 LLM mode active via ${llmProviderLabel()}. live responses enabled (no response reuse).`, { force: true, feedType: 'world' });
+  // Show feedback immediately so players see startup progress before any LLM preload work begins.
+  setStartupLoadingProgress(4, '🧰 Applying startup settings…');
+  await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+
+  try {
+    persistSplashSettings();
+    applyStartupOptions();
+    setStartupLoadingProgress(22, '🏫 School setup complete. Checking AI mode…');
+
+    if (llmModeEnabled()) {
+      setStartupLoadingProgress(36, '🤖 Warming up AI world setup…');
+      await preloadLlmWorldSetup();
+      setStartupLoadingProgress(82, '🤝 Building social links…');
+      initialiseFullRelationshipMesh();
+      initialiseNpcRelationships();
+    } else {
+      setStartupLoadingProgress(82, '🧠 AI off. Skipping model preload.');
+    }
+
+    setStartupLoadingProgress(94, '✅ Finalising UI and bell schedule…');
+    if (splashSettingsDialog?.open) splashSettingsDialog.close();
+    if (startOverlayEl) startOverlayEl.hidden = true;
+    assignDailyDutyTeacher();
+    announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
+    if (llmModeEnabled()) {
+      primeLlmSessionContext();
+      announce(`🤖 LLM mode active via ${llmProviderLabel()}. live responses enabled (no response reuse).`, { force: true, feedType: 'world' });
+    }
+    if (game.dutyTeacherName) {
+      announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
+    }
+    updateMission();
+    updateAutoStatus();
+    updateCharismaHud();
+    updateBladderHud();
+    updateHygieneHud();
+    updateWeatherHud();
+    updateTodo();
+    updateNameToggleButton();
+    renderEventFeed();
+    setStartupLoadingProgress(100, '🚪 School day ready. Opening campus…');
+    requestAnimationFrame(loop);
+  } finally {
+    hideStartupLoadingProgress();
+    if (startGameBtn) {
+      startGameBtn.disabled = false;
+      startGameBtn.textContent = '▶️ Start school day';
+    }
   }
-  if (game.dutyTeacherName) {
-    announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
-  }
-  updateMission();
-  updateAutoStatus();
-  updateCharismaHud();
-  updateBladderHud();
-  updateHygieneHud();
-  updateWeatherHud();
-  updateTodo();
-  updateNameToggleButton();
-  renderEventFeed();
-  requestAnimationFrame(loop);
 }
 
 
@@ -9944,8 +10075,8 @@ if (optLlmPrePromptEl) {
   optLlmPrePromptEl.addEventListener('change', () => {
     game.llm.prePrompt = sanitizeLlmPrePrompt(optLlmPrePromptEl.value || '');
     optLlmPrePromptEl.value = game.llm.prePrompt;
-    // Prompt content changes output style; clear pending one-shot results for consistency.
-    game.llm.cache.clear();
+    // Prompt content changes output style; clear pending one-shot responses for consistency.
+    game.llm.responseBuffer.clear();
     persistLlmSettings();
     setLlmStatus(game.llm.prePrompt
       ? '🧩 AI pre-prompt updated. Pending LLM results cleared for consistent style.'
@@ -9976,9 +10107,9 @@ if (optLlmEnabledEl) {
 if (optLlmNsfwEl) {
   optLlmNsfwEl.checked = Boolean(game.llm.nsfw);
   optLlmNsfwEl.addEventListener('change', () => {
-    // Prompt options affect output style; clear pending one-shot results immediately.
+    // Prompt options affect output style; clear pending one-shot responses immediately.
     game.llm.nsfw = Boolean(optLlmNsfwEl.checked);
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     persistLlmSettings();
     setLlmStatus(game.llm.nsfw
       ? '🔞 NSFW prompt style enabled for local AI responses.'
@@ -9990,9 +10121,9 @@ if (optLlmNsfwEl) {
 if (optLlmNoFallbackEl) {
   optLlmNoFallbackEl.checked = Boolean(game.llm.noFallback);
   optLlmNoFallbackEl.addEventListener('change', () => {
-    // No-fallback mode uses deferred LLM delivery; clear pending one-shot results to avoid mixed behaviour.
+    // No-fallback mode uses deferred LLM delivery; clear pending one-shot responses to avoid mixed behaviour.
     game.llm.noFallback = Boolean(optLlmNoFallbackEl.checked);
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     persistLlmSettings();
     setLlmStatus(game.llm.noFallback
       ? '🧵 No-fallback mode enabled. Dialogue waits for LLM replies.'
@@ -10005,7 +10136,7 @@ if (optLlmNpcNamesEl) {
   optLlmNpcNamesEl.addEventListener('change', () => {
     // Naming strategy changes preload output shape, so clear cached world preload state.
     game.llm.npcNames = Boolean(optLlmNpcNamesEl.checked);
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     game.llm.worldPreloadedForProvider = '';
     persistLlmSettings();
     setLlmStatus(game.llm.npcNames
@@ -10018,11 +10149,11 @@ if (optLlmSourceEl) {
   optLlmSourceEl.value = game.llm.source;
   optLlmSourceEl.addEventListener('change', () => {
     game.llm.source = optLlmSourceEl.value === 'remote' ? 'remote' : 'local';
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     game.llm.sessionPrimedForProvider = '';
     applyLlmUiState();
     persistLlmSettings();
-    setLlmStatus(`🧭 LLM source set to ${game.llm.source}. Cache refreshed.`);
+    setLlmStatus(`🧭 LLM source set to ${game.llm.source}. Response buffer refreshed.`);
   });
 }
 
@@ -10032,10 +10163,10 @@ if (optLlmModelEl) {
     const selected = String(optLlmModelEl.value || '').trim();
     if (selected && selected !== game.llm.selectedModel) {
       game.llm.selectedModel = selected;
-      game.llm.cache.clear();
+      game.llm.responseBuffer.clear();
       game.llm.sessionPrimedForProvider = '';
       persistLlmSettings();
-      setLlmStatus(`✅ Local model set to ${selected}. Cache reset for fresh responses.`);
+      setLlmStatus(`✅ Local model set to ${selected}. Response buffer reset for fresh responses.`);
     }
   });
 }
@@ -10045,7 +10176,7 @@ if (optLlmLocalEndpointEl) {
   optLlmLocalEndpointEl.addEventListener('change', () => {
     game.llm.localEndpoint = normalizeLocalEndpoint(optLlmLocalEndpointEl.value || game.llm.localEndpoint);
     optLlmLocalEndpointEl.value = game.llm.localEndpoint;
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     game.llm.sessionPrimedForProvider = '';
     persistLlmSettings();
     setLlmStatus(`🔌 Local endpoint set to ${game.llm.localEndpoint}. Use refresh to load models.`);
@@ -10060,7 +10191,7 @@ if (optLlmRemoteProviderEl) {
       optLlmRemoteModelEl.value = game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini';
     }
     game.llm.remoteModel = String(optLlmRemoteModelEl?.value || '').trim() || (game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini');
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     game.llm.sessionPrimedForProvider = '';
     applyLlmUiState();
     persistLlmSettings();
@@ -10072,7 +10203,7 @@ if (optLlmRemoteModelEl) {
   optLlmRemoteModelEl.value = game.llm.remoteModel || 'gpt-4.1-mini';
   optLlmRemoteModelEl.addEventListener('change', () => {
     game.llm.remoteModel = String(optLlmRemoteModelEl.value || '').trim();
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     game.llm.sessionPrimedForProvider = '';
     persistLlmSettings();
     setLlmStatus(`🧾 Remote model set to ${game.llm.remoteModel || 'default'}.`);
@@ -10083,7 +10214,7 @@ if (optLlmRemoteTokenEl) {
   optLlmRemoteTokenEl.value = game.llm.remoteToken;
   optLlmRemoteTokenEl.addEventListener('change', () => {
     game.llm.remoteToken = String(optLlmRemoteTokenEl.value || '').trim();
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     game.llm.sessionPrimedForProvider = '';
     updateLlmTokenUi();
     persistLlmSettings();
@@ -10107,7 +10238,7 @@ if (optLlmClearTokenEl) {
   optLlmClearTokenEl.addEventListener('click', () => {
     game.llm.remoteToken = '';
     if (optLlmRemoteTokenEl) optLlmRemoteTokenEl.value = '';
-    game.llm.cache.clear();
+    game.llm.responseBuffer.clear();
     game.llm.sessionPrimedForProvider = '';
     updateLlmTokenUi();
     persistLlmSettings();
