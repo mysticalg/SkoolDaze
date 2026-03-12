@@ -277,7 +277,6 @@ const blackboards = [
   { room: 'Geography', x: 18, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
   { room: 'Art Room', x: 46, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
   { room: 'History', x: 74, y: 83, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
-  { room: 'Assembly Hall', x: 83, y: 61, text: '', revealChars: 0, revealSpeed: 36, lastSfxAt: 0 },
   { room: 'Headmaster Office', x: 164, y: 40, text: 'DISCIPLINE', revealChars: 10, revealSpeed: 36, lastSfxAt: 0 },
 ];
 
@@ -490,6 +489,8 @@ const classroomProps = [
   { room: 'Geography', x: 24, y: 90, icon: '🗺', color: '#9bf6ff', kind: 'map roll', throwable: true, hiddenUntil: 0 },
   { room: 'History', x: 70, y: 90, icon: '🏺', color: '#e6ccb2', kind: 'history artifact', throwable: false, hiddenUntil: 0 },
   { room: 'Music Room', x: 121, y: 45, icon: '🎷', color: '#ffadad', kind: 'saxophone', throwable: true, hiddenUntil: 0 },
+  // Assembly uses a speaking podium instead of a chalkboard for the headmaster's address.
+  { room: 'Assembly Hall', x: 83, y: 61.5, icon: '🎤', color: '#d4a373', kind: 'headmaster podium', throwable: false, hiddenUntil: 0, size: 3 },
 ];
 
 
@@ -516,11 +517,16 @@ const computerUseMeta = {
 const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 // Bell schedule now compresses a full school day to ~15 real-world minutes.
+const SCHOOL_DAY_START_MINUTES = (8 * 60) + 20;
+const REGISTRATION_START_MINUTES = (8 * 60) + 50;
+
 function buildScheduleForDay(dayCount = 1) {
   const weekday = weekdayLabelForDay(dayCount);
   const mondayWednesdayAssembly = weekday === 'Mon' || weekday === 'Wed';
+  // Keep a longer arrival/tutorial window so registration does not begin before 8:50.
+  const startDayMinutes = Math.max(10, REGISTRATION_START_MINUTES - SCHOOL_DAY_START_MINUTES);
   const routine = [
-    { period: 'Start Day', room: 'School Gates', mins: 10, mode: 'transition' },
+    { period: 'Start Day', room: 'School Gates', mins: startDayMinutes, mode: 'transition' },
     { period: 'Registration', room: 'Science Lab', mins: 25, mode: 'lesson' },
     { period: 'Lesson 1', room: 'Maths', mins: 60, mode: 'lesson' },
   ];
@@ -1106,7 +1112,7 @@ const WEEKLY_SICK_DAY_INTERVAL = 5;
 const TARGET_ATTENDANCE_PERCENT = 95;
 
 const game = {
-  timeMinutes: 8 * 60 + 20,
+  timeMinutes: SCHOOL_DAY_START_MINUTES,
   // Minutes advanced per real-time second so the full school day lasts ~15 real minutes.
   timeScale: (TOTAL_DAY_GAME_MINUTES / TARGET_DAY_REAL_SECONDS) * DEFAULT_GAME_SPEED_MULTIPLIER,
   speedMultiplier: DEFAULT_GAME_SPEED_MULTIPLIER,
@@ -2531,7 +2537,7 @@ function resetToSchoolMorning() {
   // New morning: everyone starts outside school gates before being led inside.
   schedule = buildScheduleForDay(game.dayCount);
   game.timeScale = (schedule.reduce((sum, period) => sum + period.mins, 0) / TARGET_DAY_REAL_SECONDS) * game.speedMultiplier;
-  game.timeMinutes = 8 * 60 + 20;
+  game.timeMinutes = SCHOOL_DAY_START_MINUTES;
   game.periodElapsed = 0;
   game.registrationTaken = false;
   initTutorialRollCallState();
@@ -6691,8 +6697,13 @@ function drawEntities() {
       ctx.fillStyle = skinTone;
       const rightArmX = strikeDir > 0 ? px + Math.floor(bodyW / 2) + punchReach : px + Math.floor(bodyW / 2);
       const leftArmX = strikeDir < 0 ? px - Math.floor(bodyW / 2) - armW - punchReach : px - Math.floor(bodyW / 2) - armW;
-      ctx.fillRect(leftArmX, py - 17 + armKick + (strikeDir < 0 ? punchLift : 0) - (isWriting ? writingFrame : 0) - heightShift, armW, armL);
-      ctx.fillRect(rightArmX, py - 17 - armKick + (strikeDir > 0 ? punchLift : 0) + (isWriting ? writingFrame : 0) - heightShift, armW, armL);
+      // Assembly flourish: the headmaster waves both arms while speaking from the podium.
+      const isHeadmasterAssemblySpeech = entity.name === 'Mr Wacker' && entityRoom(entity) === 'Assembly Hall' && isSpeaking;
+      const speechWave = isHeadmasterAssemblySpeech ? Math.sin(now / 95) * 3.8 : 0;
+      const leftArmYOffset = py - 17 + armKick + (strikeDir < 0 ? punchLift : 0) - (isWriting ? writingFrame : 0) - heightShift - speechWave;
+      const rightArmYOffset = py - 17 - armKick + (strikeDir > 0 ? punchLift : 0) + (isWriting ? writingFrame : 0) - heightShift + speechWave;
+      ctx.fillRect(leftArmX, leftArmYOffset, armW, armL);
+      ctx.fillRect(rightArmX, rightArmYOffset, armW, armL);
       if (isWriting && entity.role === 'teacher') {
         ctx.fillStyle = '#f8f9fa';
         const chalkX = strikeDir > 0 ? px + 14 : px - 14;
