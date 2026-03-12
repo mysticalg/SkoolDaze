@@ -105,6 +105,38 @@ body {
 .start-btn:hover { background: linear-gradient(180deg, #1a4068, #143252); }
 
 
+.llm-grid {
+  margin-bottom: 0.35rem;
+}
+
+.llm-toggle input {
+  inline-size: 1.2rem;
+  block-size: 1.2rem;
+  margin-top: 0.25rem;
+}
+
+.llm-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.15rem 0 0.55rem;
+}
+
+.secondary-btn {
+  min-height: 2rem;
+  border: 1px solid #6f8fb7;
+  border-radius: 8px;
+  background: #102640;
+  color: #d9edff;
+  cursor: pointer;
+  padding: 0.25rem 0.55rem;
+}
+.secondary-btn:hover { background: #153455; }
+
+.llm-status-error {
+  color: #ffd2d2;
+}
+
 .floor-clock-group {
   display: inline-flex;
   align-items: center;

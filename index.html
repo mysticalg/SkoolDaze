@@ -46,6 +46,23 @@
         <label title="Chaotic students with odd routines.">🌀 Weird <input id="optRatioWeird" type="number" min="0" max="100" value="25" /></label>
       </div>
 
+      <h3>🤖 Local LLM (Ollama)</h3>
+      <div class="start-grid llm-grid">
+        <label class="llm-toggle" title="Enable to generate classroom chatter and prompts using your local Ollama model.">
+          🧠 Enable LLM mode
+          <input id="optLlmEnabled" type="checkbox" />
+        </label>
+        <label title="Choose which local Ollama model should generate school dialogue.">🗂️ Ollama model
+          <select id="optLlmModel" disabled>
+            <option value="">Loading models…</option>
+          </select>
+        </label>
+      </div>
+      <div class="llm-actions">
+        <button id="optLlmRefreshModels" type="button" class="secondary-btn" title="Refresh model list from Ollama">🔄 Refresh models</button>
+        <p id="optLlmStatus" class="todo-help" aria-live="polite">ℹ️ LLM mode uses default game text until Ollama replies are cached.</p>
+      </div>
+
       <button id="startGameBtn" class="start-btn" type="button" title="Start the school day with these options">▶️ Start school day</button>
       <p class="todo-help">💡 Tip: percentages are normalized automatically if they do not add up to 100.</p>
     </div>

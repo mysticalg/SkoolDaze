@@ -53,6 +53,10 @@ const optRatioSwotEl = document.getElementById('optRatioSwot');
 const optRatioWeirdEl = document.getElementById('optRatioWeird');
 const optGameSpeedEl = document.getElementById('optGameSpeed');
 const optWeatherEl = document.getElementById('optWeather');
+const optLlmEnabledEl = document.getElementById('optLlmEnabled');
+const optLlmModelEl = document.getElementById('optLlmModel');
+const optLlmRefreshModelsEl = document.getElementById('optLlmRefreshModels');
+const optLlmStatusEl = document.getElementById('optLlmStatus');
 document.getElementById('closeHelp').onclick = () => helpDialog.close();
 helpBtn.onclick = () => helpDialog.showModal();
 
@@ -1111,6 +1115,206 @@ const TOILET_BLOCK_DURATION_MS = 18000;
 const WEEKLY_SICK_DAY_INTERVAL = 5;
 const TARGET_ATTENDANCE_PERCENT = 95;
 
+// Local Ollama endpoint for optional on-device LLM chatter.
+const OLLAMA_API_BASE = 'http://localhost:11434';
+const OLLAMA_DEFAULT_TIMEOUT_MS = 2200;
+
+function setLlmStatus(text, isError = false) {
+  if (!optLlmStatusEl) return;
+  optLlmStatusEl.textContent = text;
+  optLlmStatusEl.classList.toggle('llm-status-error', Boolean(isError));
+}
+
+function sanitizeLlmLine(text, fallback = '...') {
+  const next = String(text || '').replace(/\s+/g, ' ').trim();
+  return next || fallback;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = OLLAMA_DEFAULT_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function updateLlmModelSelect(models = []) {
+  if (!optLlmModelEl) return;
+  optLlmModelEl.innerHTML = '';
+  if (!models.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No local models found';
+    optLlmModelEl.appendChild(option);
+    optLlmModelEl.disabled = true;
+    return;
+  }
+
+  models.forEach((modelName) => {
+    const option = document.createElement('option');
+    option.value = modelName;
+    option.textContent = modelName;
+    optLlmModelEl.appendChild(option);
+  });
+
+  if (game?.llm?.selectedModel && models.includes(game.llm.selectedModel)) {
+    optLlmModelEl.value = game.llm.selectedModel;
+  }
+  optLlmModelEl.disabled = !(optLlmEnabledEl?.checked);
+}
+
+async function refreshOllamaModels({ silent = false } = {}) {
+  if (!silent) setLlmStatus('🔎 Looking for local Ollama models…');
+  try {
+    const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/tags`, {}, 1800);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    const models = Array.from(new Set((payload?.models || []).map((entry) => String(entry?.name || '').trim()).filter(Boolean)));
+    game.llm.availableModels = models;
+    if (!game.llm.selectedModel && models.length) game.llm.selectedModel = models[0];
+    updateLlmModelSelect(models);
+    if (optLlmModelEl && game.llm.selectedModel) optLlmModelEl.value = game.llm.selectedModel;
+    if (!silent) setLlmStatus(models.length ? `✅ Found ${models.length} model(s).` : '⚠️ Ollama is running, but no models are installed.', !models.length);
+  } catch (error) {
+    game.llm.availableModels = [];
+    updateLlmModelSelect([]);
+    if (!silent) setLlmStatus('⚠️ Could not connect to Ollama at localhost:11434. Using built-in text.', true);
+  }
+}
+
+function llmModeEnabled() {
+  return Boolean(game.llm.enabled && game.llm.selectedModel);
+}
+
+function llmCacheKey({ channel = 'speech', subject = 'General', speaker = 'Narrator', room = 'School', fallback = '' }) {
+  return `${game.llm.selectedModel || 'none'}|${channel}|${subject}|${speaker}|${room}|${String(fallback).toLowerCase().slice(0, 120)}`;
+}
+
+function buildLlmPrompt({ channel = 'speech', subject = 'General', speaker = 'Narrator', room = 'School', fallback = '' }) {
+  const styleGuide = channel === 'thought'
+    ? 'Write a short first-person thought bubble. Keep it under 14 words.'
+    : channel === 'quiz'
+      ? 'Write ONE school class question with 4 choices and a correct answer as JSON.'
+      : 'Write a short in-world school dialogue line. Keep it under 14 words.';
+
+  if (channel === 'quiz') {
+    return [
+      'You are writing classroom quiz content for a playful British school game.',
+      'Respond ONLY as JSON: {"q":"...","choices":["A","B","C","D"],"answer":"..."}.',
+      'The answer must exactly match one of the choices. No markdown.',
+      `Subject: ${subject}. Room: ${room}. Teacher context: ${speaker}.`,
+      `Fallback question for reference: ${fallback}`,
+      styleGuide,
+    ].join('\n');
+  }
+
+  return [
+    'You write concise text for a school simulation game.',
+    styleGuide,
+    'Stay classroom-safe and avoid profanity.',
+    `Speaker: ${speaker}. Room: ${room}. Subject: ${subject}.`,
+    `Fallback line to adapt: ${fallback}`,
+  ].join('\n');
+}
+
+async function generateLlmText(payload) {
+  if (!llmModeEnabled()) return null;
+  try {
+    const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: game.llm.selectedModel,
+        stream: false,
+        options: { temperature: 0.75, top_p: 0.92, num_predict: payload.channel === 'quiz' ? 180 : 42 },
+        prompt: buildLlmPrompt(payload),
+      }),
+    }, OLLAMA_DEFAULT_TIMEOUT_MS);
+    if (!response.ok) return null;
+    const data = await response.json();
+    return sanitizeLlmLine(data?.response);
+  } catch (error) {
+    return null;
+  }
+}
+
+function queueLlmText(payload) {
+  if (!llmModeEnabled()) return;
+  const key = llmCacheKey(payload);
+  if (game.llm.cache.has(key) || game.llm.inFlight.has(key)) return;
+  game.llm.inFlight.add(key);
+  generateLlmText(payload).then((text) => {
+    if (text) game.llm.cache.set(key, text);
+  }).finally(() => {
+    game.llm.inFlight.delete(key);
+  });
+}
+
+function resolveLlmText(payload) {
+  const fallback = sanitizeLlmLine(payload.fallback, '...');
+  if (!llmModeEnabled()) return fallback;
+  const key = llmCacheKey(payload);
+  if (game.llm.cache.has(key)) return game.llm.cache.get(key);
+  queueLlmText(payload);
+  return fallback;
+}
+
+function resolveLlmQuizQuestion(fallbackQuiz) {
+  if (!llmModeEnabled()) return fallbackQuiz;
+  const payload = {
+    channel: 'quiz',
+    subject: fallbackQuiz.subject,
+    speaker: 'Assigned Teacher',
+    room: fallbackQuiz.roomName,
+    fallback: fallbackQuiz.q,
+  };
+  const key = llmCacheKey(payload);
+  const cached = game.llm.cache.get(key);
+  if (!cached) {
+    queueLlmText(payload);
+    return fallbackQuiz;
+  }
+  try {
+    const parsed = JSON.parse(cached);
+    const choices = Array.isArray(parsed.choices) ? parsed.choices.slice(0, 4).map((choice) => sanitizeLlmLine(choice)) : [];
+    while (choices.length < 4) choices.push(randomFunnyWrongAnswer());
+    const answer = sanitizeLlmLine(parsed.answer).toLowerCase();
+    if (!choices.some((choice) => choice.toLowerCase() === answer)) choices[0] = parsed.answer;
+    return {
+      ...fallbackQuiz,
+      q: sanitizeLlmLine(parsed.q, fallbackQuiz.q),
+      choices,
+      answer: normalizeAnswerText(parsed.answer),
+    };
+  } catch (error) {
+    return fallbackQuiz;
+  }
+}
+
+function warmupLlmCache() {
+  if (!llmModeEnabled()) return;
+  const sampleEntities = game.entities.filter((entity) => entity.role !== 'player').slice(0, 8);
+  sampleEntities.forEach((entity) => {
+    ensureDialogueSetup(entity);
+    queueLlmText({
+      channel: 'speech',
+      subject: roomSubjectName(entityRoom(entity)),
+      speaker: entity.name,
+      room: entityRoom(entity),
+      fallback: entity.dialogue?.hallwayChatter?.[0] || 'Busy day at school.',
+    });
+    queueLlmText({
+      channel: 'thought',
+      subject: roomSubjectName(entityRoom(entity)),
+      speaker: entity.name,
+      room: entityRoom(entity),
+      fallback: entity.dialogue?.thoughts?.[0] || 'I should stay focused.',
+    });
+  });
+}
+
 const game = {
   timeMinutes: SCHOOL_DAY_START_MINUTES,
   // Minutes advanced per real-time second so the full school day lasts ~15 real minutes.
@@ -1131,6 +1335,13 @@ const game = {
   announcements: [],
   eventLog: [],
   eventFilters: { action: true, speech: true, thought: true, world: true },
+  llm: {
+    enabled: false,
+    selectedModel: '',
+    availableModels: [],
+    cache: new Map(),
+    inFlight: new Set(),
+  },
   rng: Math.random,
   quizActive: null,
   lastClassQuestionAt: 0,
@@ -1711,6 +1922,8 @@ function applyStartupOptions() {
   const desiredTeachers = Number(optTeacherCountEl?.value || 9);
   const speedMultiplier = Math.max(0.5, Math.min(2, Number(optGameSpeedEl?.value || 1)));
   const weatherSetting = optWeatherEl?.value || 'auto';
+  const llmEnabled = Boolean(optLlmEnabledEl?.checked);
+  const llmModel = String(optLlmModelEl?.value || '').trim();
 
   applyTeacherCount(desiredTeachers);
   applyStudentMix(desiredStudents, {
@@ -1727,6 +1940,11 @@ function applyStartupOptions() {
     game.weather = weatherSetting;
   }
 
+  // LLM mode is optional and always falls back to built-in text if unavailable.
+  if (game.llm.selectedModel !== llmModel) game.llm.cache.clear();
+  game.llm.enabled = llmEnabled;
+  game.llm.selectedModel = llmModel;
+
   // Startup population changes alter seating demand; rebuild cached layouts.
   roomSeatCache.clear();
   createLockerPlanForStudents(game.entities);
@@ -1738,6 +1956,7 @@ function applyStartupOptions() {
   game.playerStuckMs = 0;
 
   assignDailyDutyTeacher();
+  warmupLlmCache();
 }
 
 createLockerPlanForStudents(game.entities);
@@ -2800,7 +3019,13 @@ function say(entity, text, opts = {}) {
   // Some pupils are naturally quiet; they often skip optional chatter.
   const silenceBias = clampScore(55 - ((entity.traits?.friendly || 40) * 0.28) - ((entity.traits?.funny || 40) * 0.18) + ((entity.traits?.discipline || 40) * 0.08), 8, 70);
   if (!opts.force && Math.random() < (silenceBias / 100)) return;
-  const spokenText = String(text);
+  const spokenText = resolveLlmText({
+    channel: 'speech',
+    subject: roomSubjectName(entityRoom(entity)),
+    speaker: entity.name,
+    room: entityRoom(entity),
+    fallback: String(text),
+  });
   if (!opts.force && !markDialogueUsed(entity, spokenText, 'speech')) return;
   entity.speech = { text: spokenText, kind: opts.kind || 'speech', until: now + (opts.durationMs || 2600) };
   entity.lastSpokeAt = now;
@@ -2815,7 +3040,13 @@ function think(entity, text, durationMs = 3200, opts = {}) {
   if (!entity || !text) return;
   const now = performance.now();
   if (!canUseDialogue(entity, now, 'thought')) return;
-  const thoughtText = String(text);
+  const thoughtText = resolveLlmText({
+    channel: 'thought',
+    subject: roomSubjectName(entityRoom(entity)),
+    speaker: entity.name,
+    room: entityRoom(entity),
+    fallback: String(text),
+  });
   if (!markDialogueUsed(entity, thoughtText, 'thought')) return;
   entity.thought = { text: thoughtText, until: now + durationMs };
   entity.lastThoughtAt = now;
@@ -3047,14 +3278,22 @@ function announce(message, options = {}) {
 
   // Speech-style events can be local so the feed reflects what Eric can realistically hear.
   if (!force && source && !canPlayerHearSpeaker(source, range)) return;
+  const finalMessage = resolveLlmText({
+    channel: source ? 'speech' : 'announcement',
+    subject: source ? roomSubjectName(entityRoom(source)) : roomSubjectName(schedule[game.periodIndex]?.room),
+    speaker: source?.name || 'Narrator',
+    room: source ? entityRoom(source) : (schedule[game.periodIndex]?.room || 'School'),
+    fallback: String(message),
+  });
+
   if (source) {
-    const spoken = String(message).replace(/^.*?:\s*"?/, '').replace(/"$/, '').trim();
+    const spoken = String(finalMessage).replace(/^.*?:\s*"?/, '').replace(/"$/, '').trim();
     say(source, spoken || '...');
   }
 
-  game.announcements.unshift(`[${formatTime(game.timeMinutes)}] ${message}`);
+  game.announcements.unshift(`[${formatTime(game.timeMinutes)}] ${finalMessage}`);
   game.announcements = game.announcements.slice(0, 12);
-  pushFeedEvent(message, feedType);
+  pushFeedEvent(finalMessage, feedType);
 }
 
 function getSfxContext() {
@@ -3141,7 +3380,7 @@ function pickClassQuestion(roomName) {
   const choices = [...(base.choices || [])].slice(0, 4);
   while (choices.length < 4) choices.push(randomFunnyWrongAnswer());
   const shuffled = choices.sort(() => game.rng() - 0.5);
-  return {
+  const fallbackQuiz = {
     ...base,
     q: String(base.q || '').trim(),
     answer: normalizeAnswerText(base.answer),
@@ -3149,6 +3388,7 @@ function pickClassQuestion(roomName) {
     subject,
     roomName,
   };
+  return resolveLlmQuizQuestion(fallbackQuiz);
 }
 
 function clearClassQuestionUi() {
@@ -7548,6 +7788,9 @@ function startGameFromSplash() {
   if (startOverlayEl) startOverlayEl.hidden = true;
   assignDailyDutyTeacher();
   announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
+  if (game.llm.enabled && game.llm.selectedModel) {
+    announce(`🤖 LLM mode active via ${game.llm.selectedModel}. Dialogue cache warming in background.`, { force: true, feedType: 'world' });
+  }
   if (game.dutyTeacherName) {
     announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
   }
@@ -7564,6 +7807,30 @@ function startGameFromSplash() {
 }
 
 if (startGameBtn) startGameBtn.addEventListener('click', startGameFromSplash);
+
+if (optLlmEnabledEl && optLlmModelEl) {
+  optLlmEnabledEl.addEventListener('change', () => {
+    const enabled = Boolean(optLlmEnabledEl.checked);
+    optLlmModelEl.disabled = !enabled || !game.llm.availableModels.length;
+    setLlmStatus(enabled
+      ? '🤖 LLM mode enabled. First lines may use fallback text while cache warms up.'
+      : 'ℹ️ LLM mode disabled. Using original built-in text.');
+  });
+  optLlmModelEl.addEventListener('change', () => {
+    const selected = String(optLlmModelEl.value || '').trim();
+    if (selected && selected !== game.llm.selectedModel) {
+      game.llm.selectedModel = selected;
+      game.llm.cache.clear();
+      setLlmStatus(`✅ Model set to ${selected}. Cache reset for fresh responses.`);
+    }
+  });
+}
+
+if (optLlmRefreshModelsEl) {
+  optLlmRefreshModelsEl.addEventListener('click', () => refreshOllamaModels());
+}
+
+refreshOllamaModels({ silent: true });
 
 // Lightweight debug hooks help automated validation without changing gameplay UI.
 window.__skoolDazeDebug = {
