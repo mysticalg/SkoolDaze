@@ -1681,6 +1681,9 @@ function chooseAutoDestination() {
 }
 
 function roomAtPosition(pos) {
+  // AI routing can briefly clear or corrupt targets while tasks are swapped.
+  // Treat invalid coordinates as "no room" instead of crashing the game loop.
+  if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) return null;
   const eps = 0.12;
   return rooms.find((r) => (
     pos.x >= r.x + eps
