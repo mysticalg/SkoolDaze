@@ -42,7 +42,15 @@ body {
 .floor-clock-group {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.42rem;
+}
+
+#dayLabel,
+#period,
+#roomTarget,
+#floorStatus {
+  white-space: nowrap;
 }
 
 .analog-clock {
@@ -190,6 +198,42 @@ canvas {
 .hero { background: #ffd58e; }
 .weird { background: #c58eff; }
 
+.todo-carousel {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.38rem;
+  border: 1px solid #3b5d86;
+  background: linear-gradient(180deg, #11213a, #0b162a);
+  color: #e8f3ff;
+  border-radius: 8px;
+  padding: 0.3rem 0.42rem;
+  cursor: pointer;
+}
+.todo-carousel:hover {
+  border-color: #5f8fbe;
+  background: linear-gradient(180deg, #162b49, #10203b);
+}
+.todo-carousel-icon { flex: 0 0 auto; }
+.todo-carousel-window {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.todo-carousel-text {
+  display: inline-block;
+  padding-left: 100%;
+  animation: todoTicker 24s linear infinite;
+}
+@keyframes todoTicker {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-100%); }
+}
+.todo-help {
+  margin: 0.3rem 0 0.45rem;
+  font-size: 0.7rem;
+  color: #b9d7f5;
+}
 .todo {
   margin: 0;
   padding-left: 1rem;
@@ -212,6 +256,15 @@ dialog {
   border: 1px solid #4a628c;
   background: #0e1726;
   color: white;
+}
+
+dialog button {
+  border: 1px solid #4a628c;
+  background: #11233e;
+  color: #eaf6ff;
+  border-radius: 8px;
+  padding: 0.35rem 0.55rem;
+  cursor: pointer;
 }
 
 @media (max-width: 1200px) {
