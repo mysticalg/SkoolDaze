@@ -401,6 +401,13 @@ function buildScheduleForDay(dayCount = 1) {
 
 let schedule = buildScheduleForDay(1);
 const TARGET_DAY_REAL_SECONDS = 15 * 60;
+// NPC stamina tuning:
+// - movement drain is 4x slower than the previous build so students do not crash before lunch.
+// - a gentle day-fatigue baseline still brings most pupils to ~30 energy by home time.
+const NPC_BASE_DRAIN_PER_SECOND = 0.0475;
+const NPC_RUNNING_EXTRA_DRAIN_PER_SECOND = 0.145;
+const NPC_LUNCH_RECOVER_PER_SECOND = 0.16;
+const NPC_END_OF_DAY_ENERGY_TARGET = 30;
 const TOTAL_DAY_GAME_MINUTES = schedule.reduce((sum, period) => sum + period.mins, 0);
 
 // Period helpers keep schedule checks readable when timetable labels change.
@@ -3976,6 +3983,15 @@ function updateAttendanceHud(currentPeriod = schedule[game.periodIndex]) {
   attendanceEl.title = `Present ${metrics.presentCount}/${metrics.total}, seated ${metrics.seatedCount}/${metrics.total}. Target attendance: ${TARGET_ATTENDANCE_PERCENT}%+.`;
 }
 
+function schoolDayProgress() {
+  // Convert the current timetable position into a stable 0..1 value for day-based systems.
+  const elapsedMinsBeforePeriod = schedule
+    .slice(0, game.periodIndex)
+    .reduce((sum, period) => sum + period.mins, 0);
+  const elapsedMins = Math.min(TOTAL_DAY_GAME_MINUTES, elapsedMinsBeforePeriod + game.periodElapsed);
+  return Math.max(0, Math.min(1, elapsedMins / TOTAL_DAY_GAME_MINUTES));
+}
+
 function updateNpcVitals(entity, dt, isRunning) {
   // `dt` is provided in milliseconds, so convert once to keep stamina math in
   // real-world seconds. Without this conversion NPCs lose almost all energy in
@@ -4003,9 +4019,9 @@ function updateNpcVitals(entity, dt, isRunning) {
   }
 
   // School-day tuned stamina: normal walking causes light drain so pupils tire by lunch.
-  const baseDrainPerSecond = 0.19;
-  const runningExtraDrainPerSecond = 0.58;
-  const recoverPerSecond = 0.16;
+  const baseDrainPerSecond = NPC_BASE_DRAIN_PER_SECOND;
+  const runningExtraDrainPerSecond = NPC_RUNNING_EXTRA_DRAIN_PER_SECOND;
+  const recoverPerSecond = NPC_LUNCH_RECOVER_PER_SECOND;
   const period = schedule[game.periodIndex];
   const isLunch = period.period === 'Lunch Break';
   const inFoodZone = entityRoom(entity) === 'P.E. Field' || entityRoom(entity) === 'Reception';
@@ -4018,6 +4034,13 @@ function updateNpcVitals(entity, dt, isRunning) {
 
   const drainRate = baseDrainPerSecond + (isRunning ? runningExtraDrainPerSecond : 0);
   entity.energy = Math.max(16, entity.energy - dtSeconds * drainRate);
+
+  // Keep end-of-day fatigue believable: students should usually finish around ~30%.
+  // This softly nudges energy toward a line from 100 at the start of day to 30 at home time.
+  const dayProgress = schoolDayProgress();
+  const baselineEnergy = 100 - ((100 - NPC_END_OF_DAY_ENERGY_TARGET) * dayProgress);
+  entity.energy = Math.max(16, Math.min(entity.energy, baselineEnergy));
+
   const emotionDrift = entity.mood === 'furious' || entity.mood === 'angry' ? -0.9 : 0.35;
   entity.emotion = Math.max(0, Math.min(100, entity.emotion + (emotionDrift * dtSeconds)));
 }
