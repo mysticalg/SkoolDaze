@@ -2757,8 +2757,12 @@ function buildAppearanceProfile(name, role, traitProfile, profile = {}) {
 
   const overrides = profile.appearanceOverrides || {};
   const sex = detectStudentSex(name, profile);
-  const femaleBias = sex === 'female' ? 1 : 0;
+  const femaleFrameBoost = sex === 'female' ? 1 : 0;
   const wildHair = (traitProfile.mood < 35 || traitProfile.discipline < 34 || role === 'weird');
+  const femaleHairStylePool = ['ponytail', 'pigtails', 'parted', 'fringe', 'tidy'];
+  const baseHairStyle = wildHair
+    ? 'wild'
+    : (sex === 'female' ? femaleHairStylePool[seed % femaleHairStylePool.length] : ['tidy', 'parted', 'fringe'][seed % 3]);
   return {
     skinTone,
     hairColor: overrides.hairColor || hairPalette[seed % hairPalette.length],
@@ -2773,16 +2777,19 @@ function buildAppearanceProfile(name, role, traitProfile, profile = {}) {
     jawType: overrides.jawType || ['soft', 'round', 'square', 'pointed'][seed % 4],
     acne: overrides.acne ?? (traitProfile.mood < 43 || traitProfile.luck < 38),
     heightOffset: overrides.heightOffset ?? Math.round(clampScore(((traitProfile.speed - 50) / 25) + ((seed % 5) - 2) * 0.25, -2, 2)),
-    bodyWidth: overrides.bodyWidth || (11 + Math.round(bodyType * 4) - femaleBias),
+    bodyWidth: overrides.bodyWidth || (11 + Math.round(bodyType * 4) + femaleFrameBoost),
+    chestWidth: overrides.chestWidth || (sex === 'female' ? 2 + (seed % 2) : 0),
+    hipWidth: overrides.hipWidth || (sex === 'female' ? 2 + (seed % 2) : 0),
     torsoShape: overrides.torsoShape || ['rect', 'tapered', 'barrel', 'lean'][seed % 4],
     armWidth: overrides.armWidth || (2 + (armType > 0.35 ? 2 : 0)),
     armLength: overrides.armLength || (7 + (armType < -0.35 ? -1 : armType > 0.45 ? 1 : 0)),
     legWidth: overrides.legWidth || (4 + (legType > 0.35 ? 1 : 0)),
     legLength: overrides.legLength || (8 + (legType > 0.35 ? 2 : legType < -0.45 ? -1 : 0)),
-    hairLength: overrides.hairLength || (femaleBias ? 3 + (seed % 3) : 1 + (seed % 2)),
-    hairStyle: overrides.hairStyle || (wildHair ? 'wild' : ['tidy', 'parted', 'fringe'][seed % 3]),
+    hairLength: overrides.hairLength || (sex === 'female' ? 3 + (seed % 3) : 1 + (seed % 2)),
+    hairStyle: overrides.hairStyle || baseHairStyle,
     // Female uniform variant: mix short/long skirts for variety while staying in dress code.
-    skirtLength: overrides.skirtLength || (femaleBias ? (seed % 2 === 0 ? 'short' : 'long') : 'none'),
+    skirtLength: overrides.skirtLength || (sex === 'female' ? (seed % 2 === 0 ? 'short' : 'long') : 'none'),
+    makeupStyle: overrides.makeupStyle || (sex === 'female' && (seed % 3 !== 0) ? (seed % 5 === 0 ? 'bold' : 'light') : 'none'),
     sex,
   };
 }
@@ -2902,6 +2909,8 @@ function mkEntity(name, role, x, y, color, traits = {}) {
 
 const player = mkEntity('Eric', 'player', 48, 64, '#ffe04d', {
   title: 'Troublemaker with potential',
+  // Keep Eric's baseline identity stable even when intake options are adjusted.
+  sex: 'male',
   prefers: ['P.E. Field'],
   quotes: ['Not me, sir!', 'I was only looking!'],
   traitOverrides: { trading: 72, barter: 70, friendly: 62, wit: 78 },
@@ -8892,6 +8901,9 @@ function drawEntities() {
       const strikeDir = entity.facing >= 0 ? 1 : -1;
       const appearance = entity.appearance || {};
       const useUniform = isStudentCharacter(entity);
+      const isFemaleStudent = useUniform && (entity.sex || appearance.sex) === 'female';
+      // Keep uniforms weather-aware: cold days use blazers, warmer days use shirts.
+      const useBlazerUniform = useUniform && ['snow', 'windy', 'rain'].includes(game.weather);
       const headW = Math.max(8, appearance.headWidth || 10);
       const headH = Math.max(5, appearance.headHeight || 6);
       const bodyW = Math.max(11, appearance.bodyWidth || 14);
@@ -8917,6 +8929,15 @@ function drawEntities() {
         ctx.fillRect(px - Math.floor(headW / 2), py - 22 + bob - heightShift, 2, hairLength);
         ctx.fillRect(px + Math.floor(headW / 2) - 1, py - 22 + bob - heightShift, 2, hairLength);
       }
+      if (appearance.hairStyle === 'ponytail') {
+        // Ponytail reads as a single rear strand dropping behind the head.
+        ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, Math.max(3, hairLength + 1));
+      } else if (appearance.hairStyle === 'pigtails') {
+        // Pigtails: two side bundles for more variety among female students.
+        const pigLen = Math.max(2, hairLength);
+        ctx.fillRect(px - Math.floor(headW / 2) - 2, py - 21 + bob - heightShift, 2, pigLen);
+        ctx.fillRect(px + Math.floor(headW / 2), py - 21 + bob - heightShift, 2, pigLen);
+      }
       // Ears and nose shapes make pupils less identical.
       const earSize = appearance.earSize || 1;
       ctx.fillStyle = skinTone;
@@ -8934,11 +8955,18 @@ function drawEntities() {
       }
       const isBlinking = now < (entity.blinkUntil || 0);
       const eyeY = py - 22 + bob - heightShift + (appearance.eyeShape === 'sleepy' ? 1 : 0);
+      const makeupStyle = appearance.makeupStyle || 'none';
       if (isBlinking) {
         ctx.fillStyle = '#2f2f2f';
         ctx.fillRect(px - eyeSpread - 2, eyeY, 3, 1);
         ctx.fillRect(px + eyeSpread - 1, eyeY, 3, 1);
       } else {
+        if (isFemaleStudent && makeupStyle !== 'none') {
+          // Eyeshadow accent for female variants keeps faces distinct.
+          ctx.fillStyle = makeupStyle === 'bold' ? '#b565d9' : '#8aa0ff';
+          ctx.fillRect(px - eyeSpread - 2, eyeY - 1, 2, 1);
+          ctx.fillRect(px + eyeSpread - 1, eyeY - 1, 2, 1);
+        }
         // Left eye triplet.
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(px - eyeSpread - 2, eyeY, 1, 1);
@@ -8961,30 +8989,34 @@ function drawEntities() {
 
       // Mouth opens while speaking to make dialogue readable from sprites.
       const isSpeaking = Boolean(entity.speech && entity.speech.until > now);
-      ctx.fillStyle = '#4a1e1e';
+      ctx.fillStyle = isFemaleStudent && makeupStyle !== 'none' ? '#c93b65' : '#4a1e1e';
       if (isSpeaking) ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 2);
       else ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 1);
 
       // School uniform base: shirt/tie first, then role/sex overlays (e.g., blazer/skirt).
       ctx.fillStyle = useUniform ? '#f8f9fa' : body;
       const torsoTopW = appearance.torsoShape === 'tapered' ? Math.max(8, bodyW - 3) : bodyW;
-      ctx.fillRect(px - Math.floor(torsoTopW / 2), py - 18 + bob - heightShift, torsoTopW, 5);
-      ctx.fillRect(px - Math.floor(bodyW / 2), py - 13 + bob - heightShift, bodyW, 7);
+      const chestW = isFemaleStudent ? (torsoTopW + (appearance.chestWidth || 1)) : torsoTopW;
+      const hipsW = isFemaleStudent ? (bodyW + (appearance.hipWidth || 1)) : bodyW;
+      ctx.fillRect(px - Math.floor(chestW / 2), py - 18 + bob - heightShift, chestW, 5);
+      ctx.fillRect(px - Math.floor(hipsW / 2), py - 13 + bob - heightShift, hipsW, 7);
       if (useUniform) {
-        const isFemaleStudent = (entity.sex || appearance.sex) === 'female';
+        const shirtColor = '#ffffff';
+        const tieColor = '#2b59c3';
+        const blazerColor = '#2f5fbf';
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(px - 2, py - 18 + bob - heightShift, 4, 4);
-        ctx.fillStyle = '#2b59c3';
+        ctx.fillStyle = tieColor;
         ctx.fillRect(px - 1, py - 14 + bob - heightShift, 2, 4);
-        if (isFemaleStudent) {
-          // Dress code: blue blazer for girls.
-          ctx.fillStyle = '#2f5fbf';
-          ctx.fillRect(px - Math.floor(bodyW / 2), py - 17 + bob - heightShift, bodyW, 8);
-          // Keep a white shirt/tie slit visible in the center.
-          ctx.fillStyle = '#ffffff';
+        if (useBlazerUniform) {
+          // Cold-weather dress code: all pupils switch to blue blazers.
+          ctx.fillStyle = blazerColor;
+          ctx.fillRect(px - Math.floor(hipsW / 2), py - 17 + bob - heightShift, hipsW, 8);
+          // Keep a white shirt/tie slit visible in the center for readability.
+          ctx.fillStyle = shirtColor;
           ctx.fillRect(px - 1, py - 16 + bob - heightShift, 2, 5);
           ctx.fillStyle = '#234a97';
-          ctx.fillRect(px - Math.floor(bodyW / 2), py - 10 + bob - heightShift, bodyW, 2);
+          ctx.fillRect(px - Math.floor(hipsW / 2), py - 10 + bob - heightShift, hipsW, 2);
         }
       }
 
@@ -9006,7 +9038,6 @@ function drawEntities() {
       }
 
       // Legs vary by profile; girls in uniform use short/long skirt variants.
-      const isFemaleStudent = useUniform && (entity.sex || appearance.sex) === 'female';
       const skirtLength = appearance.skirtLength === 'long' ? 'long' : 'short';
       ctx.fillStyle = useUniform ? '#111827' : '#1f2a44';
       if (seated) {
@@ -9014,12 +9045,14 @@ function drawEntities() {
           const seatedSkirtDrop = skirtLength === 'long' ? 5 : 3;
           ctx.fillStyle = '#1f3f85';
           ctx.fillRect(px - Math.floor(bodyW / 2), py - 9 - heightShift, bodyW, seatedSkirtDrop);
-          ctx.fillStyle = '#111827';
+          // Female skirts reveal skin-tone legs below hem line.
+          ctx.fillStyle = skinTone;
           ctx.fillRect(px - Math.floor(bodyW / 2), py - 6 - heightShift, legW, 5);
           ctx.fillRect(px + Math.floor(bodyW / 2) - legW, py - 6 - heightShift, legW, 5);
         } else {
-          ctx.fillRect(px - Math.floor(bodyW / 2), py - 8 - heightShift, 6, 3);
-          ctx.fillRect(px + Math.floor(bodyW / 2) - 6, py - 8 - heightShift, 6, 3);
+          // Keep male/pants variants visually trouser-like, not skirt-like.
+          ctx.fillRect(px - Math.floor(bodyW / 2), py - 8 - heightShift, 5, 3);
+          ctx.fillRect(px + Math.floor(bodyW / 2) - 5, py - 8 - heightShift, 5, 3);
           ctx.fillRect(px - Math.floor(bodyW / 2), py - 5 - heightShift, legW, 6);
           ctx.fillRect(px + Math.floor(bodyW / 2) - legW, py - 5 - heightShift, legW, 6);
         }
@@ -9031,7 +9064,8 @@ function drawEntities() {
           const standingSkirtDrop = skirtLength === 'long' ? 8 : 5;
           ctx.fillStyle = '#1f3f85';
           ctx.fillRect(px - Math.floor(bodyW / 2), py - 7 - heightShift, bodyW, standingSkirtDrop);
-          ctx.fillStyle = '#111827';
+          // Female skirts reveal skin-tone legs below hem line.
+          ctx.fillStyle = skinTone;
           const legTop = py - 4 + (skirtLength === 'long' ? 2 : 0);
           const legLen = skirtLength === 'long' ? Math.max(5, legL - 2) : legL;
           ctx.fillRect(px - legW - 1, legTop + legKick - heightShift, legW, legLen);
