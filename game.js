@@ -2613,6 +2613,9 @@ const game = {
   // Lesson chatter rhythm: teachers hush classes briefly, then noise returns gradually.
   lessonQuietUntil: 0,
   lessonNoiseLevel: 0,
+  // Classroom callout throttles reduce rapid-fire pupil shouting and line repetition.
+  lastClassroomStudentCalloutAt: -Infinity,
+  recentClassroomStudentCallouts: {},
   medicalEmergency: null,
   headmasterDetentionUntil: 0,
   headmasterDismissAnnounced: false,
@@ -3394,6 +3397,11 @@ function roomByName(name) {
 
 function roomCenter(name) {
   const r = roomByName(name);
+  if (!r) {
+    // Defensive fallback: unknown room keys can appear during transient reroutes.
+    // Return world center so callers keep running instead of crashing the main loop.
+    return { x: WORLD.w / 2, y: WORLD.h / 2 };
+  }
   return { x: r.x + r.w / 2, y: r.y + r.h / 2 };
 }
 
@@ -3936,9 +3944,17 @@ function teleportEntityOutsideCurrentDoor(entity, destination) {
 function teleportEntityToTarget(entity, target, reason = 'stuck') {
   if (!target) return;
 
+  // Teleport rescue always lands on valid floor tiles so NPCs do not reappear in corners/walls.
+  const fallbackRoomName = entity.lessonRoom || entityRoom(entity);
+  const fallbackRoomCenter = fallbackRoomName ? roomCenter(fallbackRoomName) : null;
+  const safeTarget = nearestWalkablePoint(target, [
+    routeWaypoint(entity, target),
+    fallbackRoomCenter,
+  ]) || target;
+
   // Teleporting is a last-resort recovery so NPCs never remain blocked forever.
-  entity.x = target.x;
-  entity.y = target.y;
+  entity.x = safeTarget.x;
+  entity.y = safeTarget.y;
   entity.vx = 0;
   entity.vy = 0;
   entity.jamSeconds = 0;
@@ -3973,6 +3989,22 @@ function resolvePersistentOverlap(entity, currentPeriod, dtSeconds) {
   teleportEntityToTarget(entity, seatTarget || roomCenter(currentPeriod.room), 'overlap');
 }
 
+function corridorCenterlineY(floor = 'ground') {
+  if (floor === 'upper') return 17;
+  if (floor === 'middle') return 52;
+  if (floor === 'lower') return 112;
+  return 78;
+}
+
+function shouldCruiseCorridorCenter(entity, currentRoom, destinationRoom, entryDoor) {
+  if (!entity || !currentRoom || currentRoom.type !== 'corridor' || !destinationRoom || !entryDoor) return false;
+  if (destinationRoom.type === 'corridor' || destinationRoom.type === 'outdoor') return false;
+  if (currentRoom.floor !== destinationRoom.floor) return false;
+  const horizontalGapToDoor = Math.abs(entity.x - entryDoor.x);
+  // Stay in corridor center while travelling; only peel toward the wall when close to the door.
+  return horizontalGapToDoor > 2.15;
+}
+
 function routeWaypoint(entity, destination) {
   const currentRoom = roomAtPosition(entity);
   const destinationRoom = roomAtPosition(destination);
@@ -3998,6 +4030,11 @@ function routeWaypoint(entity, destination) {
 
   if (destinationRoom && destinationRoom.type !== 'corridor' && destinationRoom.type !== 'outdoor') {
     const entryDoor = roomDoorway(destinationRoom);
+    if (shouldCruiseCorridorCenter(entity, currentRoom, destinationRoom, entryDoor)) {
+      const laneY = corridorCenterlineY(currentRoom.floor);
+      // Center-lane cruise prevents students/Eric scraping corridor walls before the final door approach.
+      return { x: entryDoor.x, y: laneY };
+    }
     const stagedDoor = doorwayStagingPoint(entity, entryDoor, destinationRoom);
     if (stagedDoor && distance(entity, stagedDoor) > 1.1) return stagedDoor;
   }
@@ -4566,6 +4603,32 @@ function ensureAddressedNameInSpeech(line, addresseeName) {
   return `${addresseeName}, ${text}`;
 }
 
+
+function normalizedClassroomCalloutKey(text) {
+  // Normalize punctuation/emoji/case so near-identical lines share one recent-key.
+  return String(text || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function classroomCalloutRecentlyUsed(roomName, text, now = performance.now(), lookbackMs = 22000) {
+  if (!roomName || !text) return false;
+  const key = normalizedClassroomCalloutKey(text);
+  if (!key) return false;
+  const bucket = game.recentClassroomStudentCallouts[roomName] || [];
+  const fresh = bucket.filter((entry) => (now - (entry.at || 0)) <= lookbackMs);
+  game.recentClassroomStudentCallouts[roomName] = fresh;
+  return fresh.some((entry) => entry.key === key);
+}
+
+function rememberClassroomCallout(roomName, text, now = performance.now()) {
+  if (!roomName || !text) return;
+  const key = normalizedClassroomCalloutKey(text);
+  if (!key) return;
+  const bucket = game.recentClassroomStudentCallouts[roomName] || [];
+  bucket.push({ key, at: now });
+  // Keep small rolling history per room to reduce allocation churn.
+  game.recentClassroomStudentCallouts[roomName] = bucket.slice(-18);
+}
+
 function say(entity, text, opts = {}) {
   if (!entity || !text) return;
   const now = performance.now();
@@ -4826,8 +4889,14 @@ function drawRoundedBubble(x, y, lines, style) {
   ctx.font = font;
   const bubbleWidth = Math.max(...lines.map((line) => ctx.measureText(line).width), 28) + (paddingX * 2);
   const bubbleHeight = (lines.length * lineHeight) + (paddingY * 2);
-  const left = Math.round(x - bubbleWidth / 2);
-  const top = Math.round(y - bubbleHeight);
+  const unclampedLeft = x - bubbleWidth / 2;
+  const unclampedTop = y - bubbleHeight;
+  // Keep social bubbles fully visible even for pupils stood at classroom edges/corners.
+  const left = Math.round(Math.max(4, Math.min(canvas.width - bubbleWidth - 4, unclampedLeft)));
+  const top = Math.round(Math.max(4, Math.min(canvas.height - bubbleHeight - 16, unclampedTop)));
+  // Tail anchor follows speaker while respecting bubble bounds after clamping.
+  const rawTailX = Math.round(left + tailOffsetX + 4);
+  const tailAnchorX = Math.max(left + 8, Math.min(left + bubbleWidth - 8, rawTailX));
 
   ctx.save();
   ctx.shadowColor = shadowColor;
@@ -4845,9 +4914,9 @@ function drawRoundedBubble(x, y, lines, style) {
   if (bubblyTail) {
     // Thought bubbles get smaller trailing circles so they read as "thinking" at a glance.
     const bubbleTrail = [
-      { x: left + tailOffsetX + 6, y: top + bubbleHeight + 4, r: 3.6 },
-      { x: left + tailOffsetX + 11, y: top + bubbleHeight + 9, r: 2.7 },
-      { x: left + tailOffsetX + 15, y: top + bubbleHeight + 13, r: 2.1 },
+      { x: tailAnchorX - 4, y: top + bubbleHeight + 4, r: 3.6 },
+      { x: tailAnchorX + 1, y: top + bubbleHeight + 9, r: 2.7 },
+      { x: tailAnchorX + 5, y: top + bubbleHeight + 13, r: 2.1 },
     ];
     ctx.fillStyle = fillColor;
     ctx.strokeStyle = strokeColor;
@@ -4861,9 +4930,9 @@ function drawRoundedBubble(x, y, lines, style) {
     ctx.fillStyle = fillColor;
     ctx.strokeStyle = strokeColor;
     ctx.beginPath();
-    ctx.moveTo(left + tailOffsetX, top + bubbleHeight);
-    ctx.lineTo(left + tailOffsetX + 8, top + bubbleHeight);
-    ctx.lineTo(left + tailOffsetX + 4, top + bubbleHeight + 8);
+    ctx.moveTo(tailAnchorX - 4, top + bubbleHeight);
+    ctx.lineTo(tailAnchorX + 4, top + bubbleHeight);
+    ctx.lineTo(tailAnchorX, top + bubbleHeight + 8);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
@@ -7205,22 +7274,30 @@ function updateAI(dt) {
       announce(`😈 ${entity.name} started misbehaving in ${current.period}.`);
     }
 
-    // In class students periodically attempt teacher prompts and can daydream.
+    // In class students can call out or daydream, but pacing is intentionally capped.
     const iqFactor = (entity.traits?.intelligence || 50) / 100;
     const witFactor = (entity.traits?.wit || 50) / 100;
-    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < (0.00072 + (game.lessonNoiseLevel * (0.0022 + (iqFactor * 0.0032))))) {
-      if (game.rng() < (0.45 + (iqFactor * 0.28) + (witFactor * 0.12))) {
+    const classroomCalloutCooldownMs = 3400;
+    const classroomCalloutDue = now - (game.lastClassroomStudentCalloutAt || -Infinity) >= classroomCalloutCooldownMs;
+    const calloutChance = 0.00018 + (game.lessonNoiseLevel * (0.00045 + (iqFactor * 0.0006)));
+    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && classroomCalloutDue && game.rng() < calloutChance) {
+      if (game.rng() < (0.34 + (iqFactor * 0.16) + (witFactor * 0.07))) {
         ensureDialogueSetup(entity);
         const responseLine = contextualResponseFor(entity, assignedTeacherEntityForPeriod(current));
         const spokenAttempt = game.quizActive && !game.quizActive.resolved
-          ? (entity.role === 'swot' && game.rng() < 0.75 ? game.quizActive.answer : randomFunnyWrongAnswer())
+          ? (entity.role === 'swot' && game.rng() < 0.72 ? game.quizActive.answer : randomFunnyWrongAnswer())
           : responseLine;
-        say(entity, spokenAttempt);
-        announce(`📚 ${entity.name} calls out: "${spokenAttempt}"`, { source: entity, range: 7.5 });
-        if (game.quizActive && !game.quizActive.resolved && now > game.quizActive.playerWindowUntil && game.rng() < (entity.role === 'swot' ? 0.38 : 0.07)) {
-          resolveClassQuestionAttempt(game.quizActive, entity, spokenAttempt, entity.role === 'swot' && normalizeAnswerText(spokenAttempt) === game.quizActive.answer);
+        if (!classroomCalloutRecentlyUsed(current.room, spokenAttempt, now)) {
+          const spoken = deliverResolvedSpeech(entity, spokenAttempt, inferSpeechAddressee(entity), { durationMs: 3000, feedRange: 7.5 }, now);
+          if (spoken) {
+            rememberClassroomCallout(current.room, spokenAttempt, now);
+            game.lastClassroomStudentCalloutAt = now;
+            if (game.quizActive && !game.quizActive.resolved && now > game.quizActive.playerWindowUntil && game.rng() < (entity.role === 'swot' ? 0.26 : 0.04)) {
+              resolveClassQuestionAttempt(game.quizActive, entity, spokenAttempt, entity.role === 'swot' && normalizeAnswerText(spokenAttempt) === game.quizActive.answer);
+            }
+            entity.emotion = Math.min(100, entity.emotion + 1.2);
+          }
         }
-        entity.emotion = Math.min(100, entity.emotion + 1.2);
       } else {
         ensureDialogueSetup(entity);
         const daydreams = entity.dialogue.thoughts || ['☁️ Looking out the window...'];
@@ -7319,6 +7396,26 @@ function updateAI(dt) {
         : (getSeatPosition(expectedRoomNow, entity.seatIndex, entity)
           || roomCenter(expectedRoomNow)
           || entity.target);
+    }
+
+    // Teachers now deliver a steady baseline of classroom talk so speech bubbles are
+    // consistently visible during lessons instead of depending on rare noise spikes.
+    if (inLesson && entity.role === 'teacher' && entityRoom(entity) === current.room && !isAssemblyPeriod(current)) {
+      const nextPromptGapMs = 15000 + ((entity.seatIndex % 5) * 900);
+      const dueForPrompt = now - (entity.lastClassroomPromptAt || 0) > nextPromptGapMs;
+      const alreadySpeaking = Boolean(entity.speech && entity.speech.until > now);
+      if (dueForPrompt && !alreadySpeaking && canUseDialogue(entity, now, 'speech')) {
+        const promptLines = [
+          '📘 Keep your eyes on the board — we are building on this in the quiz.',
+          '📝 Pens moving please; write the next answer in full.',
+          '🎯 Good pace everyone — one clear line at a time.',
+          '🧠 Think first, then answer. Accuracy before speed.',
+          '🔍 Check your working and underline the key point.',
+        ];
+        const line = promptLines[Math.floor(game.rng() * promptLines.length)];
+        const spoken = deliverResolvedSpeech(entity, line, inferSpeechAddressee(entity), { durationMs: 3200 }, now);
+        if (spoken) entity.lastClassroomPromptAt = now;
+      }
     }
 
     // Teacher occasionally hushes the class, then students slowly get noisy again.
