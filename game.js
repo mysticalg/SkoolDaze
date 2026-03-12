@@ -356,6 +356,9 @@ const computerUseMeta = {
   pictures: { icon: '🖼️', color: '#ffc6ff', label: 'Pictures' },
 };
 
+// Keep weekday labels available before schedule initialisation runs.
+const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
 // Bell schedule now compresses a full school day to ~15 real-world minutes.
 function buildScheduleForDay(dayCount = 1) {
   const weekday = weekdayLabelForDay(dayCount);
@@ -506,7 +509,6 @@ const COLLECTABLE_LIFETIME_MS = 60000;
 const COLLECTABLE_SPAWN_INTERVAL_MS = 4200;
 const MAX_ACTIVE_COLLECTABLES = 7;
 
-const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const MONSTER_PREFIXES = ['Aero', 'Blaze', 'Crystal', 'Dread', 'Echo', 'Frost', 'Giga', 'Hex', 'Iron', 'Jade', 'Nova', 'Shadow', 'Solar', 'Storm', 'Venom', 'Wild'];
 const MONSTER_SUFFIXES = ['Drake', 'Mantis', 'Golem', 'Specter', 'Hydra', 'Raptor', 'Warden', 'Seraph', 'Wisp', 'Leviathan', 'Titan', 'Sprite', 'Colossus', 'Phantom', 'Wyvern', 'Stalker'];
 const MONSTER_ABILITIES = ['Flame burst', 'Mind shield', 'Quick strike', 'Poison cloud', 'Stone skin', 'Arc pulse', 'Mirror dodge', 'Moon howl'];
