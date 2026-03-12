@@ -642,6 +642,9 @@ const ROLE_VISUALS = {
   swot: '#8effd3',
   weird: '#c58eff',
 };
+
+// Lightweight student expression set used by ambient social animation.
+const STUDENT_EXPRESSIVE_EMOTES = ['dance-1', 'dance-2', 'dance-3', 'high-five', 'wave', 'celebrate', 'cry', 'angry'];
 // NPC stamina tuning:
 // - movement drain is 4x slower than the previous build so students do not crash before lunch.
 // - a gentle day-fatigue baseline still brings most pupils to ~30 energy by home time.
@@ -2892,6 +2895,12 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     // Facial animation timers keep eyes/mouth lively without expensive sprite swaps.
     blinkUntil: 0,
     nextBlinkAt: performance.now() + 2000 + Math.random() * 7000,
+    // Ambient expression animation allows pupils to emote non-verbally.
+    emote: null,
+    emoteUntil: 0,
+    nextEmoteAt: performance.now() + 2500 + Math.random() * 5000,
+    // Cached facing mode keeps front/back/side sprites stable when velocity is tiny.
+    renderFacing: 'front',
     dailyCards: [],
     refusesEricUntilDay: 0,
     // Lunch-service state machine: plate -> queue -> serve -> sit -> eat.
@@ -7134,6 +7143,42 @@ function pushStudentAsideForTeacher(teacher, student, dtSeconds) {
   constrain(student);
 }
 
+function triggerStudentEmote(entity, now, emote, durationMs = 1400) {
+  entity.emote = emote;
+  entity.emoteUntil = now + durationMs;
+}
+
+function maybeTriggerAmbientStudentEmote(entity, current, now) {
+  if (!isStudentCharacter(entity) || entity.role === 'player') return;
+  if (entity.knockedUntil > now) return;
+  if (now < (entity.emoteUntil || 0)) return;
+  if (now < (entity.nextEmoteAt || 0)) return;
+
+  const inAssemblyHall = isAssemblyPeriod(current) && entityRoom(entity) === 'Assembly Hall';
+  const inBreak = !isSupervisedPeriod(current);
+  const inDining = isLunchtimePeriod(current) && entityRoom(entity) === 'Dining Hall';
+  const mood = entity.mood || 'calm';
+
+  // Keep expression moments occasional so animation remains readable, not noisy.
+  let chance = 0.08;
+  if (inAssemblyHall || inDining) chance = 0.14;
+  else if (inBreak) chance = 0.11;
+
+  let emotePool = STUDENT_EXPRESSIVE_EMOTES;
+  if (mood === 'furious') emotePool = ['angry', 'angry', 'angry', 'cry'];
+  else if (mood === 'angry') emotePool = ['angry', 'angry', 'dance-2', 'cry'];
+  else if (inAssemblyHall) emotePool = ['wave', 'celebrate', 'dance-1', 'dance-3', 'high-five'];
+  else if (inDining) emotePool = ['high-five', 'wave', 'dance-2', 'celebrate'];
+
+  if (game.rng() < chance) {
+    const pick = emotePool[Math.floor(game.rng() * emotePool.length)] || 'wave';
+    const durationMs = pick.startsWith('dance') ? 1700 : pick === 'cry' ? 1500 : 1300;
+    triggerStudentEmote(entity, now, pick, durationMs);
+  }
+
+  entity.nextEmoteAt = now + 3200 + (game.rng() * 6800);
+}
+
 function updateAI(dt) {
   const current = schedule[game.periodIndex];
   const supervised = isSupervisedPeriod(current);
@@ -7198,6 +7243,9 @@ function updateAI(dt) {
     const isOutside = ['P.E. Field', 'School Gates', 'Bike Sheds'].includes(entityRoom(entity));
     const lunchDutyLady = dinnerLadyEntity();
     const dinnerLadyWatchingField = dinnerLadyCanObserve(lunchDutyLady);
+
+    // Students occasionally emote (dance/wave/high-five/etc.) to express social mood.
+    if (isStudent) maybeTriggerAmbientStudentEmote(entity, current, now);
 
 
     if (isLunchtimePeriod(current) && isStudent) {
@@ -8882,6 +8930,27 @@ function drawEntities() {
     } else {
       const moving = Math.abs(entity.vx) + Math.abs(entity.vy) > 0.05;
       const seated = Boolean(entity.isSeated);
+      // Preserve orientation while idle and support a side-on frame for horizontal walking.
+      if (!['front', 'back', 'side'].includes(entity.renderFacing)) entity.renderFacing = 'front';
+      const absVx = Math.abs(entity.vx);
+      const absVy = Math.abs(entity.vy);
+      if (absVx > 0.05 || absVy > 0.05) {
+        // Horizontal dominance => side-facing profile. Vertical dominance => front/back.
+        if (absVx > absVy * 1.2) entity.renderFacing = 'side';
+        else if (entity.vy < -0.035) entity.renderFacing = 'back';
+        else if (entity.vy > 0.035) entity.renderFacing = 'front';
+      }
+
+      // Classroom-seated pupils always face the board; moving up also shows a back view.
+      const seatedFacingAway = seated
+        && isStudentCharacter(entity)
+        && entity.seatedRoom
+        && roomByName(entity.seatedRoom)?.type === 'classroom';
+      const assemblyFacingHeadmaster = isAssemblyPeriod(current)
+        && isStudentCharacter(entity)
+        && entityRoom(entity) === 'Assembly Hall';
+      const facingBack = seatedFacingAway || assemblyFacingHeadmaster || entity.renderFacing === 'back';
+      const facingSide = !facingBack && entity.renderFacing === 'side';
       // 5-frame walk cycle to replace the previous 2-pose sine swing.
       const walkFrame = moving && !seated ? Math.floor(entity.animPhase) % 5 : 2;
       const walkBobOffsets = [-1.5, -0.5, 0.75, -0.5, -1.5];
@@ -8899,6 +8968,9 @@ function drawEntities() {
       const writingFrame = isWriting ? Math.floor((now / 90) % 4) : 0;
 
       const strikeDir = entity.facing >= 0 ? 1 : -1;
+      // Side-facing sprite direction is intentionally inverted from legacy strikeDir
+      // so horizontal travel direction matches the visible profile orientation.
+      const sideFacingRight = entity.facing < 0;
       const appearance = entity.appearance || {};
       const useUniform = isStudentCharacter(entity);
       const isFemaleStudent = useUniform && (entity.sex || appearance.sex) === 'female';
@@ -8920,6 +8992,7 @@ function drawEntities() {
       ctx.fillRect(px - Math.floor(headW / 2), py - 24 + bob - heightShift, headW, headH);
       ctx.fillStyle = hairColor;
       const hairLength = Math.max(1, appearance.hairLength || 1);
+      const backHairDrop = Math.max(0, hairLength - 1);
       ctx.fillRect(px - Math.floor(headW / 2), py - 24 + bob - heightShift, headW, 2);
       if (appearance.hairStyle === 'wild') {
         ctx.fillRect(px - Math.floor(headW / 2) - 1, py - 25 + bob - heightShift, headW + 2, 1);
@@ -8941,46 +9014,88 @@ function drawEntities() {
       // Ears and nose shapes make pupils less identical.
       const earSize = appearance.earSize || 1;
       ctx.fillStyle = skinTone;
-      ctx.fillRect(px - Math.floor(headW / 2) - 1, py - 21 + bob - heightShift, earSize, 2);
-      ctx.fillRect(px + Math.floor(headW / 2), py - 21 + bob - heightShift, earSize, 2);
-      ctx.fillStyle = '#6d4c41';
-      const noseX = appearance.noseType === 'long' ? px : px - 1;
-      const noseH = appearance.noseType === 'button' ? 1 : appearance.noseType === 'long' ? 2 : 1;
-      ctx.fillRect(noseX, py - 20 + bob - heightShift, 1, noseH);
-      // Eyes: white + iris color + black pupil pixels; blink every ~10s randomly.
-      const eyeSpread = appearance.eyeSpread || 1;
-      if (now >= (entity.nextBlinkAt || 0)) {
-        entity.blinkUntil = now + 130;
-        entity.nextBlinkAt = now + (8000 + game.rng() * 4000);
-      }
-      const isBlinking = now < (entity.blinkUntil || 0);
-      const eyeY = py - 22 + bob - heightShift + (appearance.eyeShape === 'sleepy' ? 1 : 0);
-      const makeupStyle = appearance.makeupStyle || 'none';
-      if (isBlinking) {
-        ctx.fillStyle = '#2f2f2f';
-        ctx.fillRect(px - eyeSpread - 2, eyeY, 3, 1);
-        ctx.fillRect(px + eyeSpread - 1, eyeY, 3, 1);
+      if (facingSide) {
+        const earX = sideFacingRight ? px - Math.floor(headW / 2) - 1 : px + Math.floor(headW / 2);
+        ctx.fillRect(earX, py - 21 + bob - heightShift, earSize, 2);
       } else {
-        if (isFemaleStudent && makeupStyle !== 'none') {
-          // Eyeshadow accent for female variants keeps faces distinct.
-          ctx.fillStyle = makeupStyle === 'bold' ? '#b565d9' : '#8aa0ff';
-          ctx.fillRect(px - eyeSpread - 2, eyeY - 1, 2, 1);
-          ctx.fillRect(px + eyeSpread - 1, eyeY - 1, 2, 1);
+        ctx.fillRect(px - Math.floor(headW / 2) - 1, py - 21 + bob - heightShift, earSize, 2);
+        ctx.fillRect(px + Math.floor(headW / 2), py - 21 + bob - heightShift, earSize, 2);
+      }
+      const makeupStyle = appearance.makeupStyle || 'none';
+      if (facingBack) {
+        // Back-facing frame: hide front-face features and render length-dependent rear hair.
+        ctx.fillStyle = hairColor;
+        ctx.fillRect(px - Math.floor(headW / 2), py - 22 + bob - heightShift, headW, 3);
+        if (backHairDrop > 0) {
+          const backHairWidth = Math.max(4, Math.floor(headW * 0.65));
+          ctx.fillRect(px - Math.floor(backHairWidth / 2), py - 19 + bob - heightShift, backHairWidth, backHairDrop + 1);
         }
-        // Left eye triplet.
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(px - eyeSpread - 2, eyeY, 1, 1);
-        ctx.fillStyle = appearance.eyeColor || '#1d3557';
-        ctx.fillRect(px - eyeSpread - 1, eyeY, 1, 1);
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(px - eyeSpread, eyeY, 1, 1);
-        // Right eye triplet.
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(px + eyeSpread - 1, eyeY, 1, 1);
-        ctx.fillStyle = appearance.eyeColor || '#1d3557';
-        ctx.fillRect(px + eyeSpread, eyeY, 1, 1);
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(px + eyeSpread + 1, eyeY, 1, 1);
+        ctx.fillStyle = '#5b4636';
+        ctx.fillRect(px - 2, py - 19 + bob - heightShift, 4, 1);
+      } else {
+        ctx.fillStyle = '#6d4c41';
+        const noseH = appearance.noseType === 'button' ? 1 : appearance.noseType === 'long' ? 2 : 1;
+        if (facingSide) {
+          // Side profile nose extends toward the facing direction.
+          const noseX = sideFacingRight ? px + Math.floor(headW / 2) - 1 : px - Math.floor(headW / 2);
+          ctx.fillRect(noseX, py - 20 + bob - heightShift, 2, 1);
+          if (noseH > 1) ctx.fillRect(noseX + (sideFacingRight ? 1 : 0), py - 19 + bob - heightShift, 1, 1);
+        } else {
+          const noseX = appearance.noseType === 'long' ? px : px - 1;
+          ctx.fillRect(noseX, py - 20 + bob - heightShift, 1, noseH);
+        }
+        // Eyes: white + iris color + black pupil pixels; blink every ~10s randomly.
+        const eyeSpread = appearance.eyeSpread || 1;
+        if (now >= (entity.nextBlinkAt || 0)) {
+          entity.blinkUntil = now + 130;
+          entity.nextBlinkAt = now + (8000 + game.rng() * 4000);
+        }
+        const isBlinking = now < (entity.blinkUntil || 0);
+        const eyeY = py - 22 + bob - heightShift + (appearance.eyeShape === 'sleepy' ? 1 : 0);
+        if (isBlinking) {
+          ctx.fillStyle = '#2f2f2f';
+          if (facingSide) {
+            const eyeX = sideFacingRight ? px + 1 : px - 2;
+            ctx.fillRect(eyeX, eyeY, 2, 1);
+          } else {
+            ctx.fillRect(px - eyeSpread - 2, eyeY, 3, 1);
+            ctx.fillRect(px + eyeSpread - 1, eyeY, 3, 1);
+          }
+        } else {
+          if (isFemaleStudent && makeupStyle !== 'none') {
+            // Eyeshadow accent for female variants keeps faces distinct.
+            ctx.fillStyle = makeupStyle === 'bold' ? '#b565d9' : '#8aa0ff';
+            if (facingSide) {
+              const eyeX = sideFacingRight ? px + 1 : px - 2;
+              ctx.fillRect(eyeX, eyeY - 1, 2, 1);
+            } else {
+              ctx.fillRect(px - eyeSpread - 2, eyeY - 1, 2, 1);
+              ctx.fillRect(px + eyeSpread - 1, eyeY - 1, 2, 1);
+            }
+          }
+          if (facingSide) {
+            const eyeX = sideFacingRight ? px + 1 : px - 2;
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(eyeX, eyeY, 1, 1);
+            ctx.fillStyle = appearance.eyeColor || '#1d3557';
+            ctx.fillRect(eyeX + 1, eyeY, 1, 1);
+          } else {
+            // Left eye triplet.
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(px - eyeSpread - 2, eyeY, 1, 1);
+            ctx.fillStyle = appearance.eyeColor || '#1d3557';
+            ctx.fillRect(px - eyeSpread - 1, eyeY, 1, 1);
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(px - eyeSpread, eyeY, 1, 1);
+            // Right eye triplet.
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(px + eyeSpread - 1, eyeY, 1, 1);
+            ctx.fillStyle = appearance.eyeColor || '#1d3557';
+            ctx.fillRect(px + eyeSpread, eyeY, 1, 1);
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(px + eyeSpread + 1, eyeY, 1, 1);
+          }
+        }
       }
       if (appearance.acne) {
         ctx.fillStyle = '#d98f8f';
@@ -8989,34 +9104,82 @@ function drawEntities() {
 
       // Mouth opens while speaking to make dialogue readable from sprites.
       const isSpeaking = Boolean(entity.speech && entity.speech.until > now);
-      ctx.fillStyle = isFemaleStudent && makeupStyle !== 'none' ? '#c93b65' : '#4a1e1e';
-      if (isSpeaking) ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 2);
-      else ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 1);
+      const activeEmote = now < (entity.emoteUntil || 0) ? entity.emote : null;
+      if (!facingBack) {
+        ctx.fillStyle = isFemaleStudent && makeupStyle !== 'none' ? '#c93b65' : '#4a1e1e';
+        const mouthX = facingSide ? (sideFacingRight ? px + 1 : px - 2) : px - 1;
+        if (isSpeaking) ctx.fillRect(mouthX, py - 18 + bob - heightShift, 2, 2);
+        else ctx.fillRect(mouthX, py - 18 + bob - heightShift, 2, 1);
+        if (activeEmote === 'cry') {
+          // Crying frame: visible tears under both eyes.
+          ctx.fillStyle = '#7cc8ff';
+          ctx.fillRect(px - 3, py - 20 + bob - heightShift, 1, 2);
+          ctx.fillRect(px + 2, py - 20 + bob - heightShift, 1, 2);
+        } else if (activeEmote === 'angry') {
+          // Angry frame: heavy brows and a stress mark on forehead.
+          ctx.fillStyle = '#2b2b2b';
+          ctx.fillRect(px - 4, py - 23 + bob - heightShift, 3, 1);
+          ctx.fillRect(px + 1, py - 23 + bob - heightShift, 3, 1);
+          ctx.fillStyle = '#e63946';
+          ctx.fillRect(px + 4, py - 24 + bob - heightShift, 1, 2);
+        }
+      }
 
       // School uniform base: shirt/tie first, then role/sex overlays (e.g., blazer/skirt).
       ctx.fillStyle = useUniform ? '#f8f9fa' : body;
       const torsoTopW = appearance.torsoShape === 'tapered' ? Math.max(8, bodyW - 3) : bodyW;
       const chestW = isFemaleStudent ? (torsoTopW + (appearance.chestWidth || 1)) : torsoTopW;
       const hipsW = isFemaleStudent ? (bodyW + (appearance.hipWidth || 1)) : bodyW;
-      ctx.fillRect(px - Math.floor(chestW / 2), py - 18 + bob - heightShift, chestW, 5);
-      ctx.fillRect(px - Math.floor(hipsW / 2), py - 13 + bob - heightShift, hipsW, 7);
+      if (facingSide) {
+        // Side-on torso is slimmer so profile direction is obvious at a glance.
+        const sideTorsoW = Math.max(6, Math.floor(chestW * 0.45));
+        const sideHipsW = Math.max(6, Math.floor(hipsW * 0.5));
+        const sideTorsoX = sideFacingRight ? px - 1 : px - sideTorsoW + 1;
+        const sideHipX = sideFacingRight ? px - 1 : px - sideHipsW + 1;
+        ctx.fillRect(sideTorsoX, py - 18 + bob - heightShift, sideTorsoW, 5);
+        ctx.fillRect(sideHipX, py - 13 + bob - heightShift, sideHipsW, 7);
+      } else {
+        ctx.fillRect(px - Math.floor(chestW / 2), py - 18 + bob - heightShift, chestW, 5);
+        ctx.fillRect(px - Math.floor(hipsW / 2), py - 13 + bob - heightShift, hipsW, 7);
+      }
       if (useUniform) {
         const shirtColor = '#ffffff';
         const tieColor = '#2b59c3';
         const blazerColor = '#2f5fbf';
         ctx.fillStyle = '#ffffff';
-        ctx.fillRect(px - 2, py - 18 + bob - heightShift, 4, 4);
-        ctx.fillStyle = tieColor;
-        ctx.fillRect(px - 1, py - 14 + bob - heightShift, 2, 4);
+        if (facingSide) {
+          // Side profile: shirt seam only (no tie visible from side-on request).
+          const shirtX = sideFacingRight ? px : px - 2;
+          ctx.fillRect(shirtX, py - 18 + bob - heightShift, 2, 5);
+        } else {
+          ctx.fillRect(px - 2, py - 18 + bob - heightShift, 4, 4);
+          ctx.fillStyle = tieColor;
+          ctx.fillRect(px - 1, py - 14 + bob - heightShift, 2, 4);
+        }
         if (useBlazerUniform) {
           // Cold-weather dress code: all pupils switch to blue blazers.
           ctx.fillStyle = blazerColor;
-          ctx.fillRect(px - Math.floor(hipsW / 2), py - 17 + bob - heightShift, hipsW, 8);
-          // Keep a white shirt/tie slit visible in the center for readability.
-          ctx.fillStyle = shirtColor;
-          ctx.fillRect(px - 1, py - 16 + bob - heightShift, 2, 5);
+          if (facingSide) {
+            const sideBlazerW = Math.max(6, Math.floor(hipsW * 0.5));
+            const sideBlazerX = sideFacingRight ? px - 1 : px - sideBlazerW + 1;
+            ctx.fillRect(sideBlazerX, py - 17 + bob - heightShift, sideBlazerW, 8);
+            ctx.fillStyle = shirtColor;
+            const seamX = sideFacingRight ? px : px - 1;
+            ctx.fillRect(seamX, py - 16 + bob - heightShift, 1, 5);
+          } else {
+            ctx.fillRect(px - Math.floor(hipsW / 2), py - 17 + bob - heightShift, hipsW, 8);
+            // Keep a white shirt/tie slit visible in the center for readability.
+            ctx.fillStyle = shirtColor;
+            ctx.fillRect(px - 1, py - 16 + bob - heightShift, 2, 5);
+          }
           ctx.fillStyle = '#234a97';
-          ctx.fillRect(px - Math.floor(hipsW / 2), py - 10 + bob - heightShift, hipsW, 2);
+          if (facingSide) {
+            const sideTrimW = Math.max(6, Math.floor(hipsW * 0.5));
+            const sideTrimX = sideFacingRight ? px - 1 : px - sideTrimW + 1;
+            ctx.fillRect(sideTrimX, py - 10 + bob - heightShift, sideTrimW, 2);
+          } else {
+            ctx.fillRect(px - Math.floor(hipsW / 2), py - 10 + bob - heightShift, hipsW, 2);
+          }
         }
       }
 
@@ -9027,10 +9190,49 @@ function drawEntities() {
       // Assembly flourish: the headmaster waves both arms while speaking from the podium.
       const isHeadmasterAssemblySpeech = entity.name === 'Mr Wacker' && entityRoom(entity) === 'Assembly Hall' && isSpeaking;
       const speechWave = isHeadmasterAssemblySpeech ? Math.sin(now / 95) * 3.8 : 0;
-      const leftArmYOffset = py - 17 + armKick + (strikeDir < 0 ? punchLift : 0) - (isWriting ? writingFrame : 0) - heightShift - speechWave;
-      const rightArmYOffset = py - 17 - armKick + (strikeDir > 0 ? punchLift : 0) + (isWriting ? writingFrame : 0) - heightShift + speechWave;
-      ctx.fillRect(leftArmX, leftArmYOffset, armW, armL);
-      ctx.fillRect(rightArmX, rightArmYOffset, armW, armL);
+      let leftArmYOffset = py - 17 + armKick + (strikeDir < 0 ? punchLift : 0) - (isWriting ? writingFrame : 0) - heightShift - speechWave;
+      let rightArmYOffset = py - 17 - armKick + (strikeDir > 0 ? punchLift : 0) + (isWriting ? writingFrame : 0) - heightShift + speechWave;
+      let emoteLegDelta = 0;
+      // Emote overlays act like extra animation frames layered onto walk cycle.
+      if (activeEmote === 'wave') {
+        rightArmYOffset -= 5 + Math.sin(now / 90) * 2;
+      } else if (activeEmote === 'high-five') {
+        rightArmYOffset -= 7;
+      } else if (activeEmote === 'celebrate') {
+        leftArmYOffset -= 6;
+        rightArmYOffset -= 6;
+      } else if (activeEmote === 'dance-1') {
+        leftArmYOffset += Math.sin(now / 85) * 3;
+        rightArmYOffset -= Math.sin(now / 85) * 3;
+        emoteLegDelta = Math.sin(now / 120) * 2;
+      } else if (activeEmote === 'dance-2') {
+        leftArmYOffset -= 3;
+        rightArmYOffset += 2;
+        emoteLegDelta = Math.cos(now / 95) * 2.4;
+      } else if (activeEmote === 'dance-3') {
+        leftArmYOffset -= 4;
+        rightArmYOffset -= 1;
+        emoteLegDelta = Math.sin(now / 70) * 3;
+      } else if (activeEmote === 'cry') {
+        leftArmYOffset += 2;
+        rightArmYOffset += 2;
+      } else if (activeEmote === 'angry') {
+        leftArmYOffset -= 2;
+        rightArmYOffset -= 2;
+      }
+      if (facingSide) {
+        // Side profile uses one central visible arm; depth implied by a darker near-edge stripe.
+        const centerArmX = sideFacingRight ? px : px - armW;
+        const centerArmY = Math.round((leftArmYOffset + rightArmYOffset) / 2);
+        ctx.fillRect(centerArmX, centerArmY, armW, armL);
+        ctx.fillStyle = '#d6ae8f';
+        const nearEdgeX = sideFacingRight ? centerArmX + Math.max(0, armW - 1) : centerArmX;
+        ctx.fillRect(nearEdgeX, centerArmY + 1, 1, Math.max(2, armL - 2));
+        ctx.fillStyle = skinTone;
+      } else {
+        ctx.fillRect(leftArmX, leftArmYOffset, armW, armL);
+        ctx.fillRect(rightArmX, rightArmYOffset, armW, armL);
+      }
       if (isWriting && entity.role === 'teacher') {
         ctx.fillStyle = '#f8f9fa';
         const chalkX = strikeDir > 0 ? px + 14 : px - 14;
@@ -9060,7 +9262,21 @@ function drawEntities() {
         ctx.fillRect(px - Math.floor(bodyW / 2), py + 1 - heightShift, legW, 2);
         ctx.fillRect(px + Math.floor(bodyW / 2) - legW, py + 1 - heightShift, legW, 2);
       } else {
-        if (isFemaleStudent) {
+        const expressiveLegKick = legKick + emoteLegDelta;
+        if (facingSide) {
+          // Side walking profile: both legs are near center with asymmetric stride lengths.
+          const sideLegBaseX = sideFacingRight ? px - 1 : px - legW;
+          const nearLegY = py - 6 + (expressiveLegKick * 0.75) - heightShift;
+          const farLegY = py - 6 - (expressiveLegKick * 0.45) - heightShift;
+          const nearLegLen = Math.max(5, legL + Math.round(Math.abs(expressiveLegKick) * 0.25));
+          const farLegLen = Math.max(4, legL - 1);
+          ctx.fillRect(sideLegBaseX, nearLegY, legW, nearLegLen);
+          ctx.fillStyle = useUniform ? '#0e1626' : '#1a253f';
+          ctx.fillRect(sideLegBaseX - (sideFacingRight ? 1 : -1), farLegY + 1, Math.max(1, legW - 1), farLegLen);
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(sideLegBaseX, nearLegY + nearLegLen, legW, 2);
+          ctx.fillRect(sideLegBaseX - (sideFacingRight ? 1 : -1), farLegY + farLegLen + 1, Math.max(1, legW - 1), 1);
+        } else if (isFemaleStudent) {
           const standingSkirtDrop = skirtLength === 'long' ? 8 : 5;
           ctx.fillStyle = '#1f3f85';
           ctx.fillRect(px - Math.floor(bodyW / 2), py - 7 - heightShift, bodyW, standingSkirtDrop);
@@ -9068,15 +9284,15 @@ function drawEntities() {
           ctx.fillStyle = skinTone;
           const legTop = py - 4 + (skirtLength === 'long' ? 2 : 0);
           const legLen = skirtLength === 'long' ? Math.max(5, legL - 2) : legL;
-          ctx.fillRect(px - legW - 1, legTop + legKick - heightShift, legW, legLen);
-          ctx.fillRect(px + 1, legTop - legKick - heightShift, legW, legLen);
+          ctx.fillRect(px - legW - 1, legTop + expressiveLegKick - heightShift, legW, legLen);
+          ctx.fillRect(px + 1, legTop - expressiveLegKick - heightShift, legW, legLen);
         } else {
-          ctx.fillRect(px - legW - 1, py - 6 + legKick - heightShift, legW, legL);
-          ctx.fillRect(px + 1, py - 6 - legKick - heightShift, legW, legL);
+          ctx.fillRect(px - legW - 1, py - 6 + expressiveLegKick - heightShift, legW, legL);
+          ctx.fillRect(px + 1, py - 6 - expressiveLegKick - heightShift, legW, legL);
         }
         ctx.fillStyle = '#000000';
-        ctx.fillRect(px - legW - 1, py + 2 + legKick + (legL - 8) - heightShift, legW, 2);
-        ctx.fillRect(px + 1, py + 2 - legKick + (legL - 8) - heightShift, legW, 2);
+        ctx.fillRect(px - legW - 1, py + 2 + expressiveLegKick + (legL - 8) - heightShift, legW, 2);
+        ctx.fillRect(px + 1, py + 2 - expressiveLegKick + (legL - 8) - heightShift, legW, 2);
       }
 
       // Teachers are rendered larger and more formal than students.
@@ -9260,6 +9476,33 @@ function drawEntities() {
   for (const pellet of game.pellets) {
     ctx.fillStyle = pellet.kind === 'item' ? (pellet.itemColor || '#f28482') : '#f8f9fa';
     ctx.fillRect((pellet.x - CAMERA.x - 0.08) * sx, (pellet.y - CAMERA.y - 0.08) * sy, 3, 3);
+  }
+}
+
+function drawClassroomChairOverlays() {
+  const sx = canvas.width / CAMERA.w;
+  const sy = canvas.height / CAMERA.h;
+  const current = schedule[game.periodIndex];
+
+  for (const entity of game.entities) {
+    if (!hasArrivedForCurrentPeriod(entity, current)) continue;
+    if (!entity.isSeated || !entity.seatedRoom) continue;
+    if (!isStudentCharacter(entity)) continue;
+    const room = roomByName(entity.seatedRoom);
+    if (!room || room.type !== 'classroom') continue;
+
+    const seat = getSeatPosition(entity.seatedRoom, entity.seatIndex, entity);
+    if (!seat) continue;
+    // Only overlay when the student is visually above their chair to sell depth.
+    const isAboveChair = entity.y <= seat.y + 0.5;
+    if (!isAboveChair) continue;
+
+    const seatPx = Math.floor((seat.x - CAMERA.x) * sx);
+    const seatPy = Math.floor((seat.y - CAMERA.y) * sy);
+    ctx.fillStyle = '#435b7a';
+    ctx.fillRect(seatPx - 4, seatPy + 3, 8, 2);
+    ctx.fillRect(seatPx - 4, seatPy + 1, 2, 2);
+    ctx.fillRect(seatPx + 2, seatPy + 1, 2, 2);
   }
 }
 
@@ -9857,6 +10100,7 @@ function loop(now) {
 
   drawWorld();
   drawEntities();
+  drawClassroomChairOverlays();
   drawMiniMap();
   drawStatusOverlay();
   updateDayTransitionOverlay(now);
@@ -9926,6 +10170,23 @@ closeInteractionPanelBtn.onclick = () => {
   interactionPanelEl.hidden = true;
   game.selectedInteractionTarget = null;
 };
+
+function closeTransientMenus() {
+  // Keep floating overlays in sync with browser chrome focus changes so
+  // auxiliary menus never linger after their parent bar/dialog is dismissed.
+  if (interactionPanelEl) interactionPanelEl.hidden = true;
+  game.selectedInteractionTarget = null;
+  if (entityTooltipEl) entityTooltipEl.hidden = true;
+
+  if (todoDialog?.open) todoDialog.close();
+  if (helpDialog?.open) helpDialog.close();
+  if (splashSettingsDialog?.open && startOverlayEl?.hidden) splashSettingsDialog.close();
+}
+
+window.addEventListener('blur', closeTransientMenus);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') closeTransientMenus();
+});
 
 
 if (openSplashSettingsBtn && splashSettingsDialog) {
