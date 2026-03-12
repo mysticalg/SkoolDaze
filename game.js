@@ -1472,6 +1472,13 @@ function summarizeForLlmDebug(text, maxLen = 120) {
   return `${cleaned.slice(0, maxLen - 1)}…`;
 }
 
+
+function llmActorLabel(payload = {}) {
+  const from = payload?.speaker || 'Unknown';
+  const to = payload?.addresseeName ? ` → ${payload.addresseeName}` : '';
+  return `${from}${to}`;
+}
+
 function renderLlmDebugLog() {
   if (!llmDebugLogEl) return;
   const visible = (game.llm.debugLog || []).slice(0, 90);
@@ -1951,7 +1958,7 @@ function buildLlmPrompt({
 }
 
 async function generateLocalOllamaText(payload) {
-  pushLlmDebug(`📤 Local request queued [${payload.channel}] model=${effectiveLocalModelName()} speaker=${payload.speaker}`);
+  pushLlmDebug(`📤 Local request queued [${payload.channel}] ${llmActorLabel(payload)} model=${effectiveLocalModelName()}`);
   const response = await fetchWithTimeout(`${game.llm.localEndpoint}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1968,13 +1975,13 @@ async function generateLocalOllamaText(payload) {
   }
   const data = await response.json();
   const output = sanitizeLlmLine(data?.response);
-  pushLlmDebug(`✅ Local response [${payload.channel}] ${summarizeForLlmDebug(output)}`);
+  pushLlmDebug(`✅ Local response [${payload.channel}] ${llmActorLabel(payload)} (cached, shown when used): ${summarizeForLlmDebug(output)}`);
   return output;
 }
 
 async function generateRemoteProviderText(payload) {
   const provider = game.llm.remoteProvider;
-  pushLlmDebug(`📤 Remote request queued [${payload.channel}] provider=${provider} model=${game.llm.remoteModel} speaker=${payload.speaker}`);
+  pushLlmDebug(`📤 Remote request queued [${payload.channel}] ${llmActorLabel(payload)} provider=${provider} model=${game.llm.remoteModel}`);
   const endpoint = provider === 'grok' ? `${GROK_API_BASE}/chat/completions` : `${OPENAI_API_BASE}/chat/completions`;
   const response = await fetchWithTimeout(endpoint, {
     method: 'POST',
@@ -2003,7 +2010,7 @@ async function generateRemoteProviderText(payload) {
   const data = await response.json();
   const text = data?.choices?.[0]?.message?.content;
   const output = sanitizeLlmLine(text);
-  pushLlmDebug(`✅ Remote response [${payload.channel}] ${summarizeForLlmDebug(output)}`);
+  pushLlmDebug(`✅ Remote response [${payload.channel}] ${llmActorLabel(payload)} (cached, shown when used): ${summarizeForLlmDebug(output)}`);
   return output;
 }
 
@@ -2017,7 +2024,7 @@ async function generateLlmText(payload) {
   } catch (error) {
     const msg = String(error?.message || '').toLowerCase();
     if (msg.includes('aborted') || msg.includes('timeout')) {
-      pushLlmDebug(`⏱️ LLM request timed out [${payload.channel}] after ${llmTimeoutForPayload(payload)}ms.`, 'warn');
+      pushLlmDebug(`⏱️ LLM request timed out [${payload.channel}] ${llmActorLabel(payload)} after ${llmTimeoutForPayload(payload)}ms.`, 'warn');
       return { text: null, reason: 'timeout' };
     }
     pushLlmDebug(`❌ LLM generation error: ${error?.message || 'unknown error'}`, 'error');
@@ -2063,11 +2070,11 @@ function queueLlmText(payload, options = {}) {
   generateLlmText(payload).then((result) => {
     if (result?.text) {
       game.llm.cache.set(key, result.text);
-      pushLlmDebug(`💾 Cached [${payload.channel}] key=${summarizeForLlmDebug(key, 64)}`);
+      pushLlmDebug(`💾 Cached [${payload.channel}] ${llmActorLabel(payload)} key=${summarizeForLlmDebug(key, 64)}`);
     } else if (result?.reason === 'timeout') {
       // Timeout already logged with channel-specific detail; avoid duplicate spam lines.
     } else if (result?.reason !== 'disabled') {
-      pushLlmDebug(`⚠️ Empty LLM output, fallback kept [${payload.channel}]`, 'warn');
+      pushLlmDebug(`⚠️ Empty LLM output [${payload.channel}] ${llmActorLabel(payload)}; fallback kept.`, 'warn');
     }
   }).finally(() => {
     game.llm.inFlight.delete(key);
@@ -2188,10 +2195,10 @@ function resolveLlmText(payload, options = {}) {
   if (!llmModeEnabled()) return fallback;
   const key = llmCacheKey(payload);
   if (game.llm.cache.has(key)) {
-    pushLlmDebug(`🎯 Cache hit [${payload.channel}] speaker=${payload.speaker}`);
+    pushLlmDebug(`🎯 Cache hit [${payload.channel}] ${llmActorLabel(payload)}.`);
     return game.llm.cache.get(key);
   }
-  if (!suppressMissLog) pushLlmDebug(`🪫 Cache miss [${payload.channel}] speaker=${payload.speaker}; ${allowFallback ? 'fallback used.' : 'queued for deferred delivery.'}`,'warn');
+  if (!suppressMissLog) pushLlmDebug(`🪫 Cache miss [${payload.channel}] ${llmActorLabel(payload)}; ${allowFallback ? 'fallback used immediately.' : 'waiting for cached LLM line.'}`,'warn');
   queueLlmText(payload);
   return allowFallback ? fallback : null;
 }
@@ -4290,9 +4297,12 @@ function flushDeferredLlmDialogue(now = performance.now()) {
       const cached = game.llm.cache.get(key);
       if (cached) {
         deliverResolvedSpeech(entity, cached, pendingSpeech.addressee, pendingSpeech.opts, now);
+        pushLlmDebug(`🗣️ Delivered deferred speech bubble for ${llmActorLabel(pendingSpeech.payload)}.`, 'info');
         entity.pendingSpeech = null;
       } else if (now - pendingSpeech.createdAt > 24000) {
-        pushLlmDebug(`🧼 Dropped stale deferred speech for ${entity.name} (no fallback used).`, 'warn');
+        // Do not silently drop deferred lines; deliver fallback so players always see who spoke.
+        deliverResolvedSpeech(entity, pendingSpeech.payload?.fallback || '...', pendingSpeech.addressee, { ...pendingSpeech.opts, force: true }, now);
+        pushLlmDebug(`♻️ Deferred speech timed out; fallback delivered for ${llmActorLabel(pendingSpeech.payload)}.`, 'warn');
         entity.pendingSpeech = null;
       }
     }
@@ -4303,9 +4313,12 @@ function flushDeferredLlmDialogue(now = performance.now()) {
       const cached = game.llm.cache.get(key);
       if (cached) {
         deliverResolvedThought(entity, cached, pendingThought.durationMs, pendingThought.opts, now);
+        pushLlmDebug(`💭 Delivered deferred thought bubble for ${pendingThought.payload?.speaker || entity.name}.`, 'info');
         entity.pendingThought = null;
       } else if (now - pendingThought.createdAt > 24000) {
-        pushLlmDebug(`🧼 Dropped stale deferred thought for ${entity.name} (no fallback used).`, 'warn');
+        // Keep no-fallback mode readable: if AI stalls too long, show the fallback thought instead of dropping it.
+        deliverResolvedThought(entity, pendingThought.payload?.fallback || '...', pendingThought.durationMs, { ...pendingThought.opts, force: true }, now);
+        pushLlmDebug(`♻️ Deferred thought timed out; fallback delivered for ${pendingThought.payload?.speaker || entity.name}.`, 'warn');
         entity.pendingThought = null;
       }
     }
