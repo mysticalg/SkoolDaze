@@ -11,9 +11,10 @@
     <h1>🏫 Skool Daze Tribute</h1>
     <div class="hud" aria-live="polite">
       <span id="clock">🕘 Time: 08:00</span>
-      <span id="period">🔔 Period: Registration</span>
-      <span id="roomTarget">📍 Target: Assembly Hall</span>
       <span class="floor-clock-group" title="Floor status and in-game analog clock.">
+        <span id="dayLabel" title="Current school day of the week.">📅 Day: Monday</span>
+        <span id="period" title="Current bell period.">🔔 Period: Registration</span>
+        <span id="roomTarget" title="Current room target for this period.">📍 Target: Assembly Hall</span>
         <span id="floorStatus" title="Shows your current floor and its color cue.">🧭 Floor: Ground (Blue)</span>
         <span id="analogClock" class="analog-clock" role="img" aria-label="In-game analog clock">
           <span class="clock-face"></span>
@@ -60,7 +61,19 @@
       <div id="events" class="events" aria-live="polite"></div>
 
       <h3>Daily Objectives</h3>
-      <ul id="todo" class="todo" aria-live="polite"></ul>
+      <button
+        id="todoCarousel"
+        class="todo-carousel"
+        type="button"
+        title="Click to open the full daily objective list"
+        aria-label="Open full daily objectives"
+      >
+        <span class="todo-carousel-icon" aria-hidden="true">🎯</span>
+        <span class="todo-carousel-window">
+          <span id="todoCarouselText" class="todo-carousel-text">Daily objectives loading...</span>
+        </span>
+      </button>
+      <p class="todo-help">💡 Click the scrolling objective line to open the full checklist.</p>
 
       <h2>Legend</h2>
       <ul>
@@ -107,6 +120,13 @@
       <li>Collect all shield letters to reveal the safe code.</li>
     </ul>
     <button id="closeHelp">Close</button>
+  </dialog>
+
+  <dialog id="todoDialog" aria-labelledby="todoDialogTitle">
+    <h2 id="todoDialogTitle">Daily Objectives</h2>
+    <p>Track today’s tasks here. The panel carousel is a one-line quick view.</p>
+    <ul id="todo" class="todo" aria-live="polite"></ul>
+    <button id="closeTodoDialog" type="button">Close</button>
   </dialog>
 
   <!--
