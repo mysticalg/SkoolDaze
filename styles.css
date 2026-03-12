@@ -50,6 +50,12 @@ body {
   backdrop-filter: blur(4px);
 }
 
+/* Ensure the splash truly disappears when JS toggles `hidden=true`.
+   Class-level `display:flex` would otherwise override the browser's default [hidden] rule. */
+.start-overlay[hidden] {
+  display: none !important;
+}
+
 .start-card {
   width: min(720px, 96vw);
   background: #0e1726;
