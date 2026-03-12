@@ -18,6 +18,8 @@ const weatherEl = document.getElementById('weather');
 const attendanceEl = document.getElementById('attendance');
 const missionEl = document.getElementById('mission');
 const eventsEl = document.getElementById('events');
+const llmDebugLogEl = document.getElementById('llmDebugLog');
+const llmDebugClearBtn = document.getElementById('llmDebugClearBtn');
 const todoEl = document.getElementById('todo');
 const todoCarouselBtn = document.getElementById('todoCarousel');
 const todoCarouselTextEl = document.getElementById('todoCarouselText');
@@ -55,6 +57,7 @@ const optGameSpeedEl = document.getElementById('optGameSpeed');
 const optWeatherEl = document.getElementById('optWeather');
 const optLlmEnabledEl = document.getElementById('optLlmEnabled');
 const optLlmNsfwEl = document.getElementById('optLlmNsfw');
+const optLlmNoFallbackEl = document.getElementById('optLlmNoFallback');
 const optLlmSourceEl = document.getElementById('optLlmSource');
 const optLlmModelEl = document.getElementById('optLlmModel');
 const optLlmLocalEndpointEl = document.getElementById('optLlmLocalEndpoint');
@@ -685,8 +688,8 @@ const personalities = {
 };
 
 // Dialogue pacing keeps chatter readable and prevents instant back-to-back spam.
-const MIN_DIALOGUE_INTERVAL_MS = 5600;
-const CLASSROOM_DIALOGUE_INTERVAL_MS = 9400;
+const MIN_DIALOGUE_INTERVAL_MS = 7600;
+const CLASSROOM_DIALOGUE_INTERVAL_MS = 13200;
 const INTERACTION_COOLDOWN_HOURS = 3;
 
 // Everyday school items can move through student pockets via trading and bartering.
@@ -1106,6 +1109,36 @@ function randomHistorySnippet() {
   return game.schoolHistory[Math.floor(game.rng() * game.schoolHistory.length)];
 }
 
+function conversationThreadKey(a, b) {
+  const aName = typeof a === 'string' ? a : (a?.name || 'Unknown A');
+  const bName = typeof b === 'string' ? b : (b?.name || 'Unknown B');
+  return [aName, bName].sort().join('|');
+}
+
+function recordNpcConversationTurn(speaker, addressee, line) {
+  if (!speaker?.name || !addressee?.name || !line) return;
+  const key = conversationThreadKey(speaker, addressee);
+  const history = game.npcConversations[key] || [];
+  history.push({
+    by: speaker.name,
+    to: addressee.name,
+    text: sanitizeLlmLine(line),
+    at: game.timeMinutes,
+  });
+  // Keep only recent lines to avoid unbounded memory growth and prompt bloat.
+  game.npcConversations[key] = history.slice(-10);
+}
+
+function recentConversationContext(speaker, addressee) {
+  if (!speaker?.name || !addressee?.name) return '';
+  const key = conversationThreadKey(speaker, addressee);
+  const history = game.npcConversations[key] || [];
+  return history
+    .slice(-4)
+    .map((item) => `${item.by}→${item.to}: ${item.text}`)
+    .join(' | ');
+}
+
 function contextualResponseFor(entity, peer = null) {
   ensureDialogueSetup(entity);
   const relation = peer ? (entity.relationships?.[peer.name] ?? entity.relationships?.Eric ?? 0) : 0;
@@ -1117,6 +1150,209 @@ function contextualResponseFor(entity, peer = null) {
   return base;
 }
 
+
+
+function socialBondKey(aName, bName) {
+  return [String(aName || ''), String(bName || '')].sort().join('|');
+}
+
+function getSocialBond(a, b) {
+  if (!a || !b) return 0;
+  const key = socialBondKey(a.name, b.name);
+  return game.socialBonds[key] || 0;
+}
+
+function setSocialBond(a, b, delta) {
+  if (!a || !b || a === b) return 0;
+  const key = socialBondKey(a.name, b.name);
+  const next = clampScore((game.socialBonds[key] || 0) + delta, -100, 100);
+  game.socialBonds[key] = next;
+  return next;
+}
+
+function ensureSocialProfile(entity) {
+  if (!entity || !isStudentCharacter(entity) || entity.role === 'player') return;
+  if (entity.socialProfile) return;
+  const quirkPool = [
+    'collects gossip like trading cards',
+    'quotes films at awkward times',
+    'acts brave then panics quietly',
+    "takes notes on everyone's drama",
+    'always volunteers then regrets it',
+    'laughs before finishing the joke',
+    'starts tiny rumours for fun',
+    'tries to keep rival groups apart',
+  ];
+  entity.socialProfile = {
+    evolvingQuirks: [pickForEntity(entity, quirkPool, 9)],
+    socialStreak: 0,
+    cliqueId: '',
+    lastEvolvedAt: 0,
+  };
+}
+
+function tryEvolveQuirk(entity, now) {
+  ensureSocialProfile(entity);
+  if (!entity?.socialProfile) return;
+  if (now - (entity.socialProfile.lastEvolvedAt || 0) < 90000) return;
+  if (game.rng() >= 0.08) return;
+  const growthPool = [
+    'started mediating arguments',
+    'became obsessed with strategy games',
+    'turned into a corridor storyteller',
+    'joined the lunchtime prank crew',
+    'became weirdly protective of friends',
+    'keeps a secret list of IOUs',
+  ];
+  const trait = pickForEntity(entity, growthPool, game.dayCount + entity.socialProfile.socialStreak);
+  if (!entity.socialProfile.evolvingQuirks.includes(trait)) {
+    entity.socialProfile.evolvingQuirks.push(trait);
+    entity.socialProfile.evolvingQuirks = entity.socialProfile.evolvingQuirks.slice(-3);
+    entity.socialProfile.lastEvolvedAt = now;
+    announce(`🧬 ${entity.name} evolved socially: ${trait}.`, { force: true, feedType: 'world' });
+  }
+}
+
+function resolveLlmSocialDirective(actor, peer, fallbackIntent = 'ally') {
+  const threadContext = recentConversationContext(actor, peer);
+  const threadKey = peer ? conversationThreadKey(actor, peer) : '';
+  const threadTurn = threadKey ? ((game.npcConversations[threadKey] || []).length + 1) : 0;
+  const payload = {
+    channel: 'social',
+    subject: roomSubjectName(entityRoom(actor)),
+    speaker: actor.name,
+    speakerRole: roleLabelForLlm(actor.role),
+    traitSummary: summarizeTraitBundle(actor.traits),
+    room: entityRoom(actor),
+    addresseeName: peer?.name || '',
+    addresseeRole: peer ? roleLabelForLlm(peer.role) : '',
+    conversationContext: threadContext,
+    conversationTurn: threadTurn,
+    fallback: `intent=${fallbackIntent}; keep it short`,
+  };
+  const key = llmCacheKey(payload);
+  if (!llmModeEnabled()) return null;
+  const now = performance.now();
+  if (now < (actor.socialNextLlmAt || 0)) return null;
+  const cached = game.llm.cache.get(key);
+  if (!cached) {
+    actor.socialNextLlmAt = now + 6000 + (Math.random() * 2500);
+    queueLlmText(payload);
+    return null;
+  }
+  try {
+    const parsed = parseJsonFromLlm(cached);
+    const allowed = new Set(['ally', 'tease', 'avoid', 'follow', 'defend']);
+    const intent = allowed.has(parsed.intent) ? parsed.intent : fallbackIntent;
+    const bondDelta = clampScore(Number(parsed.bondDelta || 0), -3, 3);
+    const line = sanitizeLlmLine(parsed.line || `${peer?.name || 'mate'}, stay sharp.`);
+    return { intent, bondDelta, line };
+  } catch (error) {
+    pushLlmDebug(`⚠️ Social directive parse failed for ${actor?.name || 'npc'}.`, 'warn');
+    return null;
+  }
+}
+
+function refreshCliquesFromBonds() {
+  const students = game.entities.filter((e) => isStudentCharacter(e) && e.role !== 'player');
+  const adjacency = new Map(students.map((s) => [s.name, []]));
+  for (let i = 0; i < students.length; i += 1) {
+    for (let j = i + 1; j < students.length; j += 1) {
+      const bond = getSocialBond(students[i], students[j]);
+      if (bond >= 38) {
+        adjacency.get(students[i].name).push(students[j]);
+        adjacency.get(students[j].name).push(students[i]);
+      }
+    }
+  }
+  const visited = new Set();
+  game.socialGroups = [];
+  for (const student of students) {
+    if (visited.has(student.name)) continue;
+    const queue = [student.name];
+    const members = [];
+    visited.add(student.name);
+    while (queue.length) {
+      const name = queue.shift();
+      members.push(name);
+      for (const peer of adjacency.get(name) || []) {
+        if (visited.has(peer.name)) continue;
+        visited.add(peer.name);
+        queue.push(peer.name);
+      }
+    }
+    if (members.length >= 3) {
+      const id = `group-${game.socialGroupCounter++}`;
+      game.socialGroups.push({ id, members, createdDay: game.dayCount });
+      members.forEach((name) => {
+        const entity = game.entities.find((candidate) => candidate.name === name);
+        ensureSocialProfile(entity);
+        if (entity?.socialProfile) entity.socialProfile.cliqueId = id;
+      });
+    }
+  }
+}
+
+function updateEmergentSocialLife(now, currentPeriod) {
+  if (now - (game.lastSocialTickAt || 0) < 2400) return;
+  game.lastSocialTickAt = now;
+  const roaming = game.entities.filter((entity) => (
+    isStudentCharacter(entity)
+    && entity.role !== 'player'
+    && entity.knockedUntil < now
+    && isEntityVisibleToPlayer(entity)
+  ));
+  let processed = 0;
+  for (const entity of roaming) {
+    if (processed >= 5) break;
+    ensureSocialProfile(entity);
+    tryEvolveQuirk(entity, now);
+    const peer = roaming.find((candidate) => candidate !== entity && entityRoom(candidate) === entityRoom(entity) && distance(candidate, entity) < 2.9);
+    if (!peer) continue;
+    processed += 1;
+    const warmth = ((entity.traits?.friendly || 50) - (peer.traits?.aggression || 50)) / 50;
+    const fallbackIntent = warmth >= 0 ? 'ally' : 'tease';
+    const directive = resolveLlmSocialDirective(entity, peer, fallbackIntent);
+    const intent = directive?.intent || fallbackIntent;
+    const baseDelta = intent === 'ally' ? 2 : intent === 'defend' ? 3 : intent === 'follow' ? 1 : intent === 'avoid' ? -1 : -2;
+    const delta = clampScore(baseDelta + (directive?.bondDelta || 0), -4, 4);
+    const bond = setSocialBond(entity, peer, delta);
+    entity.socialProfile.socialStreak = Math.max(0, (entity.socialProfile.socialStreak || 0) + (delta > 0 ? 1 : -1));
+
+    if (directive?.line && game.rng() < 0.38) {
+      say(entity, directive.line, { peer, durationMs: 3000 });
+      // Quick back-and-forth makes NPC conversations feel alive, not one-sided.
+      if (canUseDialogue(peer, now + 80, 'speech') && game.rng() < 0.34) {
+        const reply = contextualResponseFor(peer, entity);
+        say(peer, reply, { peer: entity, durationMs: 2800 });
+      }
+    }
+
+    if (bond >= 70 && game.rng() < 0.14) {
+      think(entity, `🤝 ${peer.name} has my back today.`, 2500, { logToFeed: true });
+    } else if (bond <= -70 && game.rng() < 0.14) {
+      think(entity, `⚡ ${peer.name} is trouble. Keep distance.`, 2500, { logToFeed: true });
+    }
+  }
+
+  if (game.rng() < 0.18) refreshCliquesFromBonds();
+
+  if (game.socialGroups.length && game.rng() < 0.12) {
+    const spotlight = game.socialGroups[Math.floor(game.rng() * game.socialGroups.length)];
+    const room = currentPeriod?.room || 'School';
+    const leader = game.entities.find((entity) => entity.name === spotlight.members[0]);
+    const summary = resolveLlmText({
+      channel: 'announcement',
+      subject: roomSubjectName(room),
+      speaker: leader?.name || 'Narrator',
+      speakerRole: leader ? roleLabelForLlm(leader.role) : 'narrator',
+      traitSummary: leader ? summarizeTraitBundle(leader.traits) : 'neutral',
+      room,
+      fallback: `🧩 Social group active: ${spotlight.members.slice(0, 3).join(', ')} moving together.`,
+    });
+    pushFeedEvent(summary, 'world');
+  }
+}
 const JANITOR_IDLE_ROOM = 'Janitor Room';
 const LITTER_CLEANUP_DELAY_MS = 20000;
 const TOILET_DIRT_PER_USE = 4;
@@ -1130,8 +1366,19 @@ const TARGET_ATTENDANCE_PERCENT = 95;
 const OLLAMA_DEFAULT_ENDPOINT = 'http://127.0.0.1:11434';
 const OPENAI_API_BASE = 'https://api.openai.com/v1';
 const GROK_API_BASE = 'https://api.x.ai/v1';
-const LLM_DEFAULT_TIMEOUT_MS = 2200;
+const LLM_DEFAULT_TIMEOUT_MS = 3800;
+const LLM_MAX_INFLIGHT = 4;
 const LLM_STORAGE_KEY = 'skooldaze.llm.settings.v1';
+
+const LLM_GAME_PRIMER = [
+  'You are the text engine for Skool Daze Tribute, a real-time British school simulation game.',
+  'Core channels: speech bubbles, thought bubbles, public announcements, and quiz JSON content.',
+  'Output must be fast, concise, and safe to parse: no markdown wrappers, no roleplay preambles.',
+  'Speech/thought should stay under 14 words and preserve NPC personality from provided traits.',
+  'Student speech should address the given addressee by name when one is supplied.',
+  'Announcements should read like school PA updates. Quiz output must remain strict JSON only.',
+  'If context is unclear, adapt fallback text instead of inventing long new lore.',
+].join(' ');
 
 // OAuth configuration for browser-side OpenAI sign-in.
 // NOTE: If your OAuth app uses a custom auth URL/client id, update these constants.
@@ -1152,6 +1399,33 @@ function setLlmTokenStatus(text, isError = false) {
   optLlmTokenStatusEl.classList.toggle('llm-status-error', Boolean(isError));
 }
 
+
+function summarizeForLlmDebug(text, maxLen = 120) {
+  const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+  if (cleaned.length <= maxLen) return cleaned;
+  return `${cleaned.slice(0, maxLen - 1)}…`;
+}
+
+function renderLlmDebugLog() {
+  if (!llmDebugLogEl) return;
+  const visible = (game.llm.debugLog || []).slice(0, 90);
+  llmDebugLogEl.innerHTML = visible
+    .map((entry) => `<div class="llm-debug-line llm-debug-${entry.level}">[${entry.time}] ${entry.message}</div>`)
+    .join('');
+}
+
+function pushLlmDebug(message, level = 'info') {
+  if (!game?.llm) return;
+  const entry = {
+    level,
+    message: String(message),
+    time: formatTime(game.timeMinutes),
+  };
+  game.llm.debugLog.unshift(entry);
+  game.llm.debugLog = game.llm.debugLog.slice(0, 260);
+  renderLlmDebugLog();
+}
+
 function sanitizeLlmLine(text, fallback = '...') {
   const next = String(text || '').replace(/\s+/g, ' ').trim();
   return next || fallback;
@@ -1159,12 +1433,20 @@ function sanitizeLlmLine(text, fallback = '...') {
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = LLM_DEFAULT_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs);
   try {
     return await fetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
+}
+
+function llmTimeoutForPayload(payload = {}) {
+  if (payload.channel === 'quiz') return 5600;
+  if (payload.channel === 'speech') return 4300;
+  if (payload.channel === 'thought') return 4200;
+  if (payload.channel === 'social') return 3200;
+  return LLM_DEFAULT_TIMEOUT_MS;
 }
 
 function effectiveLocalModelName() {
@@ -1191,6 +1473,7 @@ function persistLlmSettings() {
       remoteModel: game.llm.remoteModel,
       remoteToken: game.llm.remoteToken,
       nsfw: Boolean(game.llm.nsfw),
+      noFallback: Boolean(game.llm.noFallback),
     }));
   } catch (error) {
     // Storage can fail in private modes; gameplay should still continue.
@@ -1211,6 +1494,7 @@ function loadLlmSettings() {
     game.llm.remoteModel = sanitizeLlmLine(saved.remoteModel, game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini');
     game.llm.remoteToken = sanitizeLlmLine(saved.remoteToken, '');
     game.llm.nsfw = Boolean(saved.nsfw);
+    game.llm.noFallback = Boolean(saved.noFallback);
   } catch (error) {
     // Ignore malformed storage and keep defaults.
   }
@@ -1234,6 +1518,7 @@ function applyLlmUiState() {
 
   if (optLlmSourceEl) optLlmSourceEl.disabled = !enabled;
   if (optLlmNsfwEl) optLlmNsfwEl.disabled = !isLocal;
+  if (optLlmNoFallbackEl) optLlmNoFallbackEl.disabled = !enabled;
   if (optLlmModelEl) optLlmModelEl.disabled = !isLocal || !game.llm.availableModels.length;
   if (optLlmLocalEndpointEl) optLlmLocalEndpointEl.disabled = !isLocal;
   if (optLlmManualModelEl) optLlmManualModelEl.disabled = !isLocal;
@@ -1444,8 +1729,20 @@ function llmModeEnabled() {
   return Boolean(effectiveLocalModelName());
 }
 
-function llmCacheKey({ channel = 'speech', subject = 'General', speaker = 'Narrator', room = 'School', fallback = '', speakerRole = 'character', traitSummary = 'balanced' }) {
-  return `${llmProviderLabel()}|${channel}|${subject}|${speaker}|${speakerRole}|${traitSummary}|${room}|${String(fallback).toLowerCase().slice(0, 120)}`;
+function llmCacheKey({
+  channel = 'speech',
+  subject = 'General',
+  speaker = 'Narrator',
+  room = 'School',
+  fallback = '',
+  speakerRole = 'character',
+  traitSummary = 'balanced',
+  addresseeName = '',
+  addresseeRole = '',
+  conversationContext = '',
+  conversationTurn = 0,
+}) {
+  return `${llmProviderLabel()}|${channel}|${subject}|${speaker}|${speakerRole}|${traitSummary}|${room}|${addresseeName}|${addresseeRole}|turn:${conversationTurn}|ctx:${String(conversationContext).toLowerCase().slice(0, 90)}|${String(fallback).toLowerCase().slice(0, 120)}`;
 }
 
 function summarizeTraitBundle(traits = {}) {
@@ -1471,21 +1768,46 @@ function buildLlmPrompt({
   fallback = '',
   speakerRole = 'character',
   traitSummary = 'balanced traits',
+  addresseeName = '',
+  addresseeRole = '',
+  conversationContext = '',
+  conversationTurn = 0,
   uncensored = false,
 }) {
   const styleGuide = channel === 'thought'
     ? 'Write a short first-person thought bubble. Keep it under 14 words.'
     : channel === 'quiz'
       ? 'Write ONE school class question with 4 choices and a correct answer as JSON.'
-      : 'Write a short in-world school dialogue line. Keep it under 14 words.';
+      : channel === 'hymn'
+        ? 'Return ONLY JSON hymn content with verse+chorus and silly remix verse+chorus.'
+      : channel === 'social'
+        ? 'Return ONLY JSON social directive: {"intent":"ally|tease|avoid|follow|defend","bondDelta":-3..3,"line":"short line"}.'
+      : channel === 'announcement'
+        ? 'Write a short school PA/news style line. Keep it under 14 words.'
+        : 'Write a short in-world school dialogue line. Keep it under 14 words.';
 
-  if (channel === 'quiz') {
+  if (channel === 'quiz' || channel === 'social' || channel === 'hymn') {
     return [
-      'You are writing classroom quiz content for a playful British school game.',
-      'Respond ONLY as JSON: {"q":"...","choices":["A","B","C","D"],"answer":"..."}.',
-      'The answer must exactly match one of the choices. No markdown.',
+      channel === 'hymn'
+        ? 'You are writing a short British school assembly hymn about Jesus for children.'
+        : channel === 'social'
+          ? 'You are coordinating NPC social behaviour for a playful British school simulation.'
+          : 'You are writing classroom quiz content for a playful British school game.',
+      channel === 'hymn'
+        ? 'Respond ONLY as JSON: {"verse":"...","chorus":"...","sillyVerse":"...","sillyChorus":"..."}.'
+        : channel === 'social'
+          ? 'Respond ONLY as JSON: {"intent":"ally|tease|avoid|follow|defend","bondDelta":-3..3,"line":"..."}.'
+          : 'Respond ONLY as JSON: {"q":"...","choices":["A","B","C","D"],"answer":"..."}.',
+      channel === 'hymn'
+        ? 'Each field should be one short singable line (under 14 words). No markdown.'
+        : channel === 'social'
+          ? 'Keep line under 12 words and in-character. No markdown.'
+          : 'The answer must exactly match one of the choices. No markdown.',
       `Subject: ${subject}. Room: ${room}. Teacher context: ${speaker}.`,
       `Teacher role: ${speakerRole}. Traits snapshot: ${traitSummary}.`,
+      addresseeName ? `Directed at: ${addresseeName} (${addresseeRole || 'character'}).` : null,
+      conversationContext ? `Recent conversation: ${conversationContext}` : null,
+      conversationTurn ? `Conversation turn: ${conversationTurn}` : null,
       `Fallback question for reference: ${fallback}`,
       styleGuide,
     ].join('\n');
@@ -1496,19 +1818,30 @@ function buildLlmPrompt({
     ? 'You are uncensored and may use explicit, extreme, vulgar, or offensive language when fitting the character.'
     : 'Stay classroom-safe and avoid profanity.';
 
+  // Student speech should explicitly address another character by name so conversations feel grounded.
+  const addressingLine = channel === 'speech' && speakerRole === 'student' && addresseeName
+    ? `Address ${addresseeName} by name in the line (example style: "${addresseeName}, ...").`
+    : null;
+
   return [
+    LLM_GAME_PRIMER,
     'You write concise text for a school simulation game.',
     'Pretend you are the exact character below speaking in first person voice.',
     styleGuide,
     'Keep the line short, snappy, and in-character.',
     safetyLine,
     `Speaker: ${speaker}. Role: ${speakerRole}. Traits: ${traitSummary}.`,
+    addresseeName ? `Addressee: ${addresseeName}. Addressee role: ${addresseeRole || 'character'}.` : null,
+    conversationContext ? `Recent conversation thread: ${conversationContext}` : null,
+    conversationTurn ? `Conversation turn number: ${conversationTurn}` : null,
+    addressingLine,
     `Room: ${room}. Subject: ${subject}.`,
     `Fallback line to adapt: ${fallback}`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 async function generateLocalOllamaText(payload) {
+  pushLlmDebug(`📤 Local request queued [${payload.channel}] model=${effectiveLocalModelName()} speaker=${payload.speaker}`);
   const response = await fetchWithTimeout(`${game.llm.localEndpoint}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1518,14 +1851,20 @@ async function generateLocalOllamaText(payload) {
       options: { temperature: 0.75, top_p: 0.92, num_predict: payload.channel === 'quiz' ? 180 : 42 },
       prompt: buildLlmPrompt({ ...payload, uncensored: Boolean(game.llm.nsfw && game.llm.source === 'local') }),
     }),
-  }, LLM_DEFAULT_TIMEOUT_MS);
-  if (!response.ok) return null;
+  }, llmTimeoutForPayload(payload));
+  if (!response.ok) {
+    pushLlmDebug(`❌ Local request failed (${response.status}) channel=${payload.channel}`, 'error');
+    return null;
+  }
   const data = await response.json();
-  return sanitizeLlmLine(data?.response);
+  const output = sanitizeLlmLine(data?.response);
+  pushLlmDebug(`✅ Local response [${payload.channel}] ${summarizeForLlmDebug(output)}`);
+  return output;
 }
 
 async function generateRemoteProviderText(payload) {
   const provider = game.llm.remoteProvider;
+  pushLlmDebug(`📤 Remote request queued [${payload.channel}] provider=${provider} model=${game.llm.remoteModel} speaker=${payload.speaker}`);
   const endpoint = provider === 'grok' ? `${GROK_API_BASE}/chat/completions` : `${OPENAI_API_BASE}/chat/completions`;
   const response = await fetchWithTimeout(endpoint, {
     method: 'POST',
@@ -1541,9 +1880,10 @@ async function generateRemoteProviderText(payload) {
         { role: 'user', content: buildLlmPrompt({ ...payload, uncensored: Boolean(game.llm.nsfw && game.llm.source === 'local') }) },
       ],
     }),
-  }, LLM_DEFAULT_TIMEOUT_MS + 800);
+  }, llmTimeoutForPayload(payload) + 1000);
 
   if (!response.ok) {
+    pushLlmDebug(`❌ Remote request failed (${response.status}) provider=${provider} channel=${payload.channel}`, 'error');
     if (response.status === 401) {
       setLlmTokenStatus(`❌ ${provider.toUpperCase()} token rejected. Re-authenticate.` , true);
     }
@@ -1552,40 +1892,178 @@ async function generateRemoteProviderText(payload) {
 
   const data = await response.json();
   const text = data?.choices?.[0]?.message?.content;
-  return sanitizeLlmLine(text);
+  const output = sanitizeLlmLine(text);
+  pushLlmDebug(`✅ Remote response [${payload.channel}] ${summarizeForLlmDebug(output)}`);
+  return output;
 }
 
 async function generateLlmText(payload) {
-  if (!llmModeEnabled()) return null;
+  if (!llmModeEnabled()) return { text: null, reason: 'disabled' };
   try {
-    if (game.llm.source === 'remote') {
-      return await generateRemoteProviderText(payload);
-    }
-    return await generateLocalOllamaText(payload);
+    const text = game.llm.source === 'remote'
+      ? await generateRemoteProviderText(payload)
+      : await generateLocalOllamaText(payload);
+    return { text, reason: text ? 'ok' : 'empty' };
   } catch (error) {
-    return null;
+    const msg = String(error?.message || '').toLowerCase();
+    if (msg.includes('aborted') || msg.includes('timeout')) {
+      pushLlmDebug(`⏱️ LLM request timed out [${payload.channel}] after ${llmTimeoutForPayload(payload)}ms.`, 'warn');
+      return { text: null, reason: 'timeout' };
+    }
+    pushLlmDebug(`❌ LLM generation error: ${error?.message || 'unknown error'}`, 'error');
+    return { text: null, reason: 'error' };
   }
 }
 
 function queueLlmText(payload) {
   if (!llmModeEnabled()) return;
   const key = llmCacheKey(payload);
-  if (game.llm.cache.has(key) || game.llm.inFlight.has(key)) return;
+  if (game.llm.cache.has(key)) {
+    pushLlmDebug(`🗂️ Cache already primed [${payload.channel}] key=${summarizeForLlmDebug(key, 64)}`);
+    return;
+  }
+  if (game.llm.inFlight.has(key)) {
+    pushLlmDebug(`⏳ Request already in-flight [${payload.channel}] key=${summarizeForLlmDebug(key, 64)}`);
+    return;
+  }
+  if (game.llm.inFlight.size >= LLM_MAX_INFLIGHT) {
+    pushLlmDebug(`🚦 LLM queue saturated (${game.llm.inFlight.size}/${LLM_MAX_INFLIGHT}); skipped [${payload.channel}]`, 'warn');
+    return;
+  }
   game.llm.inFlight.add(key);
-  generateLlmText(payload).then((text) => {
-    if (text) game.llm.cache.set(key, text);
+  generateLlmText(payload).then((result) => {
+    if (result?.text) {
+      game.llm.cache.set(key, result.text);
+      pushLlmDebug(`💾 Cached [${payload.channel}] key=${summarizeForLlmDebug(key, 64)}`);
+    } else if (result?.reason === 'timeout') {
+      // Timeout already logged with channel-specific detail; avoid duplicate spam lines.
+    } else if (result?.reason !== 'disabled') {
+      pushLlmDebug(`⚠️ Empty LLM output, fallback kept [${payload.channel}]`, 'warn');
+    }
   }).finally(() => {
     game.llm.inFlight.delete(key);
   });
 }
 
-function resolveLlmText(payload) {
+
+function parseJsonFromLlm(rawText) {
+  const text = String(rawText || '').trim();
+  if (!text) return null;
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  const candidate = fenced ? fenced[1].trim() : text;
+  try {
+    return JSON.parse(candidate);
+  } catch (error) {
+    const start = candidate.indexOf('{');
+    const end = candidate.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(candidate.slice(start, end + 1));
+      } catch (nestedError) {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+function defaultDailyHymn() {
+  return {
+    verse: 'Jesus, guide our steps today, keep us kind and true.',
+    chorus: 'Alleluia, Jesus leads us; we will follow through.',
+    sillyVerse: 'Jesus loves our wonky socks and lunchbox crumbs too.',
+    sillyChorus: 'Alleluia, clap off-beat, still grateful through and through.',
+  };
+}
+
+function resolveLlmDailyHymn() {
+  const fallback = defaultDailyHymn();
+  if (!llmModeEnabled()) return fallback;
+  const payload = {
+    channel: 'hymn',
+    subject: `Assembly Day ${game.dayCount}`,
+    speaker: 'Mr Wacker',
+    speakerRole: 'teacher',
+    traitSummary: 'discipline:92, honor:84, friendly:66',
+    room: 'Assembly Hall',
+    fallback: `verse:${fallback.verse} chorus:${fallback.chorus}`,
+  };
+  const key = llmCacheKey(payload);
+  const cached = game.llm.cache.get(key);
+  if (!cached) {
+    queueLlmText(payload);
+    return fallback;
+  }
+  const parsed = parseJsonFromLlm(cached);
+  if (!parsed) return fallback;
+  return {
+    verse: sanitizeLlmLine(parsed.verse, fallback.verse),
+    chorus: sanitizeLlmLine(parsed.chorus, fallback.chorus),
+    sillyVerse: sanitizeLlmLine(parsed.sillyVerse, fallback.sillyVerse),
+    sillyChorus: sanitizeLlmLine(parsed.sillyChorus, fallback.sillyChorus),
+  };
+}
+
+function primeDailyAssemblyHymn() {
+  if (!llmModeEnabled()) {
+    game.dailyAssemblyHymn = defaultDailyHymn();
+    game.dailyAssemblyHymnDay = game.dayCount;
+    return;
+  }
+  if (game.dailyAssemblyHymnDay === game.dayCount) return;
+  game.dailyAssemblyHymn = resolveLlmDailyHymn();
+  game.dailyAssemblyHymnDay = game.dayCount;
+}
+
+function assemblyStudentVoices() {
+  return game.entities.filter((entity) => isStudentCharacter(entity) && entity.role !== 'player' && entityRoom(entity) === 'Assembly Hall');
+}
+
+function runAssemblyCallAndResponse(now, headmaster) {
+  const voices = assemblyStudentVoices();
+  const yesLine = 'Yes Headmaster!';
+  for (const student of voices) {
+    if (game.rng() < 0.72) say(student, yesLine, { force: true, allowAssemblySpeech: true, durationMs: 1500, logToFeed: false });
+  }
+  // Single feed line avoids flooding while still showing group response happened.
+  pushFeedEvent(`🧑‍🎓 Assembly: ${yesLine}`, 'world');
+  game.assemblyNextSpeechAt = now + 9200;
+}
+
+function runAssemblyHymn(now, headmaster) {
+  primeDailyAssemblyHymn();
+  const hymn = game.dailyAssemblyHymn || defaultDailyHymn();
+  const silly = game.rng() < 0.42;
+  const verse = silly ? hymn.sillyVerse : hymn.verse;
+  const chorus = silly ? hymn.sillyChorus : hymn.chorus;
+
+  say(headmaster, '🎵 Hymn time! Verse then chorus together, voices up.', { force: true, durationMs: 3200 });
+
+  const voices = assemblyStudentVoices();
+  for (const student of voices) {
+    if (game.rng() < 0.9) say(student, `🎶 ${verse}`, { force: true, allowAssemblySpeech: true, durationMs: 2200, logToFeed: false });
+    if (game.rng() < 0.95) say(student, `🎵 ${chorus}`, { force: true, allowAssemblySpeech: true, durationMs: 2400, logToFeed: false });
+  }
+
+  pushFeedEvent(`🎼 Assembly hymn (${silly ? 'silly remix' : 'standard'}): ${verse} / ${chorus}`, 'world');
+  game.assemblyHymnAt = now + 22000;
+}
+
+function resolveLlmText(payload, options = {}) {
   const fallback = sanitizeLlmLine(payload.fallback, '...');
+  const noFallbackChannels = new Set(['speech', 'thought', 'announcement']);
+  const defaultAllowFallback = !(game.llm.noFallback && noFallbackChannels.has(payload?.channel));
+  const allowFallback = options.allowFallback !== undefined ? options.allowFallback : defaultAllowFallback;
+  const suppressMissLog = Boolean(options.suppressMissLog);
   if (!llmModeEnabled()) return fallback;
   const key = llmCacheKey(payload);
-  if (game.llm.cache.has(key)) return game.llm.cache.get(key);
+  if (game.llm.cache.has(key)) {
+    pushLlmDebug(`🎯 Cache hit [${payload.channel}] speaker=${payload.speaker}`);
+    return game.llm.cache.get(key);
+  }
+  if (!suppressMissLog) pushLlmDebug(`🪫 Cache miss [${payload.channel}] speaker=${payload.speaker}; ${allowFallback ? 'fallback used.' : 'queued for deferred delivery.'}`,'warn');
   queueLlmText(payload);
-  return fallback;
+  return allowFallback ? fallback : null;
 }
 
 function resolveLlmQuizQuestion(fallbackQuiz) {
@@ -1606,7 +2084,8 @@ function resolveLlmQuizQuestion(fallbackQuiz) {
     return fallbackQuiz;
   }
   try {
-    const parsed = JSON.parse(cached);
+    const parsed = parseJsonFromLlm(cached);
+    if (!parsed) return fallbackQuiz;
     const choices = Array.isArray(parsed.choices) ? parsed.choices.slice(0, 4).map((choice) => sanitizeLlmLine(choice)) : [];
     while (choices.length < 4) choices.push(randomFunnyWrongAnswer());
     const answer = sanitizeLlmLine(parsed.answer).toLowerCase();
@@ -1622,9 +2101,32 @@ function resolveLlmQuizQuestion(fallbackQuiz) {
   }
 }
 
+
+function primeLlmSessionContext() {
+  if (!llmModeEnabled()) return;
+  if (game.llm.sessionPrimedForProvider === llmProviderLabel()) return;
+  const primerPayload = {
+    channel: 'announcement',
+    subject: 'School Day Startup',
+    speaker: 'Narrator',
+    speakerRole: 'narrator',
+    traitSummary: 'discipline:60, friendly:60, intelligence:60',
+    room: 'School',
+    addresseeName: '',
+    addresseeRole: '',
+    fallback: 'System check complete. Bell schedule running smoothly.',
+  };
+  pushLlmDebug(`🚀 Priming LLM session context for ${llmProviderLabel()}.`);
+  queueLlmText(primerPayload);
+  game.llm.sessionPrimedForProvider = llmProviderLabel();
+}
+
 function warmupLlmCache() {
   if (!llmModeEnabled()) return;
-  const sampleEntities = game.entities.filter((entity) => entity.role !== 'player').slice(0, 8);
+  primeLlmSessionContext();
+  const sampleEntities = game.entities
+    .filter((entity) => entity.role !== 'player' && isEntityVisibleToPlayer(entity))
+    .slice(0, 4);
   sampleEntities.forEach((entity) => {
     ensureDialogueSetup(entity);
     queueLlmText({
@@ -1680,8 +2182,11 @@ const game = {
     remoteModel: 'gpt-4.1-mini',
     remoteToken: '',
     nsfw: false,
+    noFallback: false,
     cache: new Map(),
     inFlight: new Set(),
+    debugLog: [],
+    sessionPrimedForProvider: '',
   },
   rng: Math.random,
   quizActive: null,
@@ -1717,6 +2222,8 @@ const game = {
   assemblyNextSpeechAt: 0,
   assemblyHymnAt: 0,
   assemblyUsedThoughts: new Set(),
+  dailyAssemblyHymn: null,
+  dailyAssemblyHymnDay: 0,
   // Dinner lady lunchtime behaviour state for field supervision + interventions.
   dinnerLadyLastWhistleAt: 0,
   weather: 'sunny',
@@ -1761,6 +2268,11 @@ const game = {
   collectables: [],
   lockerCoverage: 0,
   lockerCapacity: 0,
+  socialBonds: {},
+  npcConversations: {},
+  socialGroups: [],
+  socialGroupCounter: 1,
+  lastSocialTickAt: 0,
 };
 
 // Restore last-used AI provider settings (including saved remote auth token) on load.
@@ -1903,6 +2415,12 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     posture: null,
     dialogueProfile: null,
     dialogue: null,
+    // Social profile stores evolving quirks, clique membership, and momentum over time.
+    socialProfile: null,
+    socialNextLlmAt: 0,
+    pendingSpeech: null,
+    pendingThought: null,
+    assemblyReleaseAt: 0,
     // Wrong-room excuse throttle keeps corridor chatter readable.
     lastWrongRoomExcuseAt: 0,
     // Facial animation timers keep eyes/mouth lively without expensive sprite swaps.
@@ -2269,6 +2787,7 @@ function applyStartupOptions() {
   const llmEnabled = Boolean(optLlmEnabledEl?.checked);
   const llmSource = String(optLlmSourceEl?.value || 'local');
   const llmNsfw = Boolean(optLlmNsfwEl?.checked);
+  const llmNoFallback = Boolean(optLlmNoFallbackEl?.checked);
   const llmModel = String(optLlmModelEl?.value || '').trim();
   const llmManualModel = String(optLlmManualModelEl?.value || '').trim();
   const llmLocalEndpoint = normalizeLocalEndpoint(optLlmLocalEndpointEl?.value || game.llm.localEndpoint);
@@ -2291,7 +2810,7 @@ function applyStartupOptions() {
     game.weather = weatherSetting;
   }
 
-  // LLM mode is optional and always falls back to built-in text if unavailable.
+  // LLM mode can optionally run in strict no-fallback mode where dialogue waits for model output.
   const providerChanged = game.llm.source !== llmSource
     || game.llm.selectedModel !== llmModel
     || game.llm.manualModelName !== llmManualModel
@@ -2299,7 +2818,8 @@ function applyStartupOptions() {
     || game.llm.remoteProvider !== llmRemoteProvider
     || game.llm.remoteModel !== llmRemoteModel
     || game.llm.remoteToken !== llmRemoteToken
-    || game.llm.nsfw !== llmNsfw;
+    || game.llm.nsfw !== llmNsfw
+    || game.llm.noFallback !== llmNoFallback;
   if (providerChanged) game.llm.cache.clear();
   game.llm.enabled = llmEnabled;
   game.llm.source = llmSource === 'remote' ? 'remote' : 'local';
@@ -2310,6 +2830,7 @@ function applyStartupOptions() {
   game.llm.remoteModel = llmRemoteModel || (game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini');
   game.llm.remoteToken = llmRemoteToken;
   game.llm.nsfw = llmNsfw;
+  game.llm.noFallback = llmNoFallback;
   persistLlmSettings();
 
   // Startup population changes alter seating demand; rebuild cached layouts.
@@ -2465,6 +2986,7 @@ function hasArrivedForCurrentPeriod(entity, currentPeriod = schedule[game.period
 function bullyFightChance(currentPeriod) {
   // Keep mornings civil: fights are very unlikely until break starts.
   if (isStartDayPeriod(currentPeriod) || isRegistrationPeriod(currentPeriod)) return 0.0001;
+  if (isLunchtimePeriod(currentPeriod)) return 0.0011;
   if (currentPeriod.mode !== 'break') return 0.00035;
   return 0.006;
 }
@@ -2700,10 +3222,55 @@ function nearestStairTarget(entity, fromFloor, targetFloor) {
   return best;
 }
 
+function stableNameHash(text = '') {
+  return Array.from(String(text)).reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) % 1000003, 7);
+}
+
+function holdAssemblyDismissalPosition(entity) {
+  const room = entityRoom(entity);
+  if (room !== 'Assembly Hall') return null;
+  if (entity.role === 'teacher') {
+    if (entity.name === 'Mr Wacker') return assemblyHeadmasterSpot();
+    const allTeachers = teachersInRoster();
+    const lineOrder = allTeachers.filter((teacher) => teacher.name !== 'Mr Wacker');
+    const lineIndex = Math.max(0, lineOrder.findIndex((teacher) => teacher.name === entity.name));
+    return assemblyTeacherLineSpot(lineIndex, allTeachers.length);
+  }
+  return getSeatPosition('Assembly Hall', entity.seatIndex, entity) || roomCenter('Assembly Hall');
+}
+
+function lunchFieldSpotForEntity(entity) {
+  const field = roomByName('P.E. Field');
+  if (!field) return roomCenter('P.E. Field');
+
+  // Social groups naturally cluster at deterministic pockets around the field.
+  const clusterSeed = entity.socialProfile?.cliqueId
+    ? stableNameHash(entity.socialProfile.cliqueId)
+    : stableNameHash(entity.name || entity.role || 'student');
+  const band = clusterSeed % 6;
+  const col = band % 3;
+  const row = Math.floor(band / 3);
+  const jitterX = ((clusterSeed % 9) - 4) * 0.22;
+  const jitterY = (((Math.floor(clusterSeed / 10)) % 9) - 4) * 0.18;
+  return {
+    x: field.x + 8 + (col * 19) + jitterX,
+    y: field.y + 6 + (row * 11) + jitterY,
+  };
+}
+
+function shouldAvoidLunchFight(entity) {
+  if (!entity || !isStudentCharacter(entity)) return true;
+  if (entity.role === 'bully') return false;
+  if (entity.role === 'swot' || entity.role === 'hero') return true;
+  const calmScore = ((entity.traits?.friendly || 50) + (entity.traits?.honor || 50) + (entity.traits?.discipline || 50)) / 3;
+  return calmScore >= 52;
+}
+
 function chooseAutoDestination() {
   // Toilets become top priority when bladder is urgent.
   if (game.bladder >= 75 && !game.toiletsBlocked) return roomCenter('Toilets');
   const current = schedule[game.periodIndex];
+  if (performance.now() < (player.assemblyReleaseAt || 0)) return holdAssemblyDismissalPosition(player) || roomCenter('Assembly Hall');
   if (current.mode === 'lesson') {
     // Auto Eric prefers his assigned desk; if blocked, wait beside it for player action.
     const reservedSeat = getSeatPosition(current.room, player.seatIndex) || roomCenter(current.room);
@@ -3152,6 +3719,8 @@ function resetToSchoolMorning() {
   game.assemblyNextSpeechAt = 0;
   game.assemblyHymnAt = 0;
   game.assemblyUsedThoughts = new Set();
+  game.dailyAssemblyHymn = null;
+  game.dailyAssemblyHymnDay = 0;
 
   if (game.dayCount > 1 && game.dayCount % TOILET_BLOCK_INTERVAL_DAYS === 0) {
     game.toiletsBlocked = true;
@@ -3331,6 +3900,16 @@ function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+
+function isEntityVisibleToPlayer(entity, { margin = 1.5 } = {}) {
+  if (!entity || entity === player) return true;
+  // NPC chatter is only simulated for visible same-room actors to keep LLM queue pressure low.
+  if (entityRoom(entity) !== entityRoom(player)) return false;
+  const withinX = entity.x >= (CAMERA.x - margin) && entity.x <= (CAMERA.x + CAMERA.w + margin);
+  const withinY = entity.y >= (CAMERA.y - margin) && entity.y <= (CAMERA.y + CAMERA.h + margin);
+  return withinX && withinY;
+}
+
 function canPlayerHearSpeaker(source, range) {
   if (!source) return true;
   const sameRoom = entityRoom(source) === entityRoom(player);
@@ -3350,6 +3929,8 @@ function canUseDialogue(entity, now, channel = 'speech') {
   if (channel === 'speech' && entity?.name !== 'Mr Wacker' && isHeadmasterAddressActive(now) && entityRoom(entity) === 'Assembly Hall') {
     return false;
   }
+  // Off-screen or out-of-room NPCs stay silent and follow routines to avoid queue saturation.
+  if (entity?.role !== 'player' && (channel === 'speech' || channel === 'thought') && !isEntityVisibleToPlayer(entity)) return false;
   const lastAt = channel === 'thought' ? (entity.lastThoughtAt || 0) : (entity.lastSpokeAt || 0);
   const inClassroom = channel === 'speech' && isSupervisedPeriod(schedule[game.periodIndex]) && entityRoom(entity) === schedule[game.periodIndex].room;
   const minInterval = inClassroom ? CLASSROOM_DIALOGUE_INTERVAL_MS : MIN_DIALOGUE_INTERVAL_MS;
@@ -3379,54 +3960,173 @@ function pickFreshLine(entity, pool = [], channel = 'speech') {
   return choices[Math.floor(game.rng() * choices.length)];
 }
 
+function inferSpeechAddressee(speaker, opts = {}) {
+  if (!speaker) return null;
+  if (opts.addressee) return opts.addressee;
+  if (opts.peer) return opts.peer;
+  if (opts.target) return opts.target;
+
+  // Choose a nearby named person in the same room so student speech sounds directed.
+  const sameRoom = game.entities.filter((entity) => {
+    if (!entity || entity === speaker || !entity.name) return false;
+    if (entityRoom(entity) !== entityRoom(speaker)) return false;
+    return distance(entity, speaker) <= 8.5;
+  });
+  if (!sameRoom.length) return null;
+
+  // Students prefer speaking to teachers first, then nearest student.
+  if (speaker.role === 'student') {
+    const teacher = sameRoom.find((entity) => entity.role === 'teacher');
+    if (teacher) return teacher;
+  }
+  return sameRoom.sort((a, b) => distance(a, speaker) - distance(b, speaker))[0] || null;
+}
+
+
+function deliverResolvedSpeech(entity, resolvedText, addressee, opts = {}, now = performance.now()) {
+  const finalSpeech = entity.role === 'student' && addressee?.name
+    ? ensureAddressedNameInSpeech(resolvedText, addressee.name)
+    : sanitizeLlmLine(resolvedText, '...');
+  if (!opts.force && !markDialogueUsed(entity, finalSpeech, 'speech')) return false;
+  entity.speech = { text: finalSpeech, kind: opts.kind || 'speech', until: now + (opts.durationMs || 2600) };
+  entity.lastSpokeAt = now;
+  const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 8;
+  const shouldLogSpeech = opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange);
+  if (shouldLogSpeech) pushFeedEvent(`${entity.name}: ${finalSpeech}`, 'speech');
+  if (addressee?.name) recordNpcConversationTurn(entity, addressee, finalSpeech);
+  return true;
+}
+
+function deliverResolvedThought(entity, resolvedText, durationMs = 3200, opts = {}, now = performance.now()) {
+  const thoughtText = sanitizeLlmLine(resolvedText, '...');
+  if (!markDialogueUsed(entity, thoughtText, 'thought')) return false;
+  entity.thought = { text: thoughtText, until: now + durationMs };
+  entity.lastThoughtAt = now;
+  const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 7.2;
+  if (opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange)) {
+    pushFeedEvent(`💭 ${entity.name}: ${thoughtText}`, 'thought');
+  }
+  return true;
+}
+
+function flushDeferredLlmDialogue(now = performance.now()) {
+  for (const entity of game.entities) {
+    if (!entity) continue;
+    const pendingSpeech = entity.pendingSpeech;
+    if (pendingSpeech) {
+      const key = llmCacheKey(pendingSpeech.payload);
+      const cached = game.llm.cache.get(key);
+      if (cached) {
+        deliverResolvedSpeech(entity, cached, pendingSpeech.addressee, pendingSpeech.opts, now);
+        entity.pendingSpeech = null;
+      } else if (now - pendingSpeech.createdAt > 24000) {
+        pushLlmDebug(`🧼 Dropped stale deferred speech for ${entity.name} (no fallback used).`, 'warn');
+        entity.pendingSpeech = null;
+      }
+    }
+
+    const pendingThought = entity.pendingThought;
+    if (pendingThought) {
+      const key = llmCacheKey(pendingThought.payload);
+      const cached = game.llm.cache.get(key);
+      if (cached) {
+        deliverResolvedThought(entity, cached, pendingThought.durationMs, pendingThought.opts, now);
+        entity.pendingThought = null;
+      } else if (now - pendingThought.createdAt > 24000) {
+        pushLlmDebug(`🧼 Dropped stale deferred thought for ${entity.name} (no fallback used).`, 'warn');
+        entity.pendingThought = null;
+      }
+    }
+  }
+}
+
+function ensureAddressedNameInSpeech(line, addresseeName) {
+  const text = sanitizeLlmLine(line, '...');
+  if (!addresseeName) return text;
+  const hasName = new RegExp(`\\b${addresseeName.replace(/[.*+?^${}()|[\\]\\]/g, '\\\\$&')}\\b`, 'i').test(text);
+  if (hasName) return text;
+  return `${addresseeName}, ${text}`;
+}
+
 function say(entity, text, opts = {}) {
   if (!entity || !text) return;
   const now = performance.now();
+  // Keep off-screen NPCs silent to reduce LLM queue pressure and maintain local readability.
+  if (entity.role !== 'player' && !isEntityVisibleToPlayer(entity) && !opts.allowOffscreenSpeech) return;
   if (!opts.force && !canUseDialogue(entity, now, 'speech')) return;
+  const currentPeriod = schedule[game.periodIndex];
+  if (isAssemblyPeriod(currentPeriod) && entityRoom(entity) === 'Assembly Hall' && entity.name !== 'Mr Wacker' && !opts.allowAssemblySpeech) return;
   // Some pupils are naturally quiet; they often skip optional chatter.
   const silenceBias = clampScore(55 - ((entity.traits?.friendly || 40) * 0.28) - ((entity.traits?.funny || 40) * 0.18) + ((entity.traits?.discipline || 40) * 0.08), 8, 70);
   if (!opts.force && Math.random() < (silenceBias / 100)) return;
-  const spokenText = resolveLlmText({
+  const addressee = inferSpeechAddressee(entity, opts);
+  const threadContext = recentConversationContext(entity, addressee);
+  const threadKey = addressee ? conversationThreadKey(entity, addressee) : '';
+  const threadTurn = threadKey ? ((game.npcConversations[threadKey] || []).length + 1) : 0;
+  const payload = {
     channel: 'speech',
     subject: roomSubjectName(entityRoom(entity)),
     speaker: entity.name,
     speakerRole: roleLabelForLlm(entity.role),
     traitSummary: summarizeTraitBundle(entity.traits),
     room: entityRoom(entity),
+    addresseeName: addressee?.name || '',
+    addresseeRole: addressee ? roleLabelForLlm(addressee.role) : '',
+    conversationContext: threadContext,
+    conversationTurn: threadTurn,
     fallback: String(text),
-  });
-  if (!opts.force && !markDialogueUsed(entity, spokenText, 'speech')) return;
-  entity.speech = { text: spokenText, kind: opts.kind || 'speech', until: now + (opts.durationMs || 2600) };
-  entity.lastSpokeAt = now;
+  };
 
-  // Mirror audible speech into the side feed so players can review chatter they may miss on-screen.
-  const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 8;
-  const shouldLogSpeech = opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange);
-  if (shouldLogSpeech) pushFeedEvent(`${entity.name}: ${spokenText}`, 'speech');
+  const shouldDefer = llmModeEnabled() && (game.llm.noFallback || opts.force !== true);
+  const spokenText = resolveLlmText(payload, { allowFallback: !shouldDefer });
+  if (!spokenText && shouldDefer) {
+    const pendingKey = entity.pendingSpeech ? llmCacheKey(entity.pendingSpeech.payload) : '';
+    const requestKey = llmCacheKey(payload);
+    if (pendingKey === requestKey) return;
+    // Keep the interaction responsive by deferring until model output lands, instead of using fallback text.
+    entity.pendingSpeech = {
+      payload,
+      addressee,
+      opts: { ...opts },
+      createdAt: now,
+    };
+    return;
+  }
+
+  deliverResolvedSpeech(entity, spokenText || String(text), addressee, opts, now);
 }
 
 function think(entity, text, durationMs = 3200, opts = {}) {
   if (!entity || !text) return;
   const now = performance.now();
+  if (entity.role !== 'player' && !isEntityVisibleToPlayer(entity) && !opts.allowOffscreenSpeech) return;
   if (!canUseDialogue(entity, now, 'thought')) return;
-  const thoughtText = resolveLlmText({
+  const payload = {
     channel: 'thought',
     subject: roomSubjectName(entityRoom(entity)),
     speaker: entity.name,
     speakerRole: roleLabelForLlm(entity.role),
     traitSummary: summarizeTraitBundle(entity.traits),
     room: entityRoom(entity),
+    addresseeName: '',
+    addresseeRole: '',
     fallback: String(text),
-  });
-  if (!markDialogueUsed(entity, thoughtText, 'thought')) return;
-  entity.thought = { text: thoughtText, until: now + durationMs };
-  entity.lastThoughtAt = now;
-
-  // Optional thought-feed mirror helps debug AI intent while staying filterable.
-  const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 7.2;
-  if (opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange)) {
-    pushFeedEvent(`💭 ${entity.name}: ${thoughtText}`, 'thought');
+  };
+  const shouldDefer = llmModeEnabled() && game.llm.noFallback;
+  const thoughtText = resolveLlmText(payload, { allowFallback: !shouldDefer });
+  if (!thoughtText && shouldDefer) {
+    const pendingKey = entity.pendingThought ? llmCacheKey(entity.pendingThought.payload) : '';
+    const requestKey = llmCacheKey(payload);
+    if (pendingKey === requestKey) return;
+    entity.pendingThought = {
+      payload,
+      durationMs,
+      opts: { ...opts },
+      createdAt: now,
+    };
+    return;
   }
+  deliverResolvedThought(entity, thoughtText || String(text), durationMs, opts, now);
 }
 
 function tradeChanceFor(actor, partner, isPlayerInitiated = false) {
@@ -4114,6 +4814,7 @@ function recoverPlayerIfWallStuck(dt) {
 }
 
 function setPeriod(index) {
+  const previous = schedule[game.periodIndex];
   game.periodIndex = index % schedule.length;
   game.periodElapsed = 0;
   game.periodHoldMinutes = 0;
@@ -4121,16 +4822,43 @@ function setPeriod(index) {
   game.ericSeatBlockedWarned = false;
   game.ericSeatDecisionPrompted = false;
   const current = schedule[game.periodIndex];
+  const orderlyAssemblyDismissal = isAssemblyPeriod(previous) && !isAssemblyPeriod(current);
   // Bell changes stand everyone up and clears stale routes between periods.
   player.isSeated = false;
   player.seatedRoom = null;
+  const nowBell = performance.now();
+  const studentsDismissOrder = game.entities
+    .filter((entity) => entity !== player && isStudentCharacter(entity))
+    .sort((a, b) => (a.seatIndex || 0) - (b.seatIndex || 0));
+  const teachersDismissOrder = game.entities
+    .filter((entity) => entity.role === 'teacher')
+    .sort((a, b) => (a.name === 'Mr Wacker' ? 1 : 0) - (b.name === 'Mr Wacker' ? 1 : 0));
+
   for (const entity of game.entities) {
     if (entity === player) continue;
     entity.target = null;
     entity.isSeated = false;
     entity.seatedRoom = null;
-    // Bell release: students instantly stand and transition toward the next room.
-    entity.bellRushUntil = performance.now() + 4200;
+    const studentIndex = studentsDismissOrder.findIndex((student) => student === entity);
+    const teacherIndex = teachersDismissOrder.findIndex((teacher) => teacher === entity);
+    if (orderlyAssemblyDismissal && studentIndex >= 0) {
+      entity.assemblyReleaseAt = nowBell + (studentIndex * 520);
+      entity.bellRushUntil = 0;
+    } else if (orderlyAssemblyDismissal && teacherIndex >= 0) {
+      entity.assemblyReleaseAt = nowBell + ((studentsDismissOrder.length + teacherIndex) * 620);
+      entity.bellRushUntil = 0;
+    } else {
+      entity.assemblyReleaseAt = 0;
+      // Bell release: students instantly stand and transition toward the next room.
+      entity.bellRushUntil = nowBell + 4200;
+    }
+  }
+
+  if (orderlyAssemblyDismissal && game.autoMode) {
+    const ericStudentOrder = Math.floor(studentsDismissOrder.length * 0.25);
+    player.assemblyReleaseAt = nowBell + (ericStudentOrder * 520);
+  } else {
+    player.assemblyReleaseAt = 0;
   }
   if (isRegistrationPeriod(current)) game.registrationTaken = false;
 
@@ -4151,6 +4879,9 @@ function setPeriod(index) {
 
   game.bellRingingUntil = performance.now() + 3000;
   announce(`🔔 Bell! ${current.period} in ${current.room}`, { feedType: 'world' });
+  if (orderlyAssemblyDismissal) {
+    announce('🚶 Assembly dismissed in order: students first, then teachers.', { force: true, feedType: 'world' });
+  }
   if (current.period === 'Lunch Break') {
     announce('🍽️ Lunch service is open in the dining hall for 30 minutes.', { feedType: 'world' });
     for (const entity of game.entities) {
@@ -4166,6 +4897,7 @@ function setPeriod(index) {
     game.assemblyNextSpeechAt = performance.now() + 1400;
     game.assemblyHymnAt = performance.now() + 10000;
     game.assemblyUsedThoughts = new Set();
+    primeDailyAssemblyHymn();
     announce('🎤 Assembly begins: all students to seats, teachers behind the Headmaster.', { feedType: 'world' });
     if (headmaster) {
       say(headmaster, '📢 Good morning! Sit smartly for today\'s thought and hymn.', { force: true, durationMs: 3600 });
@@ -5260,6 +5992,7 @@ function syncComputerStations() {
 }
 
 function chooseTarget(entity, currentPeriod) {
+  if (performance.now() < (entity.assemblyReleaseAt || 0)) return holdAssemblyDismissalPosition(entity);
   // Janitor idles in his room unless there is a cleanup callout.
   if (entity.role === 'janitor') {
     if (game.janitorTask) return { x: game.janitorTask.x, y: game.janitorTask.y };
@@ -5603,6 +6336,8 @@ function updateAI(dt) {
   const assignedTeacherName = assignedTeacherForRoom(current.room);
   const now = performance.now();
   const headmaster = game.entities.find((entity) => entity.role === 'teacher' && entity.name === 'Mr Wacker');
+  // Deliver any deferred LLM-only dialogue once responses arrive in cache.
+  flushDeferredLlmDialogue(now);
 
   if (isAssemblyPeriod(current) && headmaster && now >= game.assemblyNextSpeechAt) {
     let thought = randomHeadmasterAssemblyThought();
@@ -5614,17 +6349,11 @@ function updateAI(dt) {
     game.assemblyUsedThoughts.add(thought);
     say(headmaster, thought, { force: true, durationMs: 4200 });
     announce(`🧑‍🏫 Headmaster thought: ${thought}`, { force: true });
-    game.assemblyNextSpeechAt = now + 8500;
+    runAssemblyCallAndResponse(now, headmaster);
   }
 
   if (isAssemblyPeriod(current) && headmaster && now >= game.assemblyHymnAt) {
-    say(headmaster, '🎵 Hymn time! Voices up, hearts steady, no mumbling in row three!', { force: true, durationMs: 4200 });
-    for (const singer of game.entities) {
-      if (!isStudentCharacter(singer) && singer.role !== 'teacher') continue;
-      if (entityRoom(singer) !== 'Assembly Hall') continue;
-      if (game.rng() < 0.28) say(singer, '🎶 La-la-laaa...', { durationMs: 2400, force: true });
-    }
-    game.assemblyHymnAt = now + 18000;
+    runAssemblyHymn(now, headmaster);
   }
 
   if (supervised) {
@@ -5644,6 +6373,8 @@ function updateAI(dt) {
 
   maybeStartClassQuestion(current, now);
   updateClassQuestionSystem(now);
+  // Emergent social simulation gives NPCs evolving bonds, rivalries, and group behaviour.
+  updateEmergentSocialLife(now, current);
 
   for (const entity of game.entities) {
     if (entity === player) continue;
@@ -5750,7 +6481,7 @@ function updateAI(dt) {
           if (now >= (entity.lunchEatUntil || 0)) {
             entity.lunchState = 'done';
             entity.hasLunchPlate = false;
-            entity.target = roomCenter('P.E. Field');
+            entity.target = lunchFieldSpotForEntity(entity);
           }
         }
       }
@@ -5835,7 +6566,11 @@ function updateAI(dt) {
         : roomCenter('Staff Room');
     } else if (!entity.target || game.rng() < 0.01) {
       entity.lessonRoom = null;
-      entity.target = chooseTarget(entity, current);
+      if (isLunchtimePeriod(current) && isStudent && entity.lunchState === 'done') {
+        entity.target = lunchFieldSpotForEntity(entity);
+      } else {
+        entity.target = chooseTarget(entity, current);
+      }
     }
 
     // General student misbehaviour: keep rare and mostly outside lessons.
@@ -5938,7 +6673,7 @@ function updateAI(dt) {
       : (inLesson ? (entity.lessonRoom || current.room) : current.room);
     const inAssignedClassroom = inLesson && isStudent && entityRoom(entity) === expectedRoomNow;
     const walkingToClass = inLesson && isStudent && !inAssignedClassroom;
-    if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home' || walkingToClass) && isStudent && game.rng() < 0.011) {
+    if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home' || walkingToClass) && isStudent && game.rng() < 0.0045) {
       ensureDialogueSetup(entity);
       const hallwayChatter = entity.dialogue.hallwayChatter || ['😆 Wait up, I am coming too!'];
       const line = pickFreshLine(entity, hallwayChatter, 'speech');
@@ -5962,7 +6697,7 @@ function updateAI(dt) {
     }
 
     // Teacher occasionally hushes the class, then students slowly get noisy again.
-    if (inLesson && entity.role === 'teacher' && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.lessonNoiseLevel > 0.38 && game.rng() < 0.003) {
+    if (inLesson && entity.role === 'teacher' && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.lessonNoiseLevel > 0.38 && game.rng() < 0.0013) {
       ensureDialogueSetup(entity);
       const quietCalls = [
         `🤨 ${entity.name}: posture check — settle down.`,
@@ -5975,7 +6710,7 @@ function updateAI(dt) {
     }
 
     // Witty teacher comeback when a student asks a silly question.
-    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < 0.00055) {
+    if (inLesson && isStudent && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.rng() < 0.00024) {
       const sillyQuestions = ['🙃 Sir, can we do homework in our dreams?', '😅 Miss, is zero afraid of minus numbers?', '🤔 If I eat my notes, do I absorb the lesson?', '🧪 If we mix maths and music, do we get algebra beats?', '📏 Can I measure effort with a ruler and hand that in?', '🛰️ If I answer in space-voice, is it still correct?', '🍟 Is lunch technically a science experiment?', '🎭 If I act confident, do I get confidence marks?', '🦆 Is a duck in uniform allowed in assembly?', '📚 If I highlight everything, does that count as revision?', '🧠 Can my future self come sit this test for me?', '⏰ Can we have a two-minute break every two minutes?'];
       say(entity, sillyQuestions[Math.floor(game.rng() * sillyQuestions.length)], { durationMs: 3600 });
       const classTeacher = game.entities.find((candidate) => (
@@ -6014,8 +6749,11 @@ function updateAI(dt) {
 
     // Bully behaviour is period-aware so mornings stay mostly calm.
     if (entity.role === 'bully') {
+      const inLunchField = isLunchtimePeriod(current) && entityRoom(entity) === 'P.E. Field';
       const supervisionSuppression = dinnerLadyWatchingField && entityRoom(entity) === 'Dining Hall' ? 0.22 : 1;
-      if (game.rng() < bullyFightChance(current) * supervisionSuppression) {
+      const fieldDeescalation = inLunchField ? 0.35 : 1;
+      const canStartFight = !shouldAvoidLunchFight(entity);
+      if (canStartFight && game.rng() < bullyFightChance(current) * supervisionSuppression * fieldDeescalation) {
         meleeAttack(entity);
       }
     }
@@ -6036,7 +6774,7 @@ function updateAI(dt) {
     }
 
     // Break-time social bubbles make playground time feel alive.
-    if (current.mode === 'break' && isStudent && (!dinnerLadyWatchingField || entityRoom(entity) !== 'Dining Hall') && game.rng() < 0.016) {
+    if (current.mode === 'break' && isStudent && (!dinnerLadyWatchingField || entityRoom(entity) !== 'Dining Hall') && game.rng() < 0.007) {
       ensureDialogueSetup(entity);
       const recent = randomHistorySnippet();
       if (recent && game.rng() < 0.52) {
@@ -6058,7 +6796,7 @@ function updateAI(dt) {
     }
 
     // Weather drives break-time choices and social reactions.
-    if (current.mode === 'break' && !isLunchtimePeriod(current) && isStudent && game.rng() < 0.011) {
+    if (current.mode === 'break' && !isLunchtimePeriod(current) && isStudent && game.rng() < 0.0045) {
       if (game.weather === 'rain') {
         entity.target = roomCenter('Assembly Hall');
         if (isOutside) think(entity, '🌧️ No thanks, staying inside today.');
@@ -7822,7 +8560,9 @@ function updateEntityTooltip(event) {
     const pocketItems = (hovered.inventory || []).slice(0, 3).join(', ');
     const moreItems = (hovered.inventory || []).length > 3 ? ` +${hovered.inventory.length - 3}` : '';
     const relationText = hovered.role === 'player' ? 'self' : relationshipLabel(hovered.relationships?.Eric || 0);
-    entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>📍 ${room} | 🤝 ${relationText}<br>⚡ Energy ${tooltipBar(hovered.energy, '#ffd166')}<br>🚻 Bladder ${tooltipBar(hovered.bladder, '#ff9f1c')}<br>🧼 Hygiene ${tooltipBar(hovered.hygiene || 0, '#72efdd')}<br>❤️ HP ${tooltipBar(hovered.hp, '#ef476f')}<br>🧠 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>💷 £${Math.round(hovered.money || 0)} | 🤝 Trade ${Math.round(hovered.traits?.trading || 0)} | 🗣️ Barter ${Math.round(hovered.traits?.barter || 0)}<br>📝 Notes: ${hovered.title || hovered.profile?.title || 'No public notes yet'}<br>🎒 ${pocketItems || 'nothing useful'}${moreItems}`;
+    const socialTag = hovered.socialProfile?.cliqueId ? ` | 🧑‍🤝‍🧑 ${hovered.socialProfile.cliqueId}` : '';
+    const quirkTag = hovered.socialProfile?.evolvingQuirks?.length ? hovered.socialProfile.evolvingQuirks.slice(-1)[0] : 'settling in';
+    entityTooltipEl.innerHTML = `${hovered.name} (${role})<br>📍 ${room} | 🤝 ${relationText}${socialTag}<br>⚡ Energy ${tooltipBar(hovered.energy, '#ffd166')}<br>🚻 Bladder ${tooltipBar(hovered.bladder, '#ff9f1c')}<br>🧼 Hygiene ${tooltipBar(hovered.hygiene || 0, '#72efdd')}<br>❤️ HP ${tooltipBar(hovered.hp, '#ef476f')}<br>🧠 Mood: ${Math.round(hovered.emotion || 0)} | 🦚 Pride: ${Math.round(hovered.pride || 0)}<br>💷 £${Math.round(hovered.money || 0)} | 🤝 Trade ${Math.round(hovered.traits?.trading || 0)} | 🗣️ Barter ${Math.round(hovered.traits?.barter || 0)}<br>🧬 Social quirk: ${quirkTag}<br>📝 Notes: ${hovered.title || hovered.profile?.title || 'No public notes yet'}<br>🎒 ${pocketItems || 'nothing useful'}${moreItems}`;
     positionTooltip(pointer, 118, 260);
     entityTooltipEl.hidden = false;
     return;
@@ -8162,6 +8902,7 @@ function startGameFromSplash() {
   assignDailyDutyTeacher();
   announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
   if (llmModeEnabled()) {
+    primeLlmSessionContext();
     announce(`🤖 LLM mode active via ${llmProviderLabel()}. Dialogue cache warming in background.`, { force: true, feedType: 'world' });
   }
   if (game.dutyTeacherName) {
@@ -8179,6 +8920,15 @@ function startGameFromSplash() {
   requestAnimationFrame(loop);
 }
 
+
+if (llmDebugClearBtn) {
+  llmDebugClearBtn.addEventListener('click', () => {
+    game.llm.debugLog = [];
+    renderLlmDebugLog();
+    pushLlmDebug('🧹 LLM debug log cleared by player.');
+  });
+}
+
 if (startGameBtn) startGameBtn.addEventListener('click', startGameFromSplash);
 
 if (optLlmEnabledEl) {
@@ -8188,8 +8938,16 @@ if (optLlmEnabledEl) {
     applyLlmUiState();
     persistLlmSettings();
     setLlmStatus(game.llm.enabled
-      ? '🤖 LLM mode enabled. First lines may use fallback text while cache warms up.'
+      ? (game.llm.noFallback
+        ? '🤖 LLM mode enabled (no fallback). NPC dialogue waits for model replies.'
+        : '🤖 LLM mode enabled. First lines may use fallback text while cache warms up.')
       : 'ℹ️ LLM mode disabled. Using original built-in text.');
+    if (game.llm.enabled) {
+      pushLlmDebug(`🟢 LLM enabled with ${llmProviderLabel()}.`);
+      primeLlmSessionContext();
+    } else {
+      pushLlmDebug('⚪ LLM disabled; deterministic fallback text active.', 'warn');
+    }
   });
 }
 
@@ -8206,11 +8964,26 @@ if (optLlmNsfwEl) {
   });
 }
 
+
+if (optLlmNoFallbackEl) {
+  optLlmNoFallbackEl.checked = Boolean(game.llm.noFallback);
+  optLlmNoFallbackEl.addEventListener('change', () => {
+    // No-fallback mode uses deferred LLM delivery so we clear cache to avoid mixed behaviour.
+    game.llm.noFallback = Boolean(optLlmNoFallbackEl.checked);
+    game.llm.cache.clear();
+    persistLlmSettings();
+    setLlmStatus(game.llm.noFallback
+      ? '🧵 No-fallback mode enabled. Dialogue waits for LLM replies.'
+      : '🧩 Fallback mode enabled. Built-in lines are used when cache misses.');
+  });
+}
+
 if (optLlmSourceEl) {
   optLlmSourceEl.value = game.llm.source;
   optLlmSourceEl.addEventListener('change', () => {
     game.llm.source = optLlmSourceEl.value === 'remote' ? 'remote' : 'local';
     game.llm.cache.clear();
+    game.llm.sessionPrimedForProvider = '';
     applyLlmUiState();
     persistLlmSettings();
     setLlmStatus(`🧭 LLM source set to ${game.llm.source}. Cache refreshed.`);
@@ -8228,6 +9001,7 @@ if (optLlmModelEl) {
       }
       if (!game.llm.manualModelName) game.llm.manualModelName = selected;
       game.llm.cache.clear();
+      game.llm.sessionPrimedForProvider = '';
       persistLlmSettings();
       setLlmStatus(`✅ Local model set to ${selected}. Cache reset for fresh responses.`);
     }
@@ -8240,6 +9014,7 @@ if (optLlmLocalEndpointEl) {
     game.llm.localEndpoint = normalizeLocalEndpoint(optLlmLocalEndpointEl.value || game.llm.localEndpoint);
     optLlmLocalEndpointEl.value = game.llm.localEndpoint;
     game.llm.cache.clear();
+    game.llm.sessionPrimedForProvider = '';
     persistLlmSettings();
     setLlmStatus(`🔌 Local endpoint set to ${game.llm.localEndpoint}. Use refresh to load models.`);
   });
@@ -8256,6 +9031,7 @@ if (optLlmManualModelEl) {
     }
     if (typed) game.llm.selectedModel = typed;
     game.llm.cache.clear();
+    game.llm.sessionPrimedForProvider = '';
     persistLlmSettings();
     setLlmStatus(typed
       ? `⌨️ Manual Ollama model set to ${typed}.`
@@ -8272,6 +9048,7 @@ if (optLlmRemoteProviderEl) {
     }
     game.llm.remoteModel = String(optLlmRemoteModelEl?.value || '').trim() || (game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini');
     game.llm.cache.clear();
+    game.llm.sessionPrimedForProvider = '';
     applyLlmUiState();
     persistLlmSettings();
     setLlmStatus(`☁️ Remote provider set to ${game.llm.remoteProvider.toUpperCase()}.`);
@@ -8283,6 +9060,7 @@ if (optLlmRemoteModelEl) {
   optLlmRemoteModelEl.addEventListener('change', () => {
     game.llm.remoteModel = String(optLlmRemoteModelEl.value || '').trim();
     game.llm.cache.clear();
+    game.llm.sessionPrimedForProvider = '';
     persistLlmSettings();
     setLlmStatus(`🧾 Remote model set to ${game.llm.remoteModel || 'default'}.`);
   });
@@ -8293,6 +9071,7 @@ if (optLlmRemoteTokenEl) {
   optLlmRemoteTokenEl.addEventListener('change', () => {
     game.llm.remoteToken = String(optLlmRemoteTokenEl.value || '').trim();
     game.llm.cache.clear();
+    game.llm.sessionPrimedForProvider = '';
     updateLlmTokenUi();
     persistLlmSettings();
     setLlmStatus('🔐 Remote token updated and saved in this browser.');
@@ -8316,6 +9095,7 @@ if (optLlmClearTokenEl) {
     game.llm.remoteToken = '';
     if (optLlmRemoteTokenEl) optLlmRemoteTokenEl.value = '';
     game.llm.cache.clear();
+    game.llm.sessionPrimedForProvider = '';
     updateLlmTokenUi();
     persistLlmSettings();
     setLlmStatus('🧹 Cleared saved remote token.');
