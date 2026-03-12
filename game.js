@@ -1188,11 +1188,34 @@ function llmModeEnabled() {
   return Boolean(game.llm.enabled && game.llm.selectedModel);
 }
 
-function llmCacheKey({ channel = 'speech', subject = 'General', speaker = 'Narrator', room = 'School', fallback = '' }) {
-  return `${game.llm.selectedModel || 'none'}|${channel}|${subject}|${speaker}|${room}|${String(fallback).toLowerCase().slice(0, 120)}`;
+function llmCacheKey({ channel = 'speech', subject = 'General', speaker = 'Narrator', room = 'School', fallback = '', speakerRole = 'character', traitSummary = 'balanced' }) {
+  return `${game.llm.selectedModel || 'none'}|${channel}|${subject}|${speaker}|${speakerRole}|${traitSummary}|${room}|${String(fallback).toLowerCase().slice(0, 120)}`;
 }
 
-function buildLlmPrompt({ channel = 'speech', subject = 'General', speaker = 'Narrator', room = 'School', fallback = '' }) {
+function summarizeTraitBundle(traits = {}) {
+  // Keep trait context compact so prompts stay fast while still feeling characterful.
+  const keys = ['discipline', 'friendly', 'aggression', 'intelligence', 'wit', 'honor', 'funny', 'trading'];
+  return keys
+    .map((key) => `${key}:${Math.round(Number(traits?.[key] || 0))}`)
+    .join(', ');
+}
+
+function roleLabelForLlm(role = '') {
+  if (role === 'teacher') return 'teacher';
+  if (role === 'player') return 'student';
+  if (role === 'janitor' || role === 'nurse' || role === 'dinnerLady') return 'staff';
+  return 'student';
+}
+
+function buildLlmPrompt({
+  channel = 'speech',
+  subject = 'General',
+  speaker = 'Narrator',
+  room = 'School',
+  fallback = '',
+  speakerRole = 'character',
+  traitSummary = 'balanced traits',
+}) {
   const styleGuide = channel === 'thought'
     ? 'Write a short first-person thought bubble. Keep it under 14 words.'
     : channel === 'quiz'
@@ -1205,6 +1228,7 @@ function buildLlmPrompt({ channel = 'speech', subject = 'General', speaker = 'Na
       'Respond ONLY as JSON: {"q":"...","choices":["A","B","C","D"],"answer":"..."}.',
       'The answer must exactly match one of the choices. No markdown.',
       `Subject: ${subject}. Room: ${room}. Teacher context: ${speaker}.`,
+      `Teacher role: ${speakerRole}. Traits snapshot: ${traitSummary}.`,
       `Fallback question for reference: ${fallback}`,
       styleGuide,
     ].join('\n');
@@ -1212,9 +1236,12 @@ function buildLlmPrompt({ channel = 'speech', subject = 'General', speaker = 'Na
 
   return [
     'You write concise text for a school simulation game.',
+    'Pretend you are the exact character below speaking in first person voice.',
     styleGuide,
+    'Keep the line short, snappy, and in-character.',
     'Stay classroom-safe and avoid profanity.',
-    `Speaker: ${speaker}. Room: ${room}. Subject: ${subject}.`,
+    `Speaker: ${speaker}. Role: ${speakerRole}. Traits: ${traitSummary}.`,
+    `Room: ${room}. Subject: ${subject}.`,
     `Fallback line to adapt: ${fallback}`,
   ].join('\n');
 }
@@ -1267,6 +1294,8 @@ function resolveLlmQuizQuestion(fallbackQuiz) {
     channel: 'quiz',
     subject: fallbackQuiz.subject,
     speaker: 'Assigned Teacher',
+    speakerRole: 'teacher',
+    traitSummary: 'discipline:85, intelligence:80, honor:60',
     room: fallbackQuiz.roomName,
     fallback: fallbackQuiz.q,
   };
@@ -1302,6 +1331,8 @@ function warmupLlmCache() {
       channel: 'speech',
       subject: roomSubjectName(entityRoom(entity)),
       speaker: entity.name,
+      speakerRole: roleLabelForLlm(entity.role),
+      traitSummary: summarizeTraitBundle(entity.traits),
       room: entityRoom(entity),
       fallback: entity.dialogue?.hallwayChatter?.[0] || 'Busy day at school.',
     });
@@ -1309,6 +1340,8 @@ function warmupLlmCache() {
       channel: 'thought',
       subject: roomSubjectName(entityRoom(entity)),
       speaker: entity.name,
+      speakerRole: roleLabelForLlm(entity.role),
+      traitSummary: summarizeTraitBundle(entity.traits),
       room: entityRoom(entity),
       fallback: entity.dialogue?.thoughts?.[0] || 'I should stay focused.',
     });
@@ -3023,6 +3056,8 @@ function say(entity, text, opts = {}) {
     channel: 'speech',
     subject: roomSubjectName(entityRoom(entity)),
     speaker: entity.name,
+    speakerRole: roleLabelForLlm(entity.role),
+    traitSummary: summarizeTraitBundle(entity.traits),
     room: entityRoom(entity),
     fallback: String(text),
   });
@@ -3044,6 +3079,8 @@ function think(entity, text, durationMs = 3200, opts = {}) {
     channel: 'thought',
     subject: roomSubjectName(entityRoom(entity)),
     speaker: entity.name,
+    speakerRole: roleLabelForLlm(entity.role),
+    traitSummary: summarizeTraitBundle(entity.traits),
     room: entityRoom(entity),
     fallback: String(text),
   });
@@ -3282,6 +3319,8 @@ function announce(message, options = {}) {
     channel: source ? 'speech' : 'announcement',
     subject: source ? roomSubjectName(entityRoom(source)) : roomSubjectName(schedule[game.periodIndex]?.room),
     speaker: source?.name || 'Narrator',
+    speakerRole: source ? roleLabelForLlm(source.role) : 'narrator',
+    traitSummary: source ? summarizeTraitBundle(source.traits) : 'neutral',
     room: source ? entityRoom(source) : (schedule[game.periodIndex]?.room || 'School'),
     fallback: String(message),
   });
