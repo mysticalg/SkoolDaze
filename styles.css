@@ -38,6 +38,66 @@ body {
 .hud { display: flex; flex-wrap: wrap; gap: 0.45rem 0.65rem; font-size: 0.74rem; line-height: 1.2; }
 .top-controls { display: flex; gap: 0.32rem; }
 
+.start-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(3, 8, 18, 0.88);
+  backdrop-filter: blur(4px);
+}
+
+.start-card {
+  width: min(720px, 96vw);
+  background: #0e1726;
+  border: 1px solid #4a628c;
+  border-radius: 14px;
+  padding: 0.95rem;
+}
+
+.start-subtitle { margin-top: 0.2rem; color: #b9d7f5; }
+
+.start-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.start-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+  font-size: 0.8rem;
+}
+
+.start-grid input,
+.start-grid select {
+  border: 1px solid #4a628c;
+  border-radius: 8px;
+  background: #11233e;
+  color: #eaf6ff;
+  min-height: 2rem;
+  padding: 0.2rem 0.4rem;
+}
+
+.ratios { margin-bottom: 0.6rem; }
+
+.start-btn {
+  width: 100%;
+  min-height: 2.35rem;
+  border: 1px solid #7bb9ff;
+  border-radius: 9px;
+  background: linear-gradient(180deg, #153455, #0f2742);
+  color: #eaf6ff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.start-btn:hover { background: linear-gradient(180deg, #1a4068, #143252); }
+
 
 .floor-clock-group {
   display: inline-flex;
@@ -51,61 +111,6 @@ body {
 #roomTarget,
 #floorStatus {
   white-space: nowrap;
-}
-
-.analog-clock {
-  width: 1.65rem;
-  height: 1.65rem;
-  border-radius: 50%;
-  border: 1px solid #d9e8f7;
-  background: radial-gradient(circle at 35% 28%, #ffffff 0%, #f4f8ff 62%, #d2def0 100%);
-  position: relative;
-  display: inline-block;
-  flex: 0 0 auto;
-  box-shadow: inset 0 0 0 1px rgba(14, 26, 44, 0.18), 0 0 0 1px rgba(89, 117, 146, 0.22);
-}
-
-.clock-face {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at center, #2c3f57 0 0.065rem, transparent 0.08rem),
-    conic-gradient(from -90deg,
-      #6f7f95 0deg 2deg, transparent 2deg 28deg,
-      #6f7f95 28deg 30deg, transparent 30deg 58deg,
-      #6f7f95 58deg 60deg, transparent 60deg 88deg,
-      #6f7f95 88deg 90deg, transparent 90deg 118deg,
-      #6f7f95 118deg 120deg, transparent 120deg 148deg,
-      #6f7f95 148deg 150deg, transparent 150deg 178deg,
-      #6f7f95 178deg 180deg, transparent 180deg 208deg,
-      #6f7f95 208deg 210deg, transparent 210deg 238deg,
-      #6f7f95 238deg 240deg, transparent 240deg 268deg,
-      #6f7f95 268deg 270deg, transparent 270deg 298deg,
-      #6f7f95 298deg 300deg, transparent 300deg 328deg,
-      #6f7f95 328deg 330deg, transparent 330deg 360deg);
-}
-
-.clock-hand {
-  position: absolute;
-  left: 50%;
-  bottom: 50%;
-  transform-origin: 50% 100%;
-  border-radius: 999px;
-}
-
-.clock-hand.hour {
-  width: 0.11rem;
-  height: 0.43rem;
-  margin-left: -0.055rem;
-  background: #102135;
-}
-
-.clock-hand.minute {
-  width: 0.09rem;
-  height: 0.6rem;
-  margin-left: -0.045rem;
-  background: #223c57;
 }
 
 .control {
@@ -223,7 +228,7 @@ canvas {
 .todo-carousel-text {
   display: inline-block;
   padding-left: 100%;
-  animation: todoTicker 24s linear infinite;
+  animation: todoTicker 96s linear infinite;
 }
 @keyframes todoTicker {
   0% { transform: translateX(0); }
@@ -241,14 +246,24 @@ canvas {
 }
 .todo li { margin-bottom: 0.25rem; }
 
+.event-filters {
+  display: flex;
+  gap: 0.7rem;
+  font-size: 0.72rem;
+  margin-top: 0.18rem;
+}
+
 .events {
   margin-top: 0.35rem;
   max-height: 220px;
-  overflow: auto;
+  overflow: hidden;
   border-top: 1px dashed #43597d;
   padding-top: 0.45rem;
   font-size: 0.74rem;
 }
+
+.event-line.speech { color: #bde0ff; }
+.event-line.action { color: #f7f7f7; }
 
 dialog {
   max-width: 560px;

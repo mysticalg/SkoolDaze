@@ -34,6 +34,18 @@ const interactionTitleEl = document.getElementById('interactionTitle');
 const interactionMetaEl = document.getElementById('interactionMeta');
 const interactionOptionsEl = document.getElementById('interactionOptions');
 const closeInteractionPanelBtn = document.getElementById('closeInteractionPanel');
+const filterActionsEl = document.getElementById('filterActions');
+const filterSpeechEl = document.getElementById('filterSpeech');
+const startOverlayEl = document.getElementById('startOverlay');
+const startGameBtn = document.getElementById('startGameBtn');
+const optStudentCountEl = document.getElementById('optStudentCount');
+const optTeacherCountEl = document.getElementById('optTeacherCount');
+const optRatioBullyEl = document.getElementById('optRatioBully');
+const optRatioHeroEl = document.getElementById('optRatioHero');
+const optRatioSwotEl = document.getElementById('optRatioSwot');
+const optRatioWeirdEl = document.getElementById('optRatioWeird');
+const optGameSpeedEl = document.getElementById('optGameSpeed');
+const optWeatherEl = document.getElementById('optWeather');
 document.getElementById('closeHelp').onclick = () => helpDialog.close();
 helpBtn.onclick = () => helpDialog.showModal();
 
@@ -401,6 +413,13 @@ function buildScheduleForDay(dayCount = 1) {
 
 let schedule = buildScheduleForDay(1);
 const TARGET_DAY_REAL_SECONDS = 15 * 60;
+const DEFAULT_GAME_SPEED_MULTIPLIER = 1;
+const ROLE_VISUALS = {
+  bully: '#ff5f88',
+  hero: '#ffd58e',
+  swot: '#8effd3',
+  weird: '#c58eff',
+};
 // NPC stamina tuning:
 // - movement drain is 4x slower than the previous build so students do not crash before lunch.
 // - a gentle day-fatigue baseline still brings most pupils to ~30 energy by home time.
@@ -927,7 +946,8 @@ const TARGET_ATTENDANCE_PERCENT = 95;
 const game = {
   timeMinutes: 8 * 60 + 20,
   // Minutes advanced per real-time second so the full school day lasts ~15 real minutes.
-  timeScale: TOTAL_DAY_GAME_MINUTES / TARGET_DAY_REAL_SECONDS,
+  timeScale: (TOTAL_DAY_GAME_MINUTES / TARGET_DAY_REAL_SECONDS) * DEFAULT_GAME_SPEED_MULTIPLIER,
+  speedMultiplier: DEFAULT_GAME_SPEED_MULTIPLIER,
   periodIndex: 0,
   periodElapsed: 0,
   periodHoldMinutes: 0,
@@ -941,6 +961,8 @@ const game = {
   pellets: [],
   keys: {},
   announcements: [],
+  eventLog: [],
+  eventFilters: { action: true, speech: true },
   rng: Math.random,
   quizActive: null,
   lastLateTick: 0,
@@ -971,6 +993,7 @@ const game = {
   // Dinner lady lunchtime behaviour state for field supervision + interventions.
   dinnerLadyLastWhistleAt: 0,
   weather: 'sunny',
+  preferredWeather: 'auto',
   weatherWeek: 1,
   weatherFx: [],
   // Daily dialogue memory prevents repeated barks from the same NPC in one day.
@@ -1454,6 +1477,74 @@ function seedSwotGameTraders() {
   }
 }
 
+function allNonPlayerStudents() {
+  return game.entities.filter((entity) => entity !== player && STUDENT_ROLES.has(entity.role));
+}
+
+function applyTeacherCount(desiredCount) {
+  // Always keep the headmaster; trim or keep other teachers by current order for predictable setup.
+  const teachers = game.entities.filter((entity) => entity.role === 'teacher');
+  const clamped = Math.max(1, Math.min(teachers.length, Math.round(desiredCount || teachers.length)));
+  const keepNames = new Set(teachers.slice(0, clamped).map((teacher) => teacher.name));
+  game.entities = game.entities.filter((entity) => entity.role !== 'teacher' || keepNames.has(entity.name));
+}
+
+function applyStudentMix(studentCount, ratios) {
+  const students = allNonPlayerStudents();
+  const maxCount = students.length;
+  const desired = Math.max(8, Math.min(maxCount, Math.round(studentCount || students.length)));
+  const activeStudents = students.slice(0, desired);
+  const inactiveNames = new Set(students.slice(desired).map((entity) => entity.name));
+  game.entities = game.entities.filter((entity) => !inactiveNames.has(entity.name));
+
+  const weighted = [
+    { role: 'bully', weight: Math.max(0, Number(ratios.bully) || 0) },
+    { role: 'hero', weight: Math.max(0, Number(ratios.hero) || 0) },
+    { role: 'swot', weight: Math.max(0, Number(ratios.swot) || 0) },
+    { role: 'weird', weight: Math.max(0, Number(ratios.weird) || 0) },
+  ];
+  const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0) || 1;
+  const roleBag = [];
+  for (const entry of weighted) {
+    const slots = Math.round((entry.weight / totalWeight) * desired);
+    for (let i = 0; i < slots; i += 1) roleBag.push(entry.role);
+  }
+  while (roleBag.length < desired) roleBag.push('hero');
+
+  activeStudents.forEach((student, index) => {
+    const role = roleBag[index] || 'hero';
+    student.role = role;
+    student.color = ROLE_VISUALS[role] || student.color;
+    student.personality = { ...(personalities[role] || personalities.hero) };
+  });
+}
+
+function applyStartupOptions() {
+  const desiredStudents = Number(optStudentCountEl?.value || 30);
+  const desiredTeachers = Number(optTeacherCountEl?.value || 9);
+  const speedMultiplier = Math.max(0.5, Math.min(2, Number(optGameSpeedEl?.value || 1)));
+  const weatherSetting = optWeatherEl?.value || 'auto';
+
+  applyTeacherCount(desiredTeachers);
+  applyStudentMix(desiredStudents, {
+    bully: Number(optRatioBullyEl?.value || 25),
+    hero: Number(optRatioHeroEl?.value || 25),
+    swot: Number(optRatioSwotEl?.value || 25),
+    weird: Number(optRatioWeirdEl?.value || 25),
+  });
+
+  game.speedMultiplier = speedMultiplier;
+  game.timeScale = (TOTAL_DAY_GAME_MINUTES / TARGET_DAY_REAL_SECONDS) * game.speedMultiplier;
+  game.preferredWeather = weatherSetting;
+  if (weatherSetting !== 'auto' && weatherModes[weatherSetting]) {
+    game.weather = weatherSetting;
+  }
+
+  createLockerPlanForStudents(game.entities);
+  seedSwotGameTraders();
+  assignDailyDutyTeacher();
+}
+
 createLockerPlanForStudents(game.entities);
 seedSwotGameTraders();
 
@@ -1657,6 +1748,7 @@ function entityFloor(entity) {
 }
 
 function updateFloorStatus() {
+  if (!floorStatusEl) return;
   const meta = floorMeta[entityFloor(player)] || floorMeta.ground;
   const toiletState = game.toiletsBlocked ? '⛔ Blocked/Flooded' : '✅ Open';
   floorStatusEl.textContent = `🧭 Floor: ${meta.label} (${meta.color}) | 🚽 Dirt: ${Math.round(game.toiletDirt)}% | ${toiletState}`;
@@ -1681,6 +1773,11 @@ function updateWeatherHud() {
 }
 
 function pickWeeklyWeather() {
+  if (game.preferredWeather && game.preferredWeather !== 'auto' && weatherModes[game.preferredWeather]) {
+    game.weather = game.preferredWeather;
+    updateWeatherHud()
+    return;
+  }
   const week = Math.floor((game.dayCount - 1) / 7) + 1;
   if (game.weatherWeek === week) return;
   game.weatherWeek = week;
@@ -2174,7 +2271,7 @@ function getTeacherSeatPosition(roomName) {
 function resetToSchoolMorning() {
   // New morning: everyone starts outside school gates before being led inside.
   schedule = buildScheduleForDay(game.dayCount);
-  game.timeScale = schedule.reduce((sum, period) => sum + period.mins, 0) / TARGET_DAY_REAL_SECONDS;
+  game.timeScale = (schedule.reduce((sum, period) => sum + period.mins, 0) / TARGET_DAY_REAL_SECONDS) * game.speedMultiplier;
   game.timeMinutes = 8 * 60 + 20;
   game.periodElapsed = 0;
   game.registrationTaken = false;
@@ -2421,6 +2518,11 @@ function say(entity, text, opts = {}) {
   if (!opts.force && !markDialogueUsed(entity, spokenText, 'speech')) return;
   entity.speech = { text: spokenText, kind: opts.kind || 'speech', until: now + (opts.durationMs || 2600) };
   entity.lastSpokeAt = now;
+
+  // Mirror audible speech into the side feed so players can review chatter they may miss on-screen.
+  const feedRange = typeof opts.feedRange === 'number' ? opts.feedRange : 8;
+  const shouldLogSpeech = opts.logToFeed !== false && canPlayerHearSpeaker(entity, feedRange);
+  if (shouldLogSpeech) pushFeedEvent(`${entity.name}: ${spokenText}`, 'speech');
 }
 
 function think(entity, text, durationMs = 3200) {
@@ -2609,6 +2711,22 @@ function drawRoundedBubble(x, y, lines, style) {
   });
 }
 
+function renderEventFeed() {
+  if (!eventsEl) return;
+  const visible = game.eventLog
+    .filter((entry) => game.eventFilters[entry.type] !== false)
+    .slice(0, 14);
+  eventsEl.innerHTML = visible
+    .map((entry) => `<div class="event-line ${entry.type}">[${entry.time}] ${entry.message}</div>`)
+    .join('');
+}
+
+function pushFeedEvent(message, type = 'action', timeMins = game.timeMinutes) {
+  game.eventLog.unshift({ message: String(message), type, time: formatTime(timeMins) });
+  game.eventLog = game.eventLog.slice(0, 64);
+  renderEventFeed();
+}
+
 function announce(message, options = {}) {
   const {
     source = null,
@@ -2625,7 +2743,7 @@ function announce(message, options = {}) {
 
   game.announcements.unshift(`[${formatTime(game.timeMinutes)}] ${message}`);
   game.announcements = game.announcements.slice(0, 12);
-  eventsEl.innerHTML = game.announcements.map((line) => `<div>${line}</div>`).join('');
+  pushFeedEvent(message, 'action');
 }
 
 function getSfxContext() {
@@ -5234,41 +5352,10 @@ function drawWorld() {
     }
   }
 
-  // Floor orientation strip in a modern full-color treatment.
-  const floorStripX = 6;
-  const floorStripY = 6;
-  const floorStripW = 190;
-  const floorStripH = 52;
-  ctx.fillStyle = 'rgba(15,20,38,0.82)';
-  ctx.fillRect(floorStripX, floorStripY, floorStripW, floorStripH);
-  ctx.strokeStyle = PALETTE.mint;
-  ctx.strokeRect(floorStripX, floorStripY, floorStripW, floorStripH);
-  ctx.font = 'bold 11px monospace';
-  ctx.fillStyle = '#d8cbff';
-  ctx.fillText('UPPER FLOOR', 12, 20);
-  ctx.fillStyle = '#b9ddff';
-  ctx.fillText('MIDDLE FLOOR', 12, 36);
-  ctx.fillStyle = '#bdf6c4';
-  ctx.fillText('GROUND FLOOR', 12, 52);
-  ctx.fillStyle = '#ffd67a';
-  ctx.fillText('LOWER FLOOR', 110, 52);
-
-  // Draw a focus box around Eric's current floor so floor awareness is instant while moving.
-  const floorHighlightBoxes = {
-    upper: { x: 10, y: 10, w: 88, h: 14 },
-    middle: { x: 10, y: 26, w: 92, h: 14 },
-    ground: { x: 10, y: 42, w: 92, h: 14 },
-    lower: { x: 108, y: 42, w: 84, h: 14 },
-  };
-  const floorBox = floorHighlightBoxes[entityFloor(player)] || floorHighlightBoxes.ground;
-  ctx.strokeStyle = '#ffe27a';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(floorBox.x, floorBox.y, floorBox.w, floorBox.h);
-
-  // In-canvas analog clock sits beside the floor strip and matches the strip height.
-  const clockPanelX = floorStripX + floorStripW + 5;
-  const clockPanelY = floorStripY;
-  const clockPanelSize = floorStripH;
+  // Keep analog time in the play window and place weather beside it for quick at-a-glance info.
+  const clockPanelX = 6;
+  const clockPanelY = 6;
+  const clockPanelSize = 52;
   const clockCenterX = clockPanelX + (clockPanelSize / 2);
   const clockCenterY = clockPanelY + (clockPanelSize / 2);
   const totalMinutes = game.timeMinutes % (24 * 60);
@@ -5314,6 +5401,22 @@ function drawWorld() {
   ctx.beginPath();
   ctx.arc(clockCenterX, clockCenterY, 1.8, 0, Math.PI * 2);
   ctx.fill();
+
+  const weatherMeta = weatherModes[game.weather] || weatherModes.sunny;
+  const weatherPanelX = clockPanelX + clockPanelSize + 6;
+  const weatherPanelY = clockPanelY;
+  const weatherPanelW = 96;
+  const weatherPanelH = clockPanelSize;
+  fillDitherRect(weatherPanelX, weatherPanelY, weatherPanelW, weatherPanelH, '#1f2f4d', '#294165', 3);
+  ctx.strokeStyle = '#5f8fbe';
+  ctx.strokeRect(weatherPanelX, weatherPanelY, weatherPanelW, weatherPanelH);
+  ctx.fillStyle = '#d9ebff';
+  ctx.font = 'bold 8px monospace';
+  ctx.fillText('WEATHER', weatherPanelX + 8, weatherPanelY + 12);
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText(weatherMeta.icon, weatherPanelX + 8, weatherPanelY + 32);
+  ctx.font = 'bold 9px monospace';
+  ctx.fillText(weatherMeta.label.toUpperCase(), weatherPanelX + 28, weatherPanelY + 32);
 
   // Vending machines and bins are rendered as interactable landmarks.
   for (const vm of vendingMachines) {
@@ -6397,6 +6500,19 @@ window.addEventListener('keyup', (event) => {
 
 pauseBtn.onclick = togglePause;
 
+if (filterActionsEl) {
+  filterActionsEl.addEventListener('change', () => {
+    game.eventFilters.action = filterActionsEl.checked;
+    renderEventFeed();
+  });
+}
+if (filterSpeechEl) {
+  filterSpeechEl.addEventListener('change', () => {
+    game.eventFilters.speech = filterSpeechEl.checked;
+    renderEventFeed();
+  });
+}
+
 toggleNamesBtn.onclick = () => {
   game.showNpcNames = !game.showNpcNames;
   updateNameToggleButton();
@@ -6410,20 +6526,27 @@ closeInteractionPanelBtn.onclick = () => {
   game.selectedInteractionTarget = null;
 };
 
-assignDailyDutyTeacher();
-announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
-if (game.dutyTeacherName) {
-  announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
+function startGameFromSplash() {
+  applyStartupOptions();
+  if (startOverlayEl) startOverlayEl.hidden = true;
+  assignDailyDutyTeacher();
+  announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
+  if (game.dutyTeacherName) {
+    announce(`🧑‍🏫 Break duty today: ${game.dutyTeacherName} patrols the field and classrooms.`, { force: true });
+  }
+  updateMission();
+  updateAutoStatus();
+  updateCharismaHud();
+  updateBladderHud();
+  updateHygieneHud();
+  updateWeatherHud();
+  updateTodo();
+  updateNameToggleButton();
+  renderEventFeed();
+  requestAnimationFrame(loop);
 }
-updateMission();
-updateAutoStatus();
-updateCharismaHud();
-updateBladderHud();
-updateHygieneHud();
-updateWeatherHud();
-updateTodo();
-updateNameToggleButton();
-requestAnimationFrame(loop);
+
+if (startGameBtn) startGameBtn.addEventListener('click', startGameFromSplash);
 
 // Lightweight debug hooks help automated validation without changing gameplay UI.
 window.__skoolDazeDebug = {

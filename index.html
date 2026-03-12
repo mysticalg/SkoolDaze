@@ -7,20 +7,58 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <section id="startOverlay" class="start-overlay" aria-live="polite">
+    <div class="start-card">
+      <h2>🏫 Skool Daze Tribute</h2>
+      <p class="start-subtitle">Set up your school day, then hit start.</p>
+
+      <div class="start-grid">
+        <label title="Total active students in simulation.">👨‍🎓 Students
+          <input id="optStudentCount" type="number" min="8" max="60" value="30" />
+        </label>
+        <label title="Active teaching staff count.">🧑‍🏫 Teachers
+          <input id="optTeacherCount" type="number" min="1" max="11" value="9" />
+        </label>
+        <label title="Scales school-day clock speed.">⏱️ Game speed
+          <select id="optGameSpeed">
+            <option value="0.75">Slow (0.75x)</option>
+            <option value="1" selected>Normal (1x)</option>
+            <option value="1.25">Fast (1.25x)</option>
+            <option value="1.5">Very fast (1.5x)</option>
+          </select>
+        </label>
+        <label title="Choose fixed weather or let it rotate weekly.">🌦️ Weather
+          <select id="optWeather">
+            <option value="auto" selected>Auto weekly</option>
+            <option value="sunny">Sunny</option>
+            <option value="rain">Rain</option>
+            <option value="snow">Snow</option>
+            <option value="windy">Windy</option>
+          </select>
+        </label>
+      </div>
+
+      <h3>🎭 Student mix (%)</h3>
+      <div class="start-grid ratios">
+        <label title="Aggressive students who start fights.">👊 Bully <input id="optRatioBully" type="number" min="0" max="100" value="25" /></label>
+        <label title="Helpful students with balanced behaviour.">🛡️ Hero <input id="optRatioHero" type="number" min="0" max="100" value="25" /></label>
+        <label title="Studious students who focus in class.">📚 Swot <input id="optRatioSwot" type="number" min="0" max="100" value="25" /></label>
+        <label title="Chaotic students with odd routines.">🌀 Weird <input id="optRatioWeird" type="number" min="0" max="100" value="25" /></label>
+      </div>
+
+      <button id="startGameBtn" class="start-btn" type="button" title="Start the school day with these options">▶️ Start school day</button>
+      <p class="todo-help">💡 Tip: percentages are normalized automatically if they do not add up to 100.</p>
+    </div>
+  </section>
+
   <header class="topbar">
     <h1>🏫 Skool Daze Tribute</h1>
     <div class="hud" aria-live="polite">
       <span id="clock">🕘 Time: 08:00</span>
-      <span class="floor-clock-group" title="Floor status and in-game analog clock.">
+      <span class="floor-clock-group" title="Day + bell schedule status.">
         <span id="dayLabel" title="Current school day of the week.">📅 Day: Monday</span>
         <span id="period" title="Current bell period.">🔔 Period: Registration</span>
         <span id="roomTarget" title="Current room target for this period.">📍 Target: Assembly Hall</span>
-        <span id="floorStatus" title="Shows your current floor and its color cue.">🧭 Floor: Ground (Blue)</span>
-        <span id="analogClock" class="analog-clock" role="img" aria-label="In-game analog clock">
-          <span class="clock-face"></span>
-          <span id="clockHandHour" class="clock-hand hour"></span>
-          <span id="clockHandMinute" class="clock-hand minute"></span>
-        </span>
       </span>
       <span id="trouble">📝 Lines: 0</span>
       <span id="energy">⚡ Energy: 100</span>
@@ -58,6 +96,10 @@
     <aside class="panel">
       <!-- Keep live updates at the top of the menu bar for quick scanning during play. -->
       <h3>Event Feed</h3>
+      <div class="event-filters" title="Filter event feed to show actions and/or speech.">
+        <label><input id="filterActions" type="checkbox" checked /> 🧭 Actions</label>
+        <label><input id="filterSpeech" type="checkbox" checked /> 💬 Speech</label>
+      </div>
       <div id="events" class="events" aria-live="polite"></div>
 
       <h3>Daily Objectives</h3>
