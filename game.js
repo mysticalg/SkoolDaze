@@ -124,6 +124,11 @@ const stairs = [
   { x: 84, fromFloor: 'middle', toFloor: 'lower', fromY: 52, toY: 112, label: 'Service Stairs' },
 ];
 
+// Wider staircase lanes reduce jams so multiple pupils can stream through at once.
+const STAIR_ENTRY_HALF_WIDTH = 1.95;
+const STAIR_ENTRY_HALF_HEIGHT = 1.5;
+const STAIR_INTERACT_RADIUS = 2.2;
+
 // Lightweight synth SFX keeps interactions responsive without external assets.
 const sfxState = { ctx: null, enabled: true };
 
@@ -1759,8 +1764,15 @@ function isNearStairStep(pos, radius = 1.7) {
   ));
 }
 
+function withinStairEntry(pos, step) {
+  if (!pos || !step) return false;
+  return Math.abs(pos.x - step.x) <= STAIR_ENTRY_HALF_WIDTH
+    && Math.abs(pos.y - step.y) <= STAIR_ENTRY_HALF_HEIGHT;
+}
+
 function stairEscapeTargets(stair, floor) {
-  const offsets = [-2.1, -1.15, 1.15, 2.1];
+  // Keep a broad set of side-lanes so crowd recovery uses a visibly wider staircase footprint.
+  const offsets = [-3.1, -2.05, -1.05, 1.05, 2.05, 3.1];
   const levelY = floor === stair.fromFloor ? stair.fromY : stair.toY;
   return offsets.map((offset) => ({ x: stair.x + offset, y: levelY }));
 }
@@ -1888,8 +1900,8 @@ function tryUseStairs(entity, desiredFloor = null, options = {}) {
   if (desiredFloor && desiredFloor === currentFloor) return false;
   for (const stair of stairs) {
     const currentStep = stairPointForFloor(stair, currentFloor);
-    // Slightly wider trigger prevents hover loops beside stair tiles.
-    if (!currentStep || distance(entity, currentStep) > 1.05) continue;
+    // Wider trigger matches the larger staircase artwork and lowers corner deadlocks.
+    if (!withinStairEntry(entity, currentStep)) continue;
     const destinationFloor = stair.fromFloor === currentFloor ? stair.toFloor : stair.fromFloor;
     if (intendedNextFloor && destinationFloor !== intendedNextFloor) continue;
     const destinationStep = stairPointForFloor(stair, destinationFloor);
@@ -3272,14 +3284,14 @@ function interact() {
   const nearbyStair = stairs.find((stair) => {
     const fromStep = { x: stair.x, y: stair.fromY };
     const toStep = { x: stair.x, y: stair.toY };
-    const nearStepA = distance(player, fromStep) < 1.6;
-    const nearStepB = distance(player, toStep) < 1.6;
+    const nearStepA = distance(player, fromStep) < STAIR_INTERACT_RADIUS;
+    const nearStepB = distance(player, toStep) < STAIR_INTERACT_RADIUS;
     return nearStepA || nearStepB;
   });
   if (nearbyStair) {
     const fromPoint = stairPointForFloor(nearbyStair, nearbyStair.fromFloor);
     const toPoint = stairPointForFloor(nearbyStair, nearbyStair.toFloor);
-    const standingOnFrom = currentFloor === nearbyStair.fromFloor && distance(player, fromPoint) < 1.6;
+    const standingOnFrom = currentFloor === nearbyStair.fromFloor && distance(player, fromPoint) < STAIR_INTERACT_RADIUS;
     const destination = standingOnFrom ? toPoint : fromPoint;
     const destinationFloor = standingOnFrom ? nearbyStair.toFloor : nearbyStair.fromFloor;
     const movingUp = floorOrder[destinationFloor] > floorOrder[currentFloor];
@@ -3899,6 +3911,12 @@ function updateJanitorSystems(dt) {
   const janitor = game.entities.find((entity) => entity.role === 'janitor');
   if (!janitor || !game.janitorTask) return;
 
+  // If routeing stalls, let Mr Mop teleport to the task so litter never lingers forever.
+  const taskAge = now - (game.janitorTask.createdAt || now);
+  if (taskAge > 7000 && distance(janitor, game.janitorTask) > 8.5) {
+    teleportEntityToTarget(janitor, game.janitorTask, 'janitor-task-teleport');
+  }
+
   // Let him "brush" when close and resolve the current cleanup target.
   if (distance(janitor, game.janitorTask) < 1.5) {
     janitor.writingUntil = now + 520;
@@ -4142,9 +4160,14 @@ function updateAI(dt) {
       entity.lastWrongRoomExcuseAt = now;
       const excuses = ['😅 Sorry, wrong class — I need to get to my lesson.', '🙋 Oops, wrong room. I am heading to the right one now.', '📚 Excuse me, I should be in another class.'];
       say(entity, excuses[Math.floor(game.rng() * excuses.length)], { durationMs: 2600 });
-      entity.target = getSeatPosition(expectedRoomNow, entity.seatIndex, entity)
-        || roomCenter(expectedRoomNow)
-        || entity.target;
+      const roomNow = roomAtPosition(entity);
+      const wrongRoomDoor = roomDoorway(roomNow);
+      // Explicitly route out through the current room door first to avoid corner pinning.
+      entity.target = (wrongRoomDoor && distance(entity, wrongRoomDoor) > 0.95)
+        ? wrongRoomDoor
+        : (getSeatPosition(expectedRoomNow, entity.seatIndex, entity)
+          || roomCenter(expectedRoomNow)
+          || entity.target);
     }
 
     // Teacher occasionally hushes the class, then students slowly get noisy again.
@@ -4441,7 +4464,7 @@ function updateAI(dt) {
     entity.seatedRoom = entity.isSeated ? expectedRoom : null;
     const lateForClass = entity.role === 'teacher'
       ? (inLesson && entityRoom(entity) !== expectedRoom)
-      : (supervised && teacherPresent && entityRoom(entity) !== expectedRoom);
+      : (inLesson && entityRoom(entity) !== expectedRoom);
     const canRun = entity.energy > 20;
     entity.running = lateForClass && canRun;
     const bellRushBoost = (!inLesson && isStudent && now < (entity.bellRushUntil || 0)) ? 1.35 : 1;
@@ -4985,7 +5008,7 @@ function drawWorld() {
   ctx.font = 'bold 9px monospace';
   ctx.fillText('EXIT', gateTop.sx - 10, gateTop.sy - 4);
 
-  // Stair markers are larger with textured treads for readability.
+  // Stair markers are larger/wider with clear up/down icons for faster reading.
   for (const stair of stairs) {
     const points = [stair.fromY, stair.toY];
     for (const y of points) {
@@ -4993,24 +5016,29 @@ function drawWorld() {
       const towardArrow = y === stair.fromY
         ? (stair.toY > stair.fromY ? '↓' : '↑')
         : (stair.fromY > stair.toY ? '↓' : '↑');
-      fillDitherRect(pos.sx - 14, pos.sy - 10, 28, 20, '#f4d06f', '#ffbf3c', 4);
+      const directionalStairIcon = towardArrow === '↑' ? '🪜↑' : '🪜↓';
+      fillDitherRect(pos.sx - 19, pos.sy - 11, 38, 22, '#f4d06f', '#ffbf3c', 4);
       ctx.fillStyle = '#8f5a00';
-      for (let i = 0; i < 4; i += 1) ctx.fillRect(pos.sx - 12 + i * 6, pos.sy - 8, 2, 16);
+      for (let i = 0; i < 6; i += 1) ctx.fillRect(pos.sx - 16 + i * 6, pos.sy - 9, 2, 18);
       ctx.fillStyle = PALETTE.ink;
-      ctx.font = 'bold 8px monospace';
-      ctx.fillText('STAIR', pos.sx - 13, pos.sy - 12);
-      ctx.font = 'bold 9px monospace';
-      ctx.fillText(towardArrow, pos.sx - 3, pos.sy - 12);
       ctx.font = 'bold 7px monospace';
-      ctx.fillText('E', pos.sx - 2, pos.sy + 15);
+      ctx.fillText('STAIR', pos.sx - 17, pos.sy - 13);
+      ctx.font = 'bold 9px monospace';
+      ctx.fillText(directionalStairIcon, pos.sx - 4, pos.sy - 13);
+      ctx.font = 'bold 7px monospace';
+      ctx.fillText('E', pos.sx - 2, pos.sy + 16);
     }
   }
 
   // Floor orientation strip in a modern full-color treatment.
+  const floorStripX = 6;
+  const floorStripY = 6;
+  const floorStripW = 190;
+  const floorStripH = 52;
   ctx.fillStyle = 'rgba(15,20,38,0.82)';
-  ctx.fillRect(6, 6, 190, 52);
+  ctx.fillRect(floorStripX, floorStripY, floorStripW, floorStripH);
   ctx.strokeStyle = PALETTE.mint;
-  ctx.strokeRect(6, 6, 190, 52);
+  ctx.strokeRect(floorStripX, floorStripY, floorStripW, floorStripH);
   ctx.font = 'bold 11px monospace';
   ctx.fillStyle = '#d8cbff';
   ctx.fillText('UPPER FLOOR', 12, 20);
@@ -5020,6 +5048,56 @@ function drawWorld() {
   ctx.fillText('GROUND FLOOR', 12, 52);
   ctx.fillStyle = '#ffd67a';
   ctx.fillText('LOWER FLOOR', 110, 52);
+
+  // In-canvas analog clock sits beside the floor strip and matches the strip height.
+  const clockPanelX = floorStripX + floorStripW + 5;
+  const clockPanelY = floorStripY;
+  const clockPanelSize = floorStripH;
+  const clockCenterX = clockPanelX + (clockPanelSize / 2);
+  const clockCenterY = clockPanelY + (clockPanelSize / 2);
+  const totalMinutes = game.timeMinutes % (24 * 60);
+  const minute = totalMinutes % 60;
+  const hour = (Math.floor(totalMinutes / 60) % 12) + (minute / 60);
+  const minuteAngleRad = ((minute * 6) - 90) * (Math.PI / 180);
+  const hourAngleRad = ((hour * 30) - 90) * (Math.PI / 180);
+
+  fillDitherRect(clockPanelX, clockPanelY, clockPanelSize, clockPanelSize, '#ddefff', '#bdd6f7', 3);
+  ctx.strokeStyle = '#365d91';
+  ctx.strokeRect(clockPanelX, clockPanelY, clockPanelSize, clockPanelSize);
+  ctx.fillStyle = '#f8fbff';
+  ctx.beginPath();
+  ctx.arc(clockCenterX, clockCenterY, 17, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#22406a';
+  ctx.beginPath();
+  ctx.arc(clockCenterX, clockCenterY, 17, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // 12/3/6/9 markers keep the tiny dial intuitive without visual clutter.
+  ctx.fillStyle = '#2c4260';
+  ctx.fillRect(clockCenterX - 1, clockCenterY - 14, 2, 3);
+  ctx.fillRect(clockCenterX + 11, clockCenterY - 1, 3, 2);
+  ctx.fillRect(clockCenterX - 1, clockCenterY + 11, 2, 3);
+  ctx.fillRect(clockCenterX - 14, clockCenterY - 1, 3, 2);
+
+  ctx.strokeStyle = '#27496d';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(clockCenterX, clockCenterY);
+  ctx.lineTo(clockCenterX + Math.cos(hourAngleRad) * 8.5, clockCenterY + Math.sin(hourAngleRad) * 8.5);
+  ctx.stroke();
+
+  ctx.strokeStyle = '#406f9f';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(clockCenterX, clockCenterY);
+  ctx.lineTo(clockCenterX + Math.cos(minuteAngleRad) * 12.5, clockCenterY + Math.sin(minuteAngleRad) * 12.5);
+  ctx.stroke();
+
+  ctx.fillStyle = '#1f3d5b';
+  ctx.beginPath();
+  ctx.arc(clockCenterX, clockCenterY, 1.8, 0, Math.PI * 2);
+  ctx.fill();
 
   // Vending machines and bins are rendered as interactable landmarks.
   for (const vm of vendingMachines) {
