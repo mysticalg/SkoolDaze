@@ -5035,8 +5035,11 @@ function announce(message, options = {}) {
     source = null,
     range = 6.5,
     force = false,
-    feedType = 'action',
   } = options;
+  const hasExplicitFeedType = Object.prototype.hasOwnProperty.call(options, 'feedType');
+  // If a caller provides a speaking source but no explicit feed type, classify as speech.
+  // This keeps the event-feed filters intuitive (speech lines hide with the speech toggle).
+  const resolvedFeedType = hasExplicitFeedType ? options.feedType : (source ? 'speech' : 'action');
 
   // Speech-style events can be local so the feed reflects what Eric can realistically hear.
   if (!force && source && !canPlayerHearSpeaker(source, range)) return;
@@ -5066,7 +5069,7 @@ function announce(message, options = {}) {
 
   game.announcements.unshift(`[${formatTime(game.timeMinutes)}] ${safeMessage}`);
   game.announcements = game.announcements.slice(0, 12);
-  pushFeedEvent(safeMessage, feedType);
+  pushFeedEvent(safeMessage, resolvedFeedType);
 }
 
 function getSfxContext() {
