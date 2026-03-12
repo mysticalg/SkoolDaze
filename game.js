@@ -1196,8 +1196,11 @@ function resolveLlmSocialDirective(actor, peer, fallbackIntent = 'ally') {
   };
   const key = llmCacheKey(payload);
   if (!llmModeEnabled()) return null;
+  const now = performance.now();
+  if (now < (actor.socialNextLlmAt || 0)) return null;
   const cached = game.llm.cache.get(key);
   if (!cached) {
+    actor.socialNextLlmAt = now + 6000 + (Math.random() * 2500);
     queueLlmText(payload);
     return null;
   }
@@ -1258,11 +1261,14 @@ function updateEmergentSocialLife(now, currentPeriod) {
   if (now - (game.lastSocialTickAt || 0) < 2400) return;
   game.lastSocialTickAt = now;
   const roaming = game.entities.filter((entity) => isStudentCharacter(entity) && entity.role !== 'player' && entity.knockedUntil < now);
+  let processed = 0;
   for (const entity of roaming) {
+    if (processed >= 5) break;
     ensureSocialProfile(entity);
     tryEvolveQuirk(entity, now);
     const peer = roaming.find((candidate) => candidate !== entity && entityRoom(candidate) === entityRoom(entity) && distance(candidate, entity) < 2.9);
     if (!peer) continue;
+    processed += 1;
     const warmth = ((entity.traits?.friendly || 50) - (peer.traits?.aggression || 50)) / 50;
     const fallbackIntent = warmth >= 0 ? 'ally' : 'tease';
     const directive = resolveLlmSocialDirective(entity, peer, fallbackIntent);
@@ -1314,7 +1320,8 @@ const TARGET_ATTENDANCE_PERCENT = 95;
 const OLLAMA_DEFAULT_ENDPOINT = 'http://127.0.0.1:11434';
 const OPENAI_API_BASE = 'https://api.openai.com/v1';
 const GROK_API_BASE = 'https://api.x.ai/v1';
-const LLM_DEFAULT_TIMEOUT_MS = 2200;
+const LLM_DEFAULT_TIMEOUT_MS = 3800;
+const LLM_MAX_INFLIGHT = 4;
 const LLM_STORAGE_KEY = 'skooldaze.llm.settings.v1';
 
 const LLM_GAME_PRIMER = [
@@ -1380,12 +1387,20 @@ function sanitizeLlmLine(text, fallback = '...') {
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = LLM_DEFAULT_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs);
   try {
     return await fetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
+}
+
+function llmTimeoutForPayload(payload = {}) {
+  if (payload.channel === 'quiz') return 5600;
+  if (payload.channel === 'speech') return 4300;
+  if (payload.channel === 'thought') return 4200;
+  if (payload.channel === 'social') return 3200;
+  return LLM_DEFAULT_TIMEOUT_MS;
 }
 
 function effectiveLocalModelName() {
@@ -1770,7 +1785,7 @@ async function generateLocalOllamaText(payload) {
       options: { temperature: 0.75, top_p: 0.92, num_predict: payload.channel === 'quiz' ? 180 : 42 },
       prompt: buildLlmPrompt({ ...payload, uncensored: Boolean(game.llm.nsfw && game.llm.source === 'local') }),
     }),
-  }, LLM_DEFAULT_TIMEOUT_MS);
+  }, llmTimeoutForPayload(payload));
   if (!response.ok) {
     pushLlmDebug(`❌ Local request failed (${response.status}) channel=${payload.channel}`, 'error');
     return null;
@@ -1799,7 +1814,7 @@ async function generateRemoteProviderText(payload) {
         { role: 'user', content: buildLlmPrompt({ ...payload, uncensored: Boolean(game.llm.nsfw && game.llm.source === 'local') }) },
       ],
     }),
-  }, LLM_DEFAULT_TIMEOUT_MS + 800);
+  }, llmTimeoutForPayload(payload) + 1000);
 
   if (!response.ok) {
     pushLlmDebug(`❌ Remote request failed (${response.status}) provider=${provider} channel=${payload.channel}`, 'error');
@@ -1817,15 +1832,20 @@ async function generateRemoteProviderText(payload) {
 }
 
 async function generateLlmText(payload) {
-  if (!llmModeEnabled()) return null;
+  if (!llmModeEnabled()) return { text: null, reason: 'disabled' };
   try {
-    if (game.llm.source === 'remote') {
-      return await generateRemoteProviderText(payload);
-    }
-    return await generateLocalOllamaText(payload);
+    const text = game.llm.source === 'remote'
+      ? await generateRemoteProviderText(payload)
+      : await generateLocalOllamaText(payload);
+    return { text, reason: text ? 'ok' : 'empty' };
   } catch (error) {
+    const msg = String(error?.message || '').toLowerCase();
+    if (msg.includes('aborted') || msg.includes('timeout')) {
+      pushLlmDebug(`⏱️ LLM request timed out [${payload.channel}] after ${llmTimeoutForPayload(payload)}ms.`, 'warn');
+      return { text: null, reason: 'timeout' };
+    }
     pushLlmDebug(`❌ LLM generation error: ${error?.message || 'unknown error'}`, 'error');
-    return null;
+    return { text: null, reason: 'error' };
   }
 }
 
@@ -1840,12 +1860,18 @@ function queueLlmText(payload) {
     pushLlmDebug(`⏳ Request already in-flight [${payload.channel}] key=${summarizeForLlmDebug(key, 64)}`);
     return;
   }
+  if (game.llm.inFlight.size >= LLM_MAX_INFLIGHT) {
+    pushLlmDebug(`🚦 LLM queue saturated (${game.llm.inFlight.size}/${LLM_MAX_INFLIGHT}); skipped [${payload.channel}]`, 'warn');
+    return;
+  }
   game.llm.inFlight.add(key);
-  generateLlmText(payload).then((text) => {
-    if (text) {
-      game.llm.cache.set(key, text);
+  generateLlmText(payload).then((result) => {
+    if (result?.text) {
+      game.llm.cache.set(key, result.text);
       pushLlmDebug(`💾 Cached [${payload.channel}] key=${summarizeForLlmDebug(key, 64)}`);
-    } else {
+    } else if (result?.reason === 'timeout') {
+      // Timeout already logged with channel-specific detail; avoid duplicate spam lines.
+    } else if (result?.reason !== 'disabled') {
       pushLlmDebug(`⚠️ Empty LLM output, fallback kept [${payload.channel}]`, 'warn');
     }
   }).finally(() => {
@@ -2210,6 +2236,7 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     dialogue: null,
     // Social profile stores evolving quirks, clique membership, and momentum over time.
     socialProfile: null,
+    socialNextLlmAt: 0,
     // Wrong-room excuse throttle keeps corridor chatter readable.
     lastWrongRoomExcuseAt: 0,
     // Facial animation timers keep eyes/mouth lively without expensive sprite swaps.
