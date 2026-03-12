@@ -72,21 +72,6 @@
         <li><span class="dot weird"></span> Weird kid</li>
       </ul>
 
-      <h3>Controls</h3>
-      <p title="Move around rooms and corridors."><strong>Move:</strong> Arrow Keys / WASD</p>
-      <p title="Close range punch."><strong>Punch:</strong> Z</p>
-      <p title="Long range projectile prank."><strong>Catapult:</strong> X</p>
-      <p title="Use nearby doors and stairs, plus read boards, fountains, and shield pickups."><strong>Interact:</strong> E (doors + stairs)</p>
-      <p title="Sit in the nearest classroom chair, press again to stand."><strong>Sit / Stand:</strong> Q</p>
-      <p title="Use near a vending machine to buy food or drink. Dispose of packaging in bins."><strong>Vending:</strong> C</p>
-      <p title="Throw carried rubbish. It can knock pupils over, but teachers may punish you if they see it."><strong>Throw rubbish:</strong> V</p>
-      <p title="Trade items and pocket money with nearby students or teachers. High barter skill can unlock freebies."><strong>Trade / Barter:</strong> T</p>
-      <p title="Use near toilet urinals to quickly reduce bladder pressure."><strong>Urinals:</strong> E (in toilets)</p>
-      <p title="Toggle computer control. It also enables automatically when you stop controlling Eric for a while."><strong>Auto:</strong> U (or leave Eric idle)</p>
-      <p title="Hold Shift (or R) while moving to run faster at a higher energy cost."><strong>Run:</strong> Shift / R + Move</p>
-      <p title="Pause game logic and rendering updates."><strong>Pause:</strong> P or ⏯️</p>
-      <p title="The view scrolls with Eric so you can navigate floors with stairs."><strong>🧭 Navigation:</strong> Follow corridors and use marked stairs between levels. Floor colors: Upper purple, Middle blue, Ground green.</p>
-
     </aside>
   </main>
 
@@ -106,7 +91,36 @@
       <li>Knockouts can be used tactically to reach difficult shields.</li>
       <li>Collect all shield letters to reveal the safe code.</li>
     </ul>
-    <button id="closeHelp">Close</button>
+    <h3>Controls</h3>
+    <!-- Keep controls in Help so players always get one clear source of truth via the ❔ button. -->
+    <ul class="help-controls">
+      <li title="Move around rooms and corridors."><strong>🧭 Move:</strong> Arrow Keys / WASD</li>
+      <li title="Close range punch."><strong>🥊 Punch:</strong> Z</li>
+      <li title="Long range projectile prank."><strong>🎯 Catapult:</strong> X</li>
+      <li title="Use nearby doors and stairs, plus read boards, fountains, and shield pickups."><strong>🚪 Interact:</strong> E (doors + stairs)</li>
+      <li title="Sit in the nearest classroom chair, press again to stand."><strong>🪑 Sit / Stand:</strong> Q</li>
+      <li title="Use near a vending machine to buy food or drink. Dispose of packaging in bins."><strong>🥤 Vending:</strong> C</li>
+      <li title="Throw carried rubbish. It can knock pupils over, but teachers may punish you if they see it."><strong>🗑️ Throw rubbish:</strong> V</li>
+      <li title="Trade items and pocket money with nearby students or teachers. High barter skill can unlock freebies."><strong>💱 Trade / Barter:</strong> T</li>
+      <li title="Use near toilet urinals to quickly reduce bladder pressure."><strong>🚻 Urinals:</strong> E (in toilets)</li>
+      <li title="Toggle computer control. It also enables automatically when you stop controlling Eric for a while."><strong>🤖 Auto:</strong> U (or leave Eric idle)</li>
+      <li title="Hold Shift (or R) while moving to run faster at a higher energy cost."><strong>🏃 Run:</strong> Shift / R + Move</li>
+      <li title="Pause game logic and rendering updates."><strong>⏯️ Pause:</strong> P or ⏯️ button</li>
+      <li title="The view scrolls with Eric so you can navigate floors with stairs."><strong>🗺️ Navigation:</strong> Follow corridors and use marked stairs between levels. Floor colors: Upper purple, Middle blue, Ground green.</li>
+    </ul>
+
+    <h3>Legend</h3>
+    <!-- Mirror the side legend in Help so players can learn controls and character roles in one place. -->
+    <ul class="help-legend">
+      <li><span class="dot player"></span> Eric (you)</li>
+      <li><span class="dot teacher"></span> Teachers</li>
+      <li><span class="dot bully"></span> Bully</li>
+      <li><span class="dot swot"></span> Swot</li>
+      <li><span class="dot hero"></span> Hero</li>
+      <li><span class="dot weird"></span> Weird kid</li>
+    </ul>
+
+    <button id="closeHelp" class="dialog-close" title="Close help popup">Close</button>
   </dialog>
 
   <!--
