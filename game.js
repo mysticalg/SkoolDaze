@@ -64,7 +64,8 @@ const optLlmNoFallbackEl = document.getElementById('optLlmNoFallback');
 const optLlmSourceEl = document.getElementById('optLlmSource');
 const optLlmModelEl = document.getElementById('optLlmModel');
 const optLlmLocalEndpointEl = document.getElementById('optLlmLocalEndpoint');
-const optLlmManualModelEl = document.getElementById('optLlmManualModel');
+const optLlmTimeoutEl = document.getElementById('optLlmTimeout');
+const optLlmQueueEl = document.getElementById('optLlmQueue');
 const optLlmRemoteProviderEl = document.getElementById('optLlmRemoteProvider');
 const optLlmRemoteModelEl = document.getElementById('optLlmRemoteModel');
 const optLlmRemoteTokenEl = document.getElementById('optLlmRemoteToken');
@@ -1372,9 +1373,14 @@ const OLLAMA_DEFAULT_ENDPOINT = 'http://127.0.0.1:11434';
 const OPENAI_API_BASE = 'https://api.openai.com/v1';
 const GROK_API_BASE = 'https://api.x.ai/v1';
 const LLM_DEFAULT_TIMEOUT_MS = 3800;
+const LLM_MIN_TIMEOUT_MS = 2000;
+const LLM_MAX_TIMEOUT_MS = 30000;
 // Expand active LLM queue concurrency so dialogue spikes can buffer up to 20 requests.
 const LLM_MAX_INFLIGHT = 20;
+const LLM_MIN_INFLIGHT = 2;
+const LLM_MAX_INFLIGHT_LIMIT = 40;
 const LLM_STORAGE_KEY = 'skooldaze.llm.settings.v1';
+const SPLASH_STORAGE_KEY = 'skooldaze.splash.settings.v1';
 
 const LLM_GAME_PRIMER = [
   'You are the text engine for Skool Daze Tribute, a real-time British school simulation game.',
@@ -1453,12 +1459,19 @@ function llmTimeoutForPayload(payload = {}) {
   if (payload.channel === 'speech') return 5200 + pressureBonus;
   if (payload.channel === 'thought') return 5000 + pressureBonus;
   if (payload.channel === 'social') return 3800 + Math.round(pressureBonus * 0.6);
-  return LLM_DEFAULT_TIMEOUT_MS + pressureBonus;
+  return effectiveLlmBaseTimeout() + pressureBonus;
 }
 
 function effectiveLocalModelName() {
-  // Manual model names let players bypass browser discovery issues and still use Ollama.
-  return sanitizeLlmLine(game.llm.manualModelName, game.llm.selectedModel || '');
+  return sanitizeLlmLine(game.llm.selectedModel, '');
+}
+
+function effectiveLlmBaseTimeout() {
+  return Math.max(LLM_MIN_TIMEOUT_MS, Math.min(LLM_MAX_TIMEOUT_MS, Number(game.llm.timeoutMs) || LLM_DEFAULT_TIMEOUT_MS));
+}
+
+function effectiveLlmMaxInFlight() {
+  return Math.max(LLM_MIN_INFLIGHT, Math.min(LLM_MAX_INFLIGHT_LIMIT, Number(game.llm.maxInFlight) || LLM_MAX_INFLIGHT));
 }
 
 function llmProviderLabel() {
@@ -1475,7 +1488,8 @@ function persistLlmSettings() {
       selectedModel: game.llm.selectedModel,
       localEndpoint: game.llm.localEndpoint,
       manualModels: game.llm.manualModels || [],
-      manualModelName: game.llm.manualModelName || '',
+      timeoutMs: effectiveLlmBaseTimeout(),
+      maxInFlight: effectiveLlmMaxInFlight(),
       remoteProvider: game.llm.remoteProvider,
       remoteModel: game.llm.remoteModel,
       remoteToken: game.llm.remoteToken,
@@ -1496,7 +1510,8 @@ function loadLlmSettings() {
     game.llm.selectedModel = sanitizeLlmLine(saved.selectedModel, '');
     game.llm.localEndpoint = sanitizeLlmLine(saved.localEndpoint, OLLAMA_DEFAULT_ENDPOINT);
     game.llm.manualModels = Array.isArray(saved.manualModels) ? saved.manualModels.map((m) => sanitizeLlmLine(m, '')).filter(Boolean) : [];
-    game.llm.manualModelName = sanitizeLlmLine(saved.manualModelName, '');
+    game.llm.timeoutMs = Math.max(LLM_MIN_TIMEOUT_MS, Math.min(LLM_MAX_TIMEOUT_MS, Number(saved.timeoutMs) || LLM_DEFAULT_TIMEOUT_MS));
+    game.llm.maxInFlight = Math.max(LLM_MIN_INFLIGHT, Math.min(LLM_MAX_INFLIGHT_LIMIT, Number(saved.maxInFlight) || LLM_MAX_INFLIGHT));
     game.llm.remoteProvider = saved.remoteProvider === 'grok' ? 'grok' : 'openai';
     game.llm.remoteModel = sanitizeLlmLine(saved.remoteModel, game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini');
     game.llm.remoteToken = sanitizeLlmLine(saved.remoteToken, '');
@@ -1528,7 +1543,8 @@ function applyLlmUiState() {
   if (optLlmNoFallbackEl) optLlmNoFallbackEl.disabled = !enabled;
   if (optLlmModelEl) optLlmModelEl.disabled = !isLocal || !game.llm.availableModels.length;
   if (optLlmLocalEndpointEl) optLlmLocalEndpointEl.disabled = !isLocal;
-  if (optLlmManualModelEl) optLlmManualModelEl.disabled = !isLocal;
+  if (optLlmTimeoutEl) optLlmTimeoutEl.disabled = !enabled;
+  if (optLlmQueueEl) optLlmQueueEl.disabled = !enabled;
   if (optLlmRefreshModelsEl) optLlmRefreshModelsEl.disabled = !isLocal;
   if (optLlmImportModelsEl) optLlmImportModelsEl.disabled = !isLocal;
   if (optLlmRemoteProviderEl) optLlmRemoteProviderEl.disabled = !isRemote;
@@ -1603,7 +1619,6 @@ function importManualOllamaModels() {
   game.llm.manualModels = models;
   game.llm.availableModels = models;
   if (!game.llm.selectedModel || !models.includes(game.llm.selectedModel)) game.llm.selectedModel = models[0];
-  if (!game.llm.manualModelName) game.llm.manualModelName = game.llm.selectedModel;
   updateLlmModelSelect(models);
   if (optLlmModelEl) optLlmModelEl.value = game.llm.selectedModel;
   persistLlmSettings();
@@ -1666,7 +1681,6 @@ async function refreshOllamaModels({ silent = false } = {}) {
       updateLlmModelSelect(models);
       if (optLlmModelEl && game.llm.selectedModel) optLlmModelEl.value = game.llm.selectedModel;
       if (optLlmLocalEndpointEl) optLlmLocalEndpointEl.value = game.llm.localEndpoint;
-      if (optLlmManualModelEl && !optLlmManualModelEl.value.trim() && game.llm.selectedModel) optLlmManualModelEl.value = game.llm.selectedModel;
       persistLlmSettings();
       if (!silent) {
         setLlmStatus(models.length
@@ -1830,7 +1844,7 @@ function buildLlmPrompt({
     ? `Address ${addresseeName} by name in the line (example style: "${addresseeName}, ...").`
     : null;
 
-  const underLoad = (game.llm.inFlight.size >= Math.max(2, LLM_MAX_INFLIGHT - 2))
+  const underLoad = (game.llm.inFlight.size >= Math.max(2, effectiveLlmMaxInFlight() - 2))
     && (channel === 'speech' || channel === 'thought' || channel === 'announcement');
   const primer = underLoad
     ? 'Fast mode: keep output extremely short and adapt fallback if uncertain.'
@@ -1934,7 +1948,7 @@ function llmBacklogHasKey(key = '') {
 
 function drainLlmBacklog() {
   if (!llmModeEnabled()) return;
-  while (game.llm.inFlight.size < LLM_MAX_INFLIGHT && game.llm.backlog.length) {
+  while (game.llm.inFlight.size < effectiveLlmMaxInFlight() && game.llm.backlog.length) {
     const next = game.llm.backlog.shift();
     if (!next?.payload) continue;
     queueLlmText(next.payload, { fromBacklog: true });
@@ -1953,11 +1967,12 @@ function queueLlmText(payload, options = {}) {
     return;
   }
   if (llmBacklogHasKey(key)) return;
-  if (game.llm.inFlight.size >= LLM_MAX_INFLIGHT) {
+  const maxInFlight = effectiveLlmMaxInFlight();
+  if (game.llm.inFlight.size >= maxInFlight) {
     if (!options.fromBacklog) {
       game.llm.backlog.push({ key, payload });
       // Queue (not skip) overflow work so speech/thought can arrive once slots free up.
-      pushLlmDebug(`🚦 LLM queue saturated (${game.llm.inFlight.size}/${LLM_MAX_INFLIGHT}); queued [${payload.channel}]`, 'warn');
+      pushLlmDebug(`🚦 LLM queue saturated (${game.llm.inFlight.size}/${maxInFlight}); queued [${payload.channel}]`, 'warn');
     }
     return;
   }
@@ -2209,7 +2224,8 @@ const game = {
     availableModels: [],
     localEndpoint: OLLAMA_DEFAULT_ENDPOINT,
     manualModels: [],
-    manualModelName: '',
+    timeoutMs: LLM_DEFAULT_TIMEOUT_MS,
+    maxInFlight: LLM_MAX_INFLIGHT,
     remoteProvider: 'openai',
     remoteModel: 'gpt-4.1-mini',
     remoteToken: '',
@@ -2315,6 +2331,8 @@ const game = {
 
 // Restore last-used AI provider settings (including saved remote auth token) on load.
 loadLlmSettings();
+// Restore splash-start options so players don't re-enter preferences every refresh.
+loadSplashSettings();
 
 let seatCounter = 0;
 const roomSeatCache = new Map();
@@ -2779,6 +2797,42 @@ function allNonPlayerStudents() {
   return game.entities.filter((entity) => entity !== player && STUDENT_ROLES.has(entity.role));
 }
 
+
+function persistSplashSettings() {
+  try {
+    localStorage.setItem(SPLASH_STORAGE_KEY, JSON.stringify({
+      studentCount: Number(optStudentCountEl?.value || 30),
+      teacherCount: Number(optTeacherCountEl?.value || 9),
+      gameSpeed: String(optGameSpeedEl?.value || '1'),
+      weather: String(optWeatherEl?.value || 'auto'),
+      ratioBully: Number(optRatioBullyEl?.value || 25),
+      ratioHero: Number(optRatioHeroEl?.value || 25),
+      ratioSwot: Number(optRatioSwotEl?.value || 25),
+      ratioWeird: Number(optRatioWeirdEl?.value || 25),
+    }));
+  } catch (error) {
+    // Ignore storage failures so startup still works in private browsing contexts.
+  }
+}
+
+function loadSplashSettings() {
+  try {
+    const raw = localStorage.getItem(SPLASH_STORAGE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (optStudentCountEl && Number.isFinite(Number(saved.studentCount))) optStudentCountEl.value = String(Math.max(8, Math.min(60, Number(saved.studentCount))));
+    if (optTeacherCountEl && Number.isFinite(Number(saved.teacherCount))) optTeacherCountEl.value = String(Math.max(1, Math.min(11, Number(saved.teacherCount))));
+    if (optGameSpeedEl && ['0.75', '1', '1.25', '1.5'].includes(String(saved.gameSpeed))) optGameSpeedEl.value = String(saved.gameSpeed);
+    if (optWeatherEl && ['auto', 'sunny', 'rain', 'snow', 'windy'].includes(String(saved.weather))) optWeatherEl.value = String(saved.weather);
+    if (optRatioBullyEl && Number.isFinite(Number(saved.ratioBully))) optRatioBullyEl.value = String(Math.max(0, Math.min(100, Number(saved.ratioBully))));
+    if (optRatioHeroEl && Number.isFinite(Number(saved.ratioHero))) optRatioHeroEl.value = String(Math.max(0, Math.min(100, Number(saved.ratioHero))));
+    if (optRatioSwotEl && Number.isFinite(Number(saved.ratioSwot))) optRatioSwotEl.value = String(Math.max(0, Math.min(100, Number(saved.ratioSwot))));
+    if (optRatioWeirdEl && Number.isFinite(Number(saved.ratioWeird))) optRatioWeirdEl.value = String(Math.max(0, Math.min(100, Number(saved.ratioWeird))));
+  } catch (error) {
+    // Ignore malformed splash settings and use HTML defaults.
+  }
+}
+
 function applyTeacherCount(desiredCount) {
   // Always keep the headmaster; trim or keep other teachers by current order for predictable setup.
   const teachers = game.entities.filter((entity) => entity.role === 'teacher');
@@ -2827,8 +2881,9 @@ function applyStartupOptions() {
   const llmNsfw = Boolean(optLlmNsfwEl?.checked);
   const llmNoFallback = Boolean(optLlmNoFallbackEl?.checked);
   const llmModel = String(optLlmModelEl?.value || '').trim();
-  const llmManualModel = String(optLlmManualModelEl?.value || '').trim();
   const llmLocalEndpoint = normalizeLocalEndpoint(optLlmLocalEndpointEl?.value || game.llm.localEndpoint);
+  const llmTimeoutMs = Math.max(LLM_MIN_TIMEOUT_MS, Math.min(LLM_MAX_TIMEOUT_MS, Number(optLlmTimeoutEl?.value || game.llm.timeoutMs || LLM_DEFAULT_TIMEOUT_MS)));
+  const llmQueueMax = Math.max(LLM_MIN_INFLIGHT, Math.min(LLM_MAX_INFLIGHT_LIMIT, Number(optLlmQueueEl?.value || game.llm.maxInFlight || LLM_MAX_INFLIGHT)));
   const llmRemoteProvider = String(optLlmRemoteProviderEl?.value || 'openai');
   const llmRemoteModel = String(optLlmRemoteModelEl?.value || '').trim();
   const llmRemoteToken = String(optLlmRemoteTokenEl?.value || game.llm.remoteToken || '').trim();
@@ -2851,8 +2906,9 @@ function applyStartupOptions() {
   // LLM mode can optionally run in strict no-fallback mode where dialogue waits for model output.
   const providerChanged = game.llm.source !== llmSource
     || game.llm.selectedModel !== llmModel
-    || game.llm.manualModelName !== llmManualModel
     || game.llm.localEndpoint !== llmLocalEndpoint
+    || game.llm.timeoutMs !== llmTimeoutMs
+    || game.llm.maxInFlight !== llmQueueMax
     || game.llm.remoteProvider !== llmRemoteProvider
     || game.llm.remoteModel !== llmRemoteModel
     || game.llm.remoteToken !== llmRemoteToken
@@ -2862,7 +2918,8 @@ function applyStartupOptions() {
   game.llm.enabled = llmEnabled;
   game.llm.source = llmSource === 'remote' ? 'remote' : 'local';
   game.llm.selectedModel = llmModel;
-  game.llm.manualModelName = llmManualModel || llmModel;
+  game.llm.timeoutMs = llmTimeoutMs;
+  game.llm.maxInFlight = llmQueueMax;
   game.llm.localEndpoint = llmLocalEndpoint;
   game.llm.remoteProvider = llmRemoteProvider === 'grok' ? 'grok' : 'openai';
   game.llm.remoteModel = llmRemoteModel || (game.llm.remoteProvider === 'grok' ? 'grok-2-latest' : 'gpt-4.1-mini');
@@ -9045,6 +9102,7 @@ closeInteractionPanelBtn.onclick = () => {
 };
 
 function startGameFromSplash() {
+  persistSplashSettings();
   applyStartupOptions();
   if (startOverlayEl) startOverlayEl.hidden = true;
   assignDailyDutyTeacher();
@@ -9078,6 +9136,27 @@ if (llmDebugClearBtn) {
 }
 
 if (startGameBtn) startGameBtn.addEventListener('click', startGameFromSplash);
+
+if (optLlmTimeoutEl) {
+  optLlmTimeoutEl.value = String(effectiveLlmBaseTimeout());
+  optLlmTimeoutEl.addEventListener('change', () => {
+    game.llm.timeoutMs = Math.max(LLM_MIN_TIMEOUT_MS, Math.min(LLM_MAX_TIMEOUT_MS, Number(optLlmTimeoutEl.value || LLM_DEFAULT_TIMEOUT_MS)));
+    optLlmTimeoutEl.value = String(game.llm.timeoutMs);
+    persistLlmSettings();
+    setLlmStatus(`⏳ LLM timeout set to ${Math.round(game.llm.timeoutMs / 100) / 10}s.`);
+  });
+}
+
+if (optLlmQueueEl) {
+  optLlmQueueEl.value = String(effectiveLlmMaxInFlight());
+  optLlmQueueEl.addEventListener('change', () => {
+    game.llm.maxInFlight = Math.max(LLM_MIN_INFLIGHT, Math.min(LLM_MAX_INFLIGHT_LIMIT, Number(optLlmQueueEl.value || LLM_MAX_INFLIGHT)));
+    optLlmQueueEl.value = String(game.llm.maxInFlight);
+    persistLlmSettings();
+    setLlmStatus(`🧵 LLM queue concurrency set to ${game.llm.maxInFlight}.`);
+    drainLlmBacklog();
+  });
+}
 
 if (optLlmEnabledEl) {
   optLlmEnabledEl.checked = game.llm.enabled;
@@ -9144,10 +9223,6 @@ if (optLlmModelEl) {
     const selected = String(optLlmModelEl.value || '').trim();
     if (selected && selected !== game.llm.selectedModel) {
       game.llm.selectedModel = selected;
-      if (optLlmManualModelEl && !optLlmManualModelEl.value.trim()) {
-        optLlmManualModelEl.value = selected;
-      }
-      if (!game.llm.manualModelName) game.llm.manualModelName = selected;
       game.llm.cache.clear();
       game.llm.sessionPrimedForProvider = '';
       persistLlmSettings();
@@ -9165,25 +9240,6 @@ if (optLlmLocalEndpointEl) {
     game.llm.sessionPrimedForProvider = '';
     persistLlmSettings();
     setLlmStatus(`🔌 Local endpoint set to ${game.llm.localEndpoint}. Use refresh to load models.`);
-  });
-}
-
-if (optLlmManualModelEl) {
-  optLlmManualModelEl.value = game.llm.manualModelName || game.llm.selectedModel || '';
-  optLlmManualModelEl.addEventListener('change', () => {
-    const typed = sanitizeLlmLine(optLlmManualModelEl.value || '', '');
-    game.llm.manualModelName = typed;
-    if (typed && !game.llm.availableModels.includes(typed)) {
-      game.llm.availableModels = [typed, ...game.llm.availableModels];
-      updateLlmModelSelect(game.llm.availableModels);
-    }
-    if (typed) game.llm.selectedModel = typed;
-    game.llm.cache.clear();
-    game.llm.sessionPrimedForProvider = '';
-    persistLlmSettings();
-    setLlmStatus(typed
-      ? `⌨️ Manual Ollama model set to ${typed}.`
-      : 'ℹ️ Manual model cleared. Dropdown selection will be used.');
   });
 }
 
@@ -9250,13 +9306,15 @@ if (optLlmClearTokenEl) {
   });
 }
 
+
+[optStudentCountEl, optTeacherCountEl, optRatioBullyEl, optRatioHeroEl, optRatioSwotEl, optRatioWeirdEl, optGameSpeedEl, optWeatherEl]
+  .filter(Boolean)
+  .forEach((el) => el.addEventListener('change', persistSplashSettings));
+
 handleOpenAiOauthCallback();
 if (Array.isArray(game.llm.manualModels) && game.llm.manualModels.length) {
   game.llm.availableModels = game.llm.manualModels.slice();
   updateLlmModelSelect(game.llm.availableModels);
-}
-if (optLlmManualModelEl) {
-  optLlmManualModelEl.value = game.llm.manualModelName || game.llm.selectedModel || '';
 }
 applyLlmUiState();
 refreshOllamaModels({ silent: true });

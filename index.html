@@ -74,8 +74,23 @@
         <label title="Local Ollama API endpoint. Use 127.0.0.1 if localhost fails on your browser/network setup.">🔌 Ollama endpoint
           <input id="optLlmLocalEndpoint" type="text" placeholder="http://127.0.0.1:11434" disabled />
         </label>
-        <label title="Type model name manually (for example llama3.2:3b) when API model listing is blocked in browser.">⌨️ Ollama model (manual)
-          <input id="optLlmManualModel" type="text" placeholder="llama3.2:3b" disabled />
+        <label title="Maximum time each AI request can run before fallback kicks in. Increase this on slower hardware/models.">⏳ LLM timeout
+          <select id="optLlmTimeout" disabled>
+            <option value="3800" selected>Fast (3.8s)</option>
+            <option value="6000">Balanced (6s)</option>
+            <option value="9000">Relaxed (9s)</option>
+            <option value="12000">Long (12s)</option>
+            <option value="18000">Very long (18s)</option>
+          </select>
+        </label>
+        <label title="How many AI requests can run at once before new ones queue. Higher values improve throughput but may stress slower machines.">🧵 LLM queue size
+          <select id="optLlmQueue" disabled>
+            <option value="8">Small (8)</option>
+            <option value="12">Medium (12)</option>
+            <option value="20" selected>Large (20)</option>
+            <option value="30">XL (30)</option>
+            <option value="40">XXL (40)</option>
+          </select>
         </label>
         <label title="Choose your remote provider when cloud mode is active.">☁️ Remote provider
           <select id="optLlmRemoteProvider" disabled>
