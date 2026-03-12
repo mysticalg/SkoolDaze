@@ -3348,12 +3348,23 @@ function roomCenter(name) {
   return { x: r.x + r.w / 2, y: r.y + r.h / 2 };
 }
 
+function morningQueueIndex(entity) {
+  // Queue ordering must only consider students; seatIndex is global and includes staff.
+  // Without this filter, Eric can end up visually detached from the pupil line in auto mode.
+  const students = game.entities
+    .filter((candidate) => isStudentCharacter(candidate))
+    .sort((a, b) => a.seatIndex - b.seatIndex);
+  const idx = students.findIndex((candidate) => candidate === entity);
+  return idx >= 0 ? idx : Math.max(0, entity?.seatIndex || 0);
+}
+
 function gateQueuePosition(entity) {
   const field = roomByName('P.E. Field');
   const dividerX = field.x + morningQueue.dividerInsetFromFieldLeft;
+  const queueIndex = morningQueueIndex(entity);
   // Start-of-day student columns (area 2 from the user's marked screenshot).
-  const lane = entity.seatIndex % 5;
-  const row = Math.floor(entity.seatIndex / 5) % 14;
+  const lane = queueIndex % 5;
+  const row = Math.floor(queueIndex / 5) % 14;
   return {
     // Keep every student lane to the right of the black divider line.
     x: Math.max(dividerX + morningQueue.studentMinOffsetFromDivider, field.x + field.w - 18 + lane * 2.2),
@@ -4066,14 +4077,19 @@ function getSeatPosition(roomName, seatIndex, requester = null) {
     return layout.seats[idx % layout.seats.length] || layout.seats[0];
   }
 
-  const ericSlot = player.seatIndex % layout.seats.length;
-  let slot = seatIndex % layout.seats.length;
+  const seatCount = layout.seats.length;
+  const ericSlot = player.seatIndex % seatCount;
 
-  // Eric's assigned chair is permanently reserved in every classroom.
-  if (requester && requester !== player && slot === ericSlot) {
-    slot = (slot + 1) % layout.seats.length;
+  if (requester && requester !== player) {
+    // Reserve Eric's desk without causing two NPCs to alias to the same fallback seat.
+    // We map non-Eric students into the seat list with Eric's slot removed, then re-expand.
+    const nonEricSeatCount = Math.max(1, seatCount - 1);
+    let slot = seatIndex % nonEricSeatCount;
+    if (slot >= ericSlot) slot += 1;
+    return layout.seats[slot % seatCount];
   }
 
+  const slot = seatIndex % seatCount;
   return layout.seats[slot];
 }
 
@@ -6034,6 +6050,20 @@ function updateTutorialRollCall(now = performance.now()) {
 
     const teacherName = assignedTeacherForRoom(roomName);
     const teacher = game.entities.find((entity) => entity.role === 'teacher' && entity.name === teacherName && entityRoom(entity) === roomName);
+
+    // Teachers now wait until the whole tutor group has reached the room before starting.
+    const rosterReady = roster.every((studentName) => {
+      const rosterStudent = game.entities.find((entity) => entity.name === studentName);
+      return rosterStudent
+        && rosterStudent.arrivedForDay
+        && entityRoom(rosterStudent) === roomName;
+    });
+    if (!rosterReady) {
+      roll.waitingForReply = false;
+      roll.nextAt = now + 500;
+      continue;
+    }
+
     const studentName = roster[roll.index];
     const student = game.entities.find((entity) => entity.name === studentName && entityRoom(entity) === roomName);
     if (!teacher || !student) continue;
