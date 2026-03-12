@@ -7361,6 +7361,26 @@ function updateAI(dt) {
           || entity.target);
     }
 
+    // Teachers now deliver a steady baseline of classroom talk so speech bubbles are
+    // consistently visible during lessons instead of depending on rare noise spikes.
+    if (inLesson && entity.role === 'teacher' && entityRoom(entity) === current.room && !isAssemblyPeriod(current)) {
+      const nextPromptGapMs = 15000 + ((entity.seatIndex % 5) * 900);
+      const dueForPrompt = now - (entity.lastClassroomPromptAt || 0) > nextPromptGapMs;
+      const alreadySpeaking = Boolean(entity.speech && entity.speech.until > now);
+      if (dueForPrompt && !alreadySpeaking && canUseDialogue(entity, now, 'speech')) {
+        const promptLines = [
+          '📘 Keep your eyes on the board — we are building on this in the quiz.',
+          '📝 Pens moving please; write the next answer in full.',
+          '🎯 Good pace everyone — one clear line at a time.',
+          '🧠 Think first, then answer. Accuracy before speed.',
+          '🔍 Check your working and underline the key point.',
+        ];
+        const line = promptLines[Math.floor(game.rng() * promptLines.length)];
+        const spoken = deliverResolvedSpeech(entity, line, inferSpeechAddressee(entity), { durationMs: 3200 }, now);
+        if (spoken) entity.lastClassroomPromptAt = now;
+      }
+    }
+
     // Teacher occasionally hushes the class, then students slowly get noisy again.
     if (inLesson && entity.role === 'teacher' && entityRoom(entity) === current.room && now > game.lessonQuietUntil && game.lessonNoiseLevel > 0.38 && game.rng() < 0.0013) {
       ensureDialogueSetup(entity);
