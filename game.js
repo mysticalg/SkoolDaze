@@ -5034,7 +5034,14 @@ function announce(message, options = {}) {
 
   if (source) {
     const spoken = safeMessage.replace(/^.*?:\s*"?/, '').replace(/"$/, '').trim();
-    say(source, spoken || '...');
+    // Important: when callers force an announcement (e.g., quiz feedback),
+    // the matching speech bubble should be forced too. Otherwise the feed can
+    // show a line that never renders as a bubble due to speech cooldown/silence gates.
+    say(source, spoken || '...', {
+      force: Boolean(force),
+      // Forced world events should not be dropped if speaker visibility changes mid-frame.
+      allowOffscreenSpeech: Boolean(force),
+    });
   }
 
   game.announcements.unshift(`[${formatTime(game.timeMinutes)}] ${safeMessage}`);
