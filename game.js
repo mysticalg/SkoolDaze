@@ -2899,6 +2899,8 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     emote: null,
     emoteUntil: 0,
     nextEmoteAt: performance.now() + 2500 + Math.random() * 5000,
+    // Cached facing mode keeps front/back/side sprites stable when velocity is tiny.
+    renderFacing: 'front',
     dailyCards: [],
     refusesEricUntilDay: 0,
     // Lunch-service state machine: plate -> queue -> serve -> sit -> eat.
@@ -8928,12 +8930,16 @@ function drawEntities() {
     } else {
       const moving = Math.abs(entity.vx) + Math.abs(entity.vy) > 0.05;
       const seated = Boolean(entity.isSeated);
-      // Preserve last front/back orientation while idle so sprites do not flicker each frame.
-      if (entity.verticalFacing !== 'front' && entity.verticalFacing !== 'back') {
-        entity.verticalFacing = 'front';
+      // Preserve orientation while idle and support a side-on frame for horizontal walking.
+      if (!['front', 'back', 'side'].includes(entity.renderFacing)) entity.renderFacing = 'front';
+      const absVx = Math.abs(entity.vx);
+      const absVy = Math.abs(entity.vy);
+      if (absVx > 0.05 || absVy > 0.05) {
+        // Horizontal dominance => side-facing profile. Vertical dominance => front/back.
+        if (absVx > absVy * 1.2) entity.renderFacing = 'side';
+        else if (entity.vy < -0.035) entity.renderFacing = 'back';
+        else if (entity.vy > 0.035) entity.renderFacing = 'front';
       }
-      if (entity.vy < -0.035) entity.verticalFacing = 'back';
-      else if (entity.vy > 0.035) entity.verticalFacing = 'front';
 
       // Classroom-seated pupils always face the board; moving up also shows a back view.
       const seatedFacingAway = seated
@@ -8943,7 +8949,8 @@ function drawEntities() {
       const assemblyFacingHeadmaster = isAssemblyPeriod(current)
         && isStudentCharacter(entity)
         && entityRoom(entity) === 'Assembly Hall';
-      const facingBack = seatedFacingAway || assemblyFacingHeadmaster || entity.verticalFacing === 'back';
+      const facingBack = seatedFacingAway || assemblyFacingHeadmaster || entity.renderFacing === 'back';
+      const facingSide = !facingBack && entity.renderFacing === 'side';
       // 5-frame walk cycle to replace the previous 2-pose sine swing.
       const walkFrame = moving && !seated ? Math.floor(entity.animPhase) % 5 : 2;
       const walkBobOffsets = [-1.5, -0.5, 0.75, -0.5, -1.5];
@@ -9004,8 +9011,13 @@ function drawEntities() {
       // Ears and nose shapes make pupils less identical.
       const earSize = appearance.earSize || 1;
       ctx.fillStyle = skinTone;
-      ctx.fillRect(px - Math.floor(headW / 2) - 1, py - 21 + bob - heightShift, earSize, 2);
-      ctx.fillRect(px + Math.floor(headW / 2), py - 21 + bob - heightShift, earSize, 2);
+      if (facingSide) {
+        const earX = entity.facing >= 0 ? px - Math.floor(headW / 2) - 1 : px + Math.floor(headW / 2);
+        ctx.fillRect(earX, py - 21 + bob - heightShift, earSize, 2);
+      } else {
+        ctx.fillRect(px - Math.floor(headW / 2) - 1, py - 21 + bob - heightShift, earSize, 2);
+        ctx.fillRect(px + Math.floor(headW / 2), py - 21 + bob - heightShift, earSize, 2);
+      }
       const makeupStyle = appearance.makeupStyle || 'none';
       if (facingBack) {
         // Back-facing frame: hide front-face features and render length-dependent rear hair.
@@ -9019,9 +9031,16 @@ function drawEntities() {
         ctx.fillRect(px - 2, py - 19 + bob - heightShift, 4, 1);
       } else {
         ctx.fillStyle = '#6d4c41';
-        const noseX = appearance.noseType === 'long' ? px : px - 1;
         const noseH = appearance.noseType === 'button' ? 1 : appearance.noseType === 'long' ? 2 : 1;
-        ctx.fillRect(noseX, py - 20 + bob - heightShift, 1, noseH);
+        if (facingSide) {
+          // Side profile nose extends toward the facing direction.
+          const noseX = entity.facing >= 0 ? px + Math.floor(headW / 2) - 1 : px - Math.floor(headW / 2);
+          ctx.fillRect(noseX, py - 20 + bob - heightShift, 2, 1);
+          if (noseH > 1) ctx.fillRect(noseX + (entity.facing >= 0 ? 1 : 0), py - 19 + bob - heightShift, 1, 1);
+        } else {
+          const noseX = appearance.noseType === 'long' ? px : px - 1;
+          ctx.fillRect(noseX, py - 20 + bob - heightShift, 1, noseH);
+        }
         // Eyes: white + iris color + black pupil pixels; blink every ~10s randomly.
         const eyeSpread = appearance.eyeSpread || 1;
         if (now >= (entity.nextBlinkAt || 0)) {
@@ -9032,29 +9051,47 @@ function drawEntities() {
         const eyeY = py - 22 + bob - heightShift + (appearance.eyeShape === 'sleepy' ? 1 : 0);
         if (isBlinking) {
           ctx.fillStyle = '#2f2f2f';
-          ctx.fillRect(px - eyeSpread - 2, eyeY, 3, 1);
-          ctx.fillRect(px + eyeSpread - 1, eyeY, 3, 1);
+          if (facingSide) {
+            const eyeX = entity.facing >= 0 ? px + 1 : px - 2;
+            ctx.fillRect(eyeX, eyeY, 2, 1);
+          } else {
+            ctx.fillRect(px - eyeSpread - 2, eyeY, 3, 1);
+            ctx.fillRect(px + eyeSpread - 1, eyeY, 3, 1);
+          }
         } else {
           if (isFemaleStudent && makeupStyle !== 'none') {
             // Eyeshadow accent for female variants keeps faces distinct.
             ctx.fillStyle = makeupStyle === 'bold' ? '#b565d9' : '#8aa0ff';
-            ctx.fillRect(px - eyeSpread - 2, eyeY - 1, 2, 1);
-            ctx.fillRect(px + eyeSpread - 1, eyeY - 1, 2, 1);
+            if (facingSide) {
+              const eyeX = entity.facing >= 0 ? px + 1 : px - 2;
+              ctx.fillRect(eyeX, eyeY - 1, 2, 1);
+            } else {
+              ctx.fillRect(px - eyeSpread - 2, eyeY - 1, 2, 1);
+              ctx.fillRect(px + eyeSpread - 1, eyeY - 1, 2, 1);
+            }
           }
-          // Left eye triplet.
-          ctx.fillStyle = '#ffffff';
-          ctx.fillRect(px - eyeSpread - 2, eyeY, 1, 1);
-          ctx.fillStyle = appearance.eyeColor || '#1d3557';
-          ctx.fillRect(px - eyeSpread - 1, eyeY, 1, 1);
-          ctx.fillStyle = '#000000';
-          ctx.fillRect(px - eyeSpread, eyeY, 1, 1);
-          // Right eye triplet.
-          ctx.fillStyle = '#ffffff';
-          ctx.fillRect(px + eyeSpread - 1, eyeY, 1, 1);
-          ctx.fillStyle = appearance.eyeColor || '#1d3557';
-          ctx.fillRect(px + eyeSpread, eyeY, 1, 1);
-          ctx.fillStyle = '#000000';
-          ctx.fillRect(px + eyeSpread + 1, eyeY, 1, 1);
+          if (facingSide) {
+            const eyeX = entity.facing >= 0 ? px + 1 : px - 2;
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(eyeX, eyeY, 1, 1);
+            ctx.fillStyle = appearance.eyeColor || '#1d3557';
+            ctx.fillRect(eyeX + 1, eyeY, 1, 1);
+          } else {
+            // Left eye triplet.
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(px - eyeSpread - 2, eyeY, 1, 1);
+            ctx.fillStyle = appearance.eyeColor || '#1d3557';
+            ctx.fillRect(px - eyeSpread - 1, eyeY, 1, 1);
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(px - eyeSpread, eyeY, 1, 1);
+            // Right eye triplet.
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(px + eyeSpread - 1, eyeY, 1, 1);
+            ctx.fillStyle = appearance.eyeColor || '#1d3557';
+            ctx.fillRect(px + eyeSpread, eyeY, 1, 1);
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(px + eyeSpread + 1, eyeY, 1, 1);
+          }
         }
       }
       if (appearance.acne) {
@@ -9067,8 +9104,9 @@ function drawEntities() {
       const activeEmote = now < (entity.emoteUntil || 0) ? entity.emote : null;
       if (!facingBack) {
         ctx.fillStyle = isFemaleStudent && makeupStyle !== 'none' ? '#c93b65' : '#4a1e1e';
-        if (isSpeaking) ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 2);
-        else ctx.fillRect(px - 1, py - 18 + bob - heightShift, 2, 1);
+        const mouthX = facingSide ? (entity.facing >= 0 ? px + 1 : px - 2) : px - 1;
+        if (isSpeaking) ctx.fillRect(mouthX, py - 18 + bob - heightShift, 2, 2);
+        else ctx.fillRect(mouthX, py - 18 + bob - heightShift, 2, 1);
         if (activeEmote === 'cry') {
           // Crying frame: visible tears under both eyes.
           ctx.fillStyle = '#7cc8ff';
