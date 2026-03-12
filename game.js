@@ -2571,11 +2571,14 @@ function updateAutoPilot(dt) {
   const current = schedule[game.periodIndex];
   const destination = chooseAutoDestination();
   const waypoint = routeWaypoint(player, destination);
-  // Auto mode should move at student pace (not superhuman speed).
-  // NPC students use a hallway multiplier near 3.0 and move with dt/1000,
-  // while Eric uses dt*0.011, so we convert with /11 for parity.
-  const studentHallwayBoost = 3.05 / 11;
-  const speed = ((player.personality.speed * game.energy) / 100) * studentHallwayBoost;
+  // Auto mode should mirror student travel speed so Eric no longer trails behind.
+  // NPC students use hallwayBoost 3.3 with movement integrated at dt/1000,
+  // while Eric's movement is integrated with dt*0.011, so divide by 11 for parity.
+  const studentHallwayBoost = 3.3 / 11;
+  // Match student "late for lesson" urgency so auto mode keeps up with corridor traffic.
+  const lateForClass = current.mode === 'lesson' && entityRoom(player) !== current.room;
+  const runBoost = lateForClass && player.energy > 20 ? 1.45 : 1;
+  const speed = ((player.personality.speed * game.energy) / 100) * studentHallwayBoost * runBoost;
 
   const dx = waypoint.x - player.x;
   const dy = waypoint.y - player.y;
