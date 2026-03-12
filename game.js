@@ -1917,17 +1917,22 @@ function routeWaypoint(entity, destination) {
   const destinationRoom = roomAtPosition(destination);
   // If already inside the destination room, go directly to the desk/spot.
   if (currentRoom && destinationRoom && currentRoom.name === destinationRoom.name) return destination;
+
+  // Critical ordering: always route out through the current room doorway first.
+  // Without this guard, cross-floor targets (e.g. heading to the toilets) can
+  // point at a staircase while the NPC is still boxed inside a classroom, which
+  // causes corner-sliding and apparent "stuck in wall" behaviour.
+  if (currentRoom && currentRoom.type !== 'corridor' && currentRoom.type !== 'outdoor') {
+    const exitDoor = roomDoorway(currentRoom);
+    if (exitDoor && distance(entity, exitDoor) > 0.95) return exitDoor;
+  }
+
   const currentFloor = entityFloor(entity);
   const destinationFloor = destinationRoom?.floor || 'ground';
 
   if (currentFloor !== destinationFloor) {
     const nextFloor = nextFloorToward(currentFloor, destinationFloor);
     return nearestStairTarget(entity, currentFloor, nextFloor) || destination;
-  }
-
-  if (currentRoom && currentRoom.type !== 'corridor' && currentRoom.type !== 'outdoor') {
-    const exitDoor = roomDoorway(currentRoom);
-    if (exitDoor && distance(entity, exitDoor) > 0.95) return exitDoor;
   }
 
   if (destinationRoom && destinationRoom.type !== 'corridor' && destinationRoom.type !== 'outdoor') {
