@@ -205,17 +205,25 @@ function diningHallLayout() {
   if (!hall) return null;
 
   const plateStand = { x: hall.x + 3.2, y: hall.y + 2.3 };
-  const plateSlots = Array.from({ length: 6 }, (_, idx) => ({
-    x: plateStand.x + (((idx % 3) - 1) * 0.95),
-    y: plateStand.y + 1.15 + (Math.floor(idx / 3) * 0.95),
+  const plateSlots = Array.from({ length: 8 }, (_, idx) => ({
+    x: plateStand.x + (((idx % 4) - 1.5) * 0.95),
+    y: plateStand.y + 1.05 + (Math.floor(idx / 4) * 0.95),
   }));
   const servingPoint = { x: hall.x + 8.6, y: hall.y + 2.4 };
   const queueStart = { x: hall.x + 13.3, y: hall.y + 2.5 };
-  const queueSpacing = 1.55;
-  const queueSlots = Array.from({ length: 8 }, (_, idx) => ({
-    x: queueStart.x + (idx * queueSpacing),
-    y: queueStart.y,
-  }));
+  const queueSpacing = 1.5;
+  const queueSlots = [];
+  for (let row = 0; row < 2; row += 1) {
+    const rowY = queueStart.y + (row * 1.18);
+    const offsets = Array.from({ length: 6 }, (_, idx) => idx);
+    if (row % 2 === 1) offsets.reverse();
+    for (const offset of offsets) {
+      queueSlots.push({
+        x: queueStart.x + (offset * queueSpacing),
+        y: rowY,
+      });
+    }
+  }
 
   const seats = [];
   const tableCols = [hall.x + 9.5, hall.x + 17.5, hall.x + 25.5, hall.x + 33.5];
@@ -233,6 +241,14 @@ function diningHallLayout() {
     { x: hall.x + hall.w - 4.5, y: hall.y + 4.6 },
     { x: hall.x + 8.3, y: hall.y + 4.8 },
   ];
+  const hangoutZones = [
+    { x: hall.x + 8.2, y: hall.y + hall.h - 2.1 },
+    { x: hall.x + 15.8, y: hall.y + hall.h - 2.1 },
+    { x: hall.x + 23.5, y: hall.y + hall.h - 2.1 },
+    { x: hall.x + 31.2, y: hall.y + hall.h - 2.1 },
+    { x: hall.x + 12.5, y: hall.y + 4.8 },
+    { x: hall.x + 27.8, y: hall.y + 4.8 },
+  ];
 
   const layout = {
     hall,
@@ -240,9 +256,10 @@ function diningHallLayout() {
     plateSlots,
     servingPoint,
     queueSlots,
-    serviceDurationMs: 2000,
+    serviceDurationMs: 850,
     seats,
     patrolRoute,
+    hangoutZones,
   };
   return layout;
 }
@@ -253,6 +270,8 @@ function resetLunchState(entity) {
   entity.hasLunchPlate = false;
   entity.queuedForLunch = false;
   entity.lunchQueueIndex = -1;
+  entity.lunchQueueTicket = 0;
+  entity.lunchServiceSlotIndex = -1;
   entity.lunchServedAt = 0;
   entity.lunchSeatIndex = -1;
   entity.lunchEatUntil = 0;
@@ -2661,6 +2680,7 @@ const game = {
   dailyAssemblyHymnDay: 0,
   // Dinner lady lunchtime behaviour state for field supervision + interventions.
   dinnerLadyLastWhistleAt: 0,
+  nextLunchQueueTicket: 1,
   weather: 'sunny',
   preferredWeather: 'auto',
   weatherWeek: 1,
@@ -3837,19 +3857,182 @@ function lunchFieldSpotForEntity(entity) {
   const field = roomByName('P.E. Field');
   if (!field) return roomCenter('P.E. Field');
 
-  // Social groups naturally cluster at deterministic pockets around the field.
-  const clusterSeed = entity.socialProfile?.cliqueId
-    ? stableNameHash(entity.socialProfile.cliqueId)
-    : stableNameHash(entity.name || entity.role || 'student');
-  const band = clusterSeed % 6;
-  const col = band % 3;
-  const row = Math.floor(band / 3);
-  const jitterX = ((clusterSeed % 9) - 4) * 0.22;
-  const jitterY = (((Math.floor(clusterSeed / 10)) % 9) - 4) * 0.18;
-  return {
-    x: field.x + 8 + (col * 19) + jitterX,
-    y: field.y + 6 + (row * 11) + jitterY,
+  // Spread lunch groups away from the old field vending-machine hotspot.
+  const clusterSeed = stableNameHash(lunchHangoutGroupKey(entity));
+  const anchors = [
+    { x: field.x + 10, y: field.y + 7 },
+    { x: field.x + 20, y: field.y + 19 },
+    { x: field.x + 33, y: field.y + 8 },
+    { x: field.x + 46, y: field.y + 19 },
+    { x: field.x + 58, y: field.y + 9 },
+    { x: field.x + 28, y: field.y + 21 },
+  ];
+  const anchor = anchors[clusterSeed % anchors.length] || roomCenter('P.E. Field');
+  const jitterX = ((clusterSeed % 7) - 3) * 0.26;
+  const jitterY = (((Math.floor(clusterSeed / 10)) % 7) - 3) * 0.22;
+  return nearestWalkablePoint(
+    { x: anchor.x + jitterX, y: anchor.y + jitterY },
+    [anchor, roomCenter('P.E. Field')],
+  ) || anchor;
+}
+
+function lunchFriendPeers(entity, limit = 4) {
+  if (!entity || !isStudentCharacter(entity)) return [];
+  ensureSocialProfile(entity);
+  const now = performance.now();
+  const cliqueId = entity.socialProfile?.cliqueId || '';
+  let candidates = game.entities.filter((candidate) => (
+    candidate !== entity
+    && candidate !== player
+    && isStudentCharacter(candidate)
+    && candidate.knockedUntil < now
+  ));
+
+  if (cliqueId) {
+    const cliquePeers = candidates.filter((candidate) => candidate.socialProfile?.cliqueId === cliqueId);
+    if (cliquePeers.length) candidates = cliquePeers;
+  }
+
+  return candidates
+    .map((peer) => {
+      ensureSocialProfile(peer);
+      const bond = getSocialBond(entity, peer);
+      const friendlyGap = Math.abs((entity.traits?.friendly || 50) - (peer.traits?.friendly || 50));
+      const disciplineGap = Math.abs((entity.traits?.discipline || 50) - (peer.traits?.discipline || 50));
+      const honorGap = Math.abs((entity.traits?.honor || 50) - (peer.traits?.honor || 50));
+      const seatGap = Math.abs((entity.seatIndex || 0) - (peer.seatIndex || 0));
+      let score = bond;
+      if (entity.role === peer.role) score += 14;
+      if (entity.socialProfile?.cliqueId && entity.socialProfile.cliqueId === peer.socialProfile?.cliqueId) score += 20;
+      score += Math.max(0, 10 - (friendlyGap * 0.55));
+      score += Math.max(0, 8 - (disciplineGap * 0.38));
+      score += Math.max(0, 6 - (honorGap * 0.25));
+      if (seatGap <= 4) score += 5;
+      if (seatGap <= 8) score += 2;
+      return { peer, bond, score };
+    })
+    .filter(({ bond, score }) => bond >= 28 || score >= 32)
+    .sort((a, b) => b.score - a.score || b.bond - a.bond || a.peer.seatIndex - b.peer.seatIndex)
+    .slice(0, limit)
+    .map(({ peer }) => peer);
+}
+
+function lunchHangoutGroupMembers(entity, limit = 5) {
+  if (!entity || !isStudentCharacter(entity)) return [];
+  return [entity, ...lunchFriendPeers(entity, Math.max(0, limit - 1))]
+    .filter((member, index, list) => list.indexOf(member) === index)
+    .sort((a, b) => a.seatIndex - b.seatIndex)
+    .slice(0, limit);
+}
+
+function lunchHangoutGroupKey(entity) {
+  const members = lunchHangoutGroupMembers(entity, 5);
+  const cliqueId = entity?.socialProfile?.cliqueId || members.find((member) => member?.socialProfile?.cliqueId)?.socialProfile?.cliqueId || '';
+  if (cliqueId && members.length > 1) return cliqueId;
+  if (members.length > 1) return `crew:${members.slice(0, 3).map((member) => member.name).sort().join('|')}`;
+  return `solo:${entity?.name || 'student'}`;
+}
+
+function lunchHangoutLeader(entity) {
+  const members = lunchHangoutGroupMembers(entity, 5);
+  return members[0] || entity;
+}
+
+function lunchHangoutVenue(layout, entity) {
+  const leader = lunchHangoutLeader(entity);
+  const groupKey = lunchHangoutGroupKey(entity);
+  const seed = stableNameHash(groupKey);
+  const outdoorsy = (leader?.traits?.speed || 50) > 60 || leader?.role === 'hero';
+  const prefersField = game.weather === 'sunny' && (outdoorsy || seed % 4 === 0);
+  if (prefersField) {
+    return { area: 'P.E. Field', anchor: lunchFieldSpotForEntity(entity), groupKey, leader };
+  }
+  const hallAnchor = layout?.hangoutZones?.[seed % (layout?.hangoutZones?.length || 1)] || roomCenter('Dining Hall');
+  return { area: 'Dining Hall', anchor: hallAnchor, groupKey, leader };
+}
+
+function lunchHangoutTargetForEntity(layout, entity, now = performance.now()) {
+  if (!entity || !isStudentCharacter(entity)) return roomCenter('Dining Hall');
+  const venue = lunchHangoutVenue(layout, entity);
+  const leader = venue.leader || entity;
+  const members = lunchHangoutGroupMembers(leader, 5);
+  const memberIndex = Math.max(0, members.findIndex((member) => member === entity));
+  const seed = stableNameHash(venue.groupKey);
+  const seatedFriend = members.find((member) => (
+    member !== entity
+    && entityRoom(member) === 'Dining Hall'
+    && (member.lunchState === 'eating' || member.lunchState === 'toSeat')
+  ));
+
+  const baseAnchor = seatedFriend && layout?.seats?.[seatedFriend.lunchSeatIndex]
+    ? { x: layout.seats[seatedFriend.lunchSeatIndex].tableX, y: layout.seats[seatedFriend.lunchSeatIndex].tableY + 1.1 }
+    : venue.anchor;
+
+  const leaderOrbit = venue.area === 'P.E. Field'
+    ? [{ x: 0, y: 0 }, { x: 1.7, y: 0.5 }, { x: -1.5, y: 0.8 }, { x: 1.2, y: -0.8 }, { x: -1.1, y: -0.7 }]
+    : [{ x: 0, y: 0 }, { x: 1.2, y: 0.2 }, { x: -1.1, y: 0.35 }, { x: 0.8, y: -0.45 }, { x: -0.7, y: -0.4 }];
+  const followerOffsets = venue.area === 'P.E. Field'
+    ? [{ x: 0, y: 0 }, { x: -1.25, y: 0.55 }, { x: 1.25, y: 0.55 }, { x: 0, y: 1.2 }, { x: 0.95, y: -0.9 }]
+    : [{ x: 0, y: 0 }, { x: -0.9, y: 0.35 }, { x: 0.9, y: 0.35 }, { x: 0, y: 0.95 }, { x: 0.7, y: -0.55 }];
+  const phase = Math.floor(now / 3600);
+  const leaderOffset = leaderOrbit[(phase + seed) % leaderOrbit.length];
+  const leaderTarget = {
+    x: baseAnchor.x + leaderOffset.x,
+    y: baseAnchor.y + leaderOffset.y,
   };
+  if (entity === leader) {
+    return nearestWalkablePoint(leaderTarget, [baseAnchor, venue.anchor, roomCenter(venue.area)]) || leaderTarget;
+  }
+
+  const slot = followerOffsets[memberIndex % followerOffsets.length] || followerOffsets[0];
+  const target = {
+    x: leaderTarget.x + slot.x,
+    y: leaderTarget.y + slot.y,
+  };
+  return nearestWalkablePoint(target, [leaderTarget, baseAnchor, venue.anchor, roomCenter(venue.area)]) || target;
+}
+
+function maybeRunLunchFriendMoment(entity, now, layout) {
+  if (!entity || !isStudentCharacter(entity) || entity.role === 'player') return;
+  if (entity.lunchState !== 'done') return;
+  if (now < (entity.nextLunchFriendMomentAt || 0)) return;
+
+  const nearbyMate = lunchFriendPeers(entity, 3).find((peer) => (
+    entityRoom(peer) === entityRoom(entity)
+    && distance(peer, entity) < 2.6
+    && peer.lunchState === 'done'
+  ));
+  if (!nearbyMate) return;
+
+  entity.nextLunchFriendMomentAt = now + 6000 + (game.rng() * 4200);
+  const bond = getSocialBond(entity, nearbyMate);
+  const lunchMateLines = [
+    '🥪 Save us a bench after this.',
+    '😄 Come on, let us wander together.',
+    '🗣️ Did you hear the latest corridor gossip?',
+    '🤝 Stick with us after lunch, yeah?',
+    '⚽ Race you to the field corner after we finish chatting.',
+    '🍟 You get chips, I get the gossip.',
+  ];
+
+  if (bond >= 52 && game.rng() < 0.55) {
+    const sharedEmote = game.rng() < 0.5 ? 'high-five' : 'wave';
+    triggerStudentEmote(entity, now, sharedEmote, 1500);
+    triggerStudentEmote(nearbyMate, now + 120, sharedEmote, 1500);
+  }
+
+  if (canUseDialogue(entity, now, 'speech') && game.rng() < 0.58) {
+    const lineSeed = stableNameHash(`${entity.name}:${nearbyMate.name}:lunch`);
+    say(entity, lunchMateLines[(lineSeed + Math.floor(now / 800)) % lunchMateLines.length], {
+      peer: nearbyMate,
+      durationMs: 2400,
+    });
+    if (canUseDialogue(nearbyMate, now + 120, 'speech') && game.rng() < 0.26) {
+      say(nearbyMate, contextualResponseFor(nearbyMate, entity), { peer: entity, durationMs: 2200 });
+    }
+  } else if (game.rng() < 0.22 && nearestTradePartner(entity, 2.2) === nearbyMate) {
+    tryTrade(entity, nearbyMate);
+  }
 }
 
 function shouldAvoidLunchFight(entity) {
@@ -5676,10 +5859,13 @@ function setPeriod(index) {
   }
   if (current.period === 'Lunch Break') {
     announce('🍽️ Lunch service is open in the dining hall for 30 minutes.', { feedType: 'world' });
+    refreshCliquesFromBonds();
+    game.nextLunchQueueTicket = 1;
     for (const entity of game.entities) {
       if (isStudentCharacter(entity)) resetLunchState(entity);
     }
   } else {
+    game.nextLunchQueueTicket = 1;
     for (const entity of game.entities) {
       if (isStudentCharacter(entity)) resetLunchState(entity);
     }
@@ -6770,6 +6956,9 @@ function lunchQueueOrder(students, layout) {
       const aQueued = a.lunchState === 'queue' || a.lunchState === 'beingServed' ? 0 : 1;
       const bQueued = b.lunchState === 'queue' || b.lunchState === 'beingServed' ? 0 : 1;
       if (aQueued !== bQueued) return aQueued - bQueued;
+      const aTicket = Number.isFinite(a.lunchQueueTicket) && a.lunchQueueTicket > 0 ? a.lunchQueueTicket : Number.MAX_SAFE_INTEGER;
+      const bTicket = Number.isFinite(b.lunchQueueTicket) && b.lunchQueueTicket > 0 ? b.lunchQueueTicket : Number.MAX_SAFE_INTEGER;
+      if (aTicket !== bTicket) return aTicket - bTicket;
       const aDist = distance(a, layout.queueSlots[0]);
       const bDist = distance(b, layout.queueSlots[0]);
       if (Math.abs(aDist - bDist) > 0.01) return aDist - bDist;
@@ -6791,11 +6980,21 @@ function nearestFreeDiningSeat(layout, eater) {
   let best = null;
   let bestIndex = -1;
   let bestDist = Infinity;
+  let bestFriendScore = -Infinity;
+  const lunchFriends = lunchFriendPeers(eater, 4);
   for (let i = 0; i < layout.seats.length; i += 1) {
     if (occupiedIndices.has(i)) continue;
     const seat = layout.seats[i];
     const d = distance(eater, seat);
-    if (d < bestDist) {
+    let friendScore = 0;
+    for (const friend of lunchFriends) {
+      const friendSeat = typeof friend.lunchSeatIndex === 'number' ? layout.seats[friend.lunchSeatIndex] : null;
+      if (!friendSeat) continue;
+      if (friendSeat.tableX === seat.tableX && friendSeat.tableY === seat.tableY) friendScore += 6;
+      else if (distance(friendSeat, seat) < 3.25) friendScore += 3;
+    }
+    if (friendScore > bestFriendScore || (friendScore === bestFriendScore && d < bestDist)) {
+      bestFriendScore = friendScore;
       bestDist = d;
       best = seat;
       bestIndex = i;
@@ -7344,6 +7543,7 @@ function updateAI(dt) {
           entity.target = plateSpot;
           if (distance(entity, plateSpot) < 0.78) {
             entity.hasLunchPlate = true;
+            entity.lunchQueueTicket = entity.lunchQueueTicket || game.nextLunchQueueTicket++;
             entity.lunchState = 'queue';
           }
         }
@@ -7361,25 +7561,39 @@ function updateAI(dt) {
         const queueOrder = lunchQueueOrder(lunchStudents, layout);
         for (let i = 0; i < queueOrder.length; i += 1) {
           queueOrder[i].lunchQueueIndex = i;
+          if ((queueOrder[i].lunchState === 'queue' || queueOrder[i].lunchState === 'beingServed') && !queueOrder[i].lunchQueueTicket) {
+            queueOrder[i].lunchQueueTicket = game.nextLunchQueueTicket++;
+          }
           if (queueOrder[i].lunchState === 'queue') {
             queueOrder[i].target = layout.queueSlots[Math.min(i, layout.queueSlots.length - 1)];
           }
         }
 
         if (entity.lunchState === 'queue') {
-          const frontSlot = layout.queueSlots[0];
-          const atFront = entity.lunchQueueIndex === 0 && distance(entity, frontSlot) < 0.9;
-          if (atFront) {
+          const maxServingSlots = 2;
+          const activeServers = game.entities.filter((candidate) => (
+            candidate !== entity
+            && candidate.lunchState === 'beingServed'
+            && entityRoom(candidate) === 'Dining Hall'
+          )).length;
+          const serviceSlotIndex = Math.min(Math.max(entity.lunchQueueIndex, 0), maxServingSlots - 1);
+          const serviceSlot = layout.queueSlots[serviceSlotIndex] || layout.queueSlots[0];
+          const atFront = entity.lunchQueueIndex >= 0
+            && entity.lunchQueueIndex < maxServingSlots
+            && distance(entity, serviceSlot) < 1.15;
+          if (atFront && activeServers < maxServingSlots) {
             entity.lunchState = 'beingServed';
+            entity.lunchServiceSlotIndex = serviceSlotIndex;
             entity.lunchServedAt = now + layout.serviceDurationMs;
           }
         }
 
         if (entity.lunchState === 'beingServed') {
-          entity.target = layout.queueSlots[0];
+          entity.target = layout.queueSlots[Math.max(0, entity.lunchServiceSlotIndex || 0)] || layout.queueSlots[0];
           if (now >= (entity.lunchServedAt || 0)) {
             entity.queuedForLunch = true;
             entity.lunchState = 'toSeat';
+            entity.lunchServiceSlotIndex = -1;
             const freeSeat = nearestFreeDiningSeat(layout, entity);
             if (freeSeat) {
               entity.lunchSeatIndex = freeSeat.seatIndex;
@@ -7398,10 +7612,12 @@ function updateAI(dt) {
               entity.isSeated = true;
               entity.seatedRoom = 'Dining Hall';
               entity.lunchState = 'eating';
-              entity.lunchEatUntil = now + (6200 + (game.rng() * 3400));
+              entity.lunchEatUntil = now + (4400 + (game.rng() * 2200));
             }
           } else {
-            entity.target = roomCenter('Dining Hall');
+            entity.lunchState = 'eating';
+            entity.lunchEatUntil = now + (3600 + (game.rng() * 1800));
+            entity.target = lunchHangoutTargetForEntity(layout, entity, now);
           }
         }
 
@@ -7411,14 +7627,27 @@ function updateAI(dt) {
             entity.x = seat.x;
             entity.y = seat.y;
             entity.target = seat;
+            entity.isSeated = true;
+            entity.seatedRoom = 'Dining Hall';
+          } else {
+            entity.isSeated = false;
+            entity.seatedRoom = null;
+            entity.target = lunchHangoutTargetForEntity(layout, entity, now);
           }
-          entity.isSeated = true;
-          entity.seatedRoom = 'Dining Hall';
           if (now >= (entity.lunchEatUntil || 0)) {
             entity.lunchState = 'done';
             entity.hasLunchPlate = false;
-            entity.target = lunchFieldSpotForEntity(entity);
+            entity.isSeated = false;
+            entity.seatedRoom = null;
+            entity.target = lunchHangoutTargetForEntity(layout, entity, now);
           }
+        }
+
+        if (entity.lunchState === 'done') {
+          entity.isSeated = false;
+          entity.seatedRoom = null;
+          entity.target = lunchHangoutTargetForEntity(layout, entity, now);
+          maybeRunLunchFriendMoment(entity, now, layout);
         }
       }
     }
@@ -7503,7 +7732,7 @@ function updateAI(dt) {
     } else if (!entity.target || game.rng() < 0.01) {
       entity.lessonRoom = null;
       if (isLunchtimePeriod(current) && isStudent && entity.lunchState === 'done') {
-        entity.target = lunchFieldSpotForEntity(entity);
+        entity.target = lunchHangoutTargetForEntity(diningHallLayout(), entity, now);
       } else {
         entity.target = chooseTarget(entity, current);
       }

@@ -11,7 +11,7 @@ Original prompt: can you take a look, there's various bugs currently; Eric runs 
 - Verification:
   - `node --check game.js` passes.
   - Direct Playwright probes show Eric now routes toward the central ground-floor stairs for Science Lab from the field, lesson rosters have zero duplicate seat positions across active rooms, forced teacher speech delivers, and lunch stays in the dining hall with students progressing through `toPlate`/`queue` states instead of heading to the field.
-  - Web-game client smoke run completed successfully and produced `output/web-game/shot-0.png` with no captured console error file.
+  - Web-game client smoke run completed successfully with no captured console error file.
 - Follow-up regression work for "fully test the game and make sure nothing weird happens":
   - Reproduced and cleared several false-negative control tests by driving the browser directly: stairs, doors, sitting, melee, and catapult all work when positioned on valid interaction points.
   - Found a real auto-mode discipline bug: multiple teachers could stack the same bunking penalty in one period. Patched this to one bunking penalty per monitored period with a grace window.
@@ -23,5 +23,15 @@ Original prompt: can you take a look, there's various bugs currently; Eric runs 
 - Final verification:
   - `node --check game.js` still passes after the regression fixes.
   - A deterministic full-day auto-mode smoke run finished with no captured `insideWalls` or seat-conflict anomalies, visible speech samples throughout the day, lunch peaking at 28 students in the dining hall vs 7 in the field, and Eric ending the run on 50 lines instead of the earlier 650+ runaway case.
-  - Additional visual checkpoints were saved to `output/playwright/registration.png`, `output/playwright/lunch.png`, and `output/playwright/lesson5.png`; lunch now clusters around the dining hall service flow rather than the old field vending hotspot, and lesson seating looked visually de-conflicted.
+  - Additional visual checkpoints were inspected for registration, lunch, and lesson 5; lunch clustered around the dining hall service flow rather than the old field vending hotspot, and lesson seating looked visually de-conflicted.
   - Extra fairness patch: when another pupil attacks Eric during break/home time and a teacher witnesses it, staff now punish the aggressor instead of sending Eric to the Headmaster for "fighting in class."
+- Lunch-friends follow-up:
+  - Added an inline favicon link in `index.html` so Playwright/browser runs start without the old `favicon.ico` 404 noise.
+  - Reworked lunch throughput in `game.js`: more plate slots, a wider snake queue, FIFO queue tickets to stop queue churn, two active serving slots, faster tray service, shorter eating windows, and a standing-eat fallback when a table is full.
+  - Relaxed lunch friendship matching so pupils can form stable lunch crews from softer affinity signals (same role + similar traits + nearby seats) even before long-term social bonds have fully evolved; non-clique hangout keys now use `crew:` groups instead of falling back to solo so often.
+  - Important testing note: lunch service/eating timers use real-time `performance.now()` rather than the debug step clock, so the most trustworthy lunch checks are real-time waits in Playwright, not just `advanceTime(...)`.
+  - Latest targeted lunch verification used real-time Playwright waits after forcing lunch in auto mode:
+    - After ~28 real seconds, lunch had started producing `done` pupils again (sample probe returned `doneCount: 3`, `groupedDoneCount: 2`) with crew keys like `crew:Biscuit Baz|Doc Doodles|Hexa Harriet`.
+    - A separate lunch-state probe also showed finished pupils choosing shared crew keys and splitting between the dining hall and field rather than all collapsing onto one hotspot.
+  - A lunch-friends visual checkpoint was inspected during Playwright validation; generated screenshots and temp browser output are now ignored/cleaned rather than kept in the repo.
+  - `node --check game.js` passes after the lunch-friends changes, and the required web-game client smoke run completed again cleanly.
