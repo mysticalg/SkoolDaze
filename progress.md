@@ -35,3 +35,35 @@ Original prompt: can you take a look, there's various bugs currently; Eric runs 
     - A separate lunch-state probe also showed finished pupils choosing shared crew keys and splitting between the dining hall and field rather than all collapsing onto one hotspot.
   - A lunch-friends visual checkpoint was inspected during Playwright validation; generated screenshots and temp browser output are now ignored/cleaned rather than kept in the repo.
   - `node --check game.js` passes after the lunch-friends changes, and the required web-game client smoke run completed again cleanly.
+- Visual polish follow-up:
+  - Adjusted student appearance generation so lower bodies are less chunky by default: slimmer average leg widths, separate shoe widths/colors, and a broader hair/skin palette for more crowd variety.
+  - Smoothed sprite motion by interpolating between walk-cycle poses instead of snapping hard frame-to-frame, and added a short facing-direction hold so diagonal/pathfinding jitter does not make pupils flicker between front/side/back poses.
+  - Added per-student uniform accent palettes (ties, trims, skirt/blazer tones, warm-weather vest stripes) so the crowd reads more colorful even on sunny days when blazers are off.
+  - Verification:
+    - `node --check game.js` passes after the sprite/animation changes.
+    - Re-ran the required web-game client smoke successfully after the visual pass.
+    - Real-browser Playwright visual checks were inspected at both the outdoor queue/crowd phase and an in-motion registration scene to confirm smaller-looking feet, smoother walking cadence, and more visible palette variety.
+- Morning crowd polish follow-up:
+  - Reworked `gateQueuePosition(...)` so the start-day student formation stages within the actual field side of the divider/gate overlap instead of packing into the `School Gates` strip; the grid now spreads across the usable field width and height with softer row staggering.
+  - Increased the pre-staged share of morning arrivals and treated the school-gate choke area as a temporary crowd-phasing zone during Start Day, which reduces the tall right-edge arrival zipper without making mornings feel static.
+  - Verification:
+    - `node --check game.js` passes after the morning-flow changes.
+    - Fresh Playwright morning captures (`output/playwright/morning-polish-2.png` and `output/playwright/morning-polish-3.png`) were visually inspected; the field lineup now occupies much more of the field, with only a smaller trickle still entering from the far-right gate edge.
+- NPC bladder tuning follow-up:
+  - Added per-NPC `dailyToiletVisits` tracking and reworked bladder cadence so the first fill cycle builds gently across the morning, with urgency thresholds intentionally biased toward lunch/break windows instead of firing in early lessons.
+  - Reduced starting NPC bladder levels and flattened the post-visit refill rate so pupils who have already used the toilet should not immediately need a second trip later the same day.
+  - Fixed a priority clash in lunch AI where the lunch state machine could overwrite an urgent toilet target; lunch-time bladder urgency now wins before pupils commit to the food queue.
+  - Verification:
+    - `node --check game.js` passes after the bladder changes.
+    - A real-time Playwright run at `timeScale = 5` showed zero NPC toilet targets/visits through late morning (`08:37` to `11:44` in the accelerated day), with average NPC bladder only reaching ~43 by extended break instead of spiking early.
+    - A forced lunch probe with seeded bladder values (`56`-`64`) showed 30 NPCs actively retargeting to `Toilets` within 15 real seconds once lunch began, confirming the lunch queue no longer steals urgent toilet routing.
+    - Re-ran the required web-game client smoke successfully after the bladder patch.
+- Graphics/FX follow-up:
+  - Expanded the campus color language with room-specific palettes so science/computer spaces skew cooler, humanities rooms warmer, art/music rooms brighter, dining/kitchen spaces honey-gold, and corridors/outdoor zones keep stronger floor-coded identity.
+  - Added in-canvas lighting and fade passes: soft top lighting for rooms, sunny outdoor glow, a subtle vignette, bell-triggered pulse light, and a gentle day-start/end fade so transitions feel less abrupt.
+  - Added lightweight scene particles on top of the existing weather system: drifting indoor dust motes, bell sparkles, and lunch steam near the serving area.
+  - Improved tree rendering with layered canopy highlights so the new lighting reads better outdoors.
+  - Verification:
+    - `node --check game.js` passes after the graphics/FX work.
+    - Real-browser screenshots were inspected at `output/playwright/graphics-fx-start-2.png` and `output/playwright/graphics-fx-lunch-2.png`; the start scene now shows a visible fade/pulse treatment and the lunch scene shows warmer room lighting plus visible atmosphere/particle motion.
+    - Re-ran the required web-game client smoke successfully after the graphics/FX pass; latest artifact is `output/web-game/shot-0.png`.

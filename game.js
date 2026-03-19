@@ -129,6 +129,16 @@ const PALETTE = {
   line: '#1f2937',
 };
 
+function hexToRgba(hex, alpha = 1) {
+  const normalized = String(hex || '').replace('#', '');
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return `rgba(255,255,255,${alpha})`;
+  const value = Number.parseInt(normalized, 16);
+  const r = (value >> 16) & 255;
+  const g = (value >> 8) & 255;
+  const b = value & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
 const rooms = [
   // Upper level classrooms + corridor.
   { name: 'Upper Corridor', x: 4, y: 15, w: 160, h: 4, floor: 'upper', type: 'corridor' },
@@ -685,6 +695,11 @@ const NPC_LUNCH_RECOVER_PER_SECOND = 0.26;
 // Seated students should slowly recover stamina during lessons instead of still draining.
 const NPC_SEATED_RECOVER_PER_SECOND = 0.11;
 const NPC_END_OF_DAY_ENERGY_TARGET = 38;
+const NPC_BLADDER_FIRST_VISIT_RATE = 0.2;
+const NPC_BLADDER_FIRST_VISIT_RUNNING_BONUS = 0.028;
+const NPC_BLADDER_AFTER_VISIT_RATE = 0.055;
+const NPC_BLADDER_AFTER_VISIT_RUNNING_BONUS = 0.012;
+const NPC_LUNCH_TOILET_WINDOW_EARLY = 0.08;
 // Keep one spare seat in active classrooms so displaced students can re-seat cleanly.
 const LESSON_SPARE_SEATS_PER_ROOM = 1;
 const TOTAL_DAY_GAME_MINUTES = schedule.reduce((sum, period) => sum + period.mins, 0);
@@ -726,6 +741,11 @@ const morningQueue = {
   dividerInsetFromFieldLeft: 35,
   studentMinOffsetFromDivider: 2.2,
   teacherOffsetFromDivider: 2.1,
+  laneCount: 6,
+  queuePaddingTop: 3.3,
+  queuePaddingBottom: 3.6,
+  queuePaddingRight: 3.1,
+  rowWobble: 0.42,
 };
 const floorOrder = { upper: 3, middle: 2, ground: 1, lower: 0 };
 const floorSequence = ['lower', 'ground', 'middle', 'upper'];
@@ -915,6 +935,10 @@ function randomInventoryFor(role) {
 
 function clampScore(value, min = 0, max = 100) {
   return Math.max(min, Math.min(max, value));
+}
+
+function lerpValue(a, b, t) {
+  return a + ((b - a) * t);
 }
 
 function traitLevelForEntity(role) {
@@ -2685,6 +2709,11 @@ const game = {
   preferredWeather: 'auto',
   weatherWeek: 1,
   weatherFx: [],
+  sceneFx: [],
+  scenePulseUntil: 0,
+  lastAmbientParticleAt: 0,
+  lastBellParticleAt: 0,
+  lastLunchParticleAt: 0,
   // Player anti-stuck telemetry helps detect wall embedding and auto-rescue Eric.
   playerStuckMs: 0,
   playerLastX: 0,
@@ -2778,10 +2807,21 @@ function buildAppearanceProfile(name, role, traitProfile, profile = {}) {
     black: '#7a4a32',
     yellow: '#e0bf7a',
     lightBrown: '#b98057',
+    deepBrown: '#8d5b3e',
+    olive: '#b28a58',
     green: '#6fbc5f',
     red: '#d76363',
   };
-  const hairPalette = ['#1b1713', '#4a2f1e', '#7a4f2f', '#b56d3f', '#f0d7a5', '#4f2546', '#2e6f95', '#8a5cff', '#ff6fa8', '#c25cff'];
+  const hairPalette = ['#1b1713', '#4a2f1e', '#7a4f2f', '#8f5a39', '#b56d3f', '#d08b54', '#f0d7a5', '#4f2546', '#2e6f95', '#5c80bc', '#8a5cff', '#6fc3df', '#6f8f3d', '#ff6fa8', '#c25cff', '#e94f37'];
+  const shoePalette = ['#0b0d16', '#172033', '#2a1b16', '#2b2d42', '#233445'];
+  const uniformPalette = [
+    { shirt: '#ffffff', tie: '#2b59c3', blazer: '#2f5fbf', trim: '#234a97', skirt: '#1f3f85' },
+    { shirt: '#f7fbff', tie: '#2f7fae', blazer: '#245f86', trim: '#183f61', skirt: '#184d6c' },
+    { shirt: '#fff7fd', tie: '#8e4bbd', blazer: '#6d3a8c', trim: '#4e2964', skirt: '#5a3075' },
+    { shirt: '#fff9f3', tie: '#c36a35', blazer: '#9a4d27', trim: '#6d3517', skirt: '#7e4120' },
+    { shirt: '#f7fff9', tie: '#40916c', blazer: '#2d6a4f', trim: '#1d4b38', skirt: '#23553f' },
+    { shirt: '#fff7fa', tie: '#b84f79', blazer: '#8d3b5a', trim: '#632841', skirt: '#733148' },
+  ];
   const skinToneKey = profile.appearanceOverrides?.skinTone || 'white';
   const skinTone = skinPalette[skinToneKey] || skinPalette.white;
   const eyeHue = (seed * 47 + Math.round(traitProfile.wit * 2.1)) % 360;
@@ -2800,6 +2840,7 @@ function buildAppearanceProfile(name, role, traitProfile, profile = {}) {
   const baseHairStyle = wildHair
     ? 'wild'
     : (sex === 'female' ? femaleHairStylePool[seed % femaleHairStylePool.length] : ['tidy', 'parted', 'fringe'][seed % 3]);
+  const uniformStyle = uniformPalette[(seed + (role === 'hero' ? 1 : role === 'swot' ? 2 : role === 'weird' ? 3 : role === 'bully' ? 4 : 0)) % uniformPalette.length];
   return {
     skinTone,
     hairColor: overrides.hairColor || hairPalette[seed % hairPalette.length],
@@ -2820,13 +2861,24 @@ function buildAppearanceProfile(name, role, traitProfile, profile = {}) {
     torsoShape: overrides.torsoShape || ['rect', 'tapered', 'barrel', 'lean'][seed % 4],
     armWidth: overrides.armWidth || (2 + (armType > 0.35 ? 2 : 0)),
     armLength: overrides.armLength || (7 + (armType < -0.35 ? -1 : armType > 0.45 ? 1 : 0)),
-    legWidth: overrides.legWidth || (4 + (legType > 0.35 ? 1 : 0)),
+    legWidth: overrides.legWidth || (3 + (legType > 0.35 ? 1 : 0) + (bodyType > 0.75 ? 1 : 0)),
     legLength: overrides.legLength || (8 + (legType > 0.35 ? 2 : legType < -0.45 ? -1 : 0)),
+    shoeWidth: overrides.shoeWidth || Math.max(2, Math.min(4, 2 + (bodyType > 0.55 ? 1 : 0) + (legType < -0.45 ? 1 : 0))),
+    shoeColor: overrides.shoeColor || shoePalette[(seed + Math.round(traitProfile.honor)) % shoePalette.length],
     hairLength: overrides.hairLength || (sex === 'female' ? 3 + (seed % 3) : 1 + (seed % 2)),
     hairStyle: overrides.hairStyle || baseHairStyle,
     // Female uniform variant: mix short/long skirts for variety while staying in dress code.
     skirtLength: overrides.skirtLength || (sex === 'female' ? (seed % 2 === 0 ? 'short' : 'long') : 'none'),
     makeupStyle: overrides.makeupStyle || (sex === 'female' && (seed % 3 !== 0) ? (seed % 5 === 0 ? 'bold' : 'light') : 'none'),
+    uniformShirt: overrides.uniformShirt || uniformStyle.shirt,
+    uniformTie: overrides.uniformTie || uniformStyle.tie,
+    uniformBlazer: overrides.uniformBlazer || uniformStyle.blazer,
+    uniformTrim: overrides.uniformTrim || uniformStyle.trim,
+    uniformSkirt: overrides.uniformSkirt || uniformStyle.skirt,
+    strideScale: overrides.strideScale || (0.9 + Math.max(-0.18, Math.min(0.3, ((traitProfile.speed - 50) / 140) + ((seed % 3) - 1) * 0.05))),
+    bounceScale: overrides.bounceScale || (0.92 + Math.max(-0.15, Math.min(0.24, ((traitProfile.mood - 50) / 180) + ((seed % 5) - 2) * 0.03))),
+    armSwingScale: overrides.armSwingScale || (0.92 + Math.max(-0.12, Math.min(0.2, ((traitProfile.aggression - 50) / 190) + ((seed % 4) - 1.5) * 0.03))),
+    idlePhase: overrides.idlePhase || ((seed % 17) / 17) * Math.PI * 2,
     sex,
   };
 }
@@ -2881,7 +2933,8 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     assignedWaste: null,
     // Every NPC now mirrors Eric's stamina + bladder simulation.
     energy: 100,
-    bladder: Math.random() * 8,
+    bladder: Math.random() * 4,
+    dailyToiletVisits: 0,
     hygiene: 100,
     running: false,
     isSeated: false,
@@ -3537,15 +3590,34 @@ function morningQueueIndex(entity) {
 
 function gateQueuePosition(entity) {
   const field = roomByName('P.E. Field');
+  const gateRoom = roomByName('School Gates');
   const dividerX = field.x + morningQueue.dividerInsetFromFieldLeft;
   const queueIndex = morningQueueIndex(entity);
-  // Start-of-day student columns (area 2 from the user's marked screenshot).
-  const lane = queueIndex % 5;
-  const row = Math.floor(queueIndex / 5) % 14;
+  const studentCount = Math.max(1, game.entities.filter((candidate) => isStudentCharacter(candidate)).length);
+  const laneCount = Math.max(4, Math.min(morningQueue.laneCount || 6, studentCount));
+  const rowCount = Math.max(1, Math.ceil(studentCount / laneCount));
+  const lane = queueIndex % laneCount;
+  const row = Math.floor(queueIndex / laneCount);
+  const serpentineLane = row % 2 === 1 ? (laneCount - 1 - lane) : lane;
+  const queueSeed = stableNameHash(`${entity?.name || entity?.seatIndex || queueIndex}:morning-queue`);
+  const jitterX = ((queueSeed % 5) - 2) * 0.16;
+  const jitterY = (((Math.floor(queueSeed / 7)) % 5) - 2) * 0.16;
+  const queueLeft = dividerX + morningQueue.studentMinOffsetFromDivider;
+  const queueRight = Math.max(
+    queueLeft + 4.4,
+    (gateRoom?.x || (field.x + field.w)) - (morningQueue.queuePaddingRight || 3.1),
+  );
+  const queueTop = field.y + (morningQueue.queuePaddingTop || 3.3);
+  const queueBottom = field.y + field.h - (morningQueue.queuePaddingBottom || 3.6);
+  const xSpacing = laneCount > 1 ? (queueRight - queueLeft) / (laneCount - 1) : 0;
+  const ySpacing = rowCount > 1 ? (queueBottom - queueTop) / (rowCount - 1) : 0;
+  const rowWobble = row % 2 === 1 ? -(morningQueue.rowWobble || 0.42) : (morningQueue.rowWobble || 0.42);
+  const x = queueLeft + (serpentineLane * xSpacing) + rowWobble + jitterX;
+  const y = queueTop + (row * ySpacing) + jitterY;
   return {
-    // Keep every student lane to the right of the black divider line.
-    x: Math.max(dividerX + morningQueue.studentMinOffsetFromDivider, field.x + field.w - 18 + lane * 2.2),
-    y: field.y + 3 + row * 1.55,
+    // Keep every student lane to the right of the divider and out of the gate-strip overlap.
+    x: Math.max(queueLeft, Math.min(queueRight, x)),
+    y: Math.max(queueTop, Math.min(queueBottom, y)),
   };
 }
 
@@ -3554,9 +3626,30 @@ function teacherGateLinePosition(teacherIndex) {
   const dividerX = field.x + morningQueue.dividerInsetFromFieldLeft;
   // Single-file teacher line stands just left of the divider line.
   return {
-    x: dividerX - morningQueue.teacherOffsetFromDivider,
+    x: dividerX - morningQueue.teacherOffsetFromDivider - ((teacherIndex % 2) * 0.4),
     y: field.y + 4 + teacherIndex * 2.02,
   };
+}
+
+function nearbyStudentCrowdCount(entity, radius = 3.7) {
+  if (!entity) return 0;
+  return game.entities.filter((candidate) => (
+    candidate
+    && candidate !== entity
+    && isStudentCharacter(candidate)
+    && candidate.knockedUntil < performance.now()
+    && distance(candidate, entity) < radius
+  )).length;
+}
+
+function isWithinSchoolGateChute(point, paddingX = 2.8, paddingY = 1.4) {
+  if (!point) return false;
+  const gateRoom = roomByName('School Gates');
+  const minX = (gateRoom?.x || schoolExit.x) - paddingX;
+  const maxX = schoolExit.x + 2.8;
+  const minY = schoolExit.yMin - paddingY;
+  const maxY = schoolExit.yMax + paddingY;
+  return point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY;
 }
 
 function isAssemblyPeriod(period = schedule[game.periodIndex]) {
@@ -4536,6 +4629,8 @@ function resetToSchoolMorning() {
   // New morning: everyone starts outside school gates before being led inside.
   schedule = buildScheduleForDay(game.dayCount);
   game.timeScale = (schedule.reduce((sum, period) => sum + period.mins, 0) / TARGET_DAY_REAL_SECONDS) * game.speedMultiplier;
+  const morningArrivalWindow = Math.max(0.01, schedule[0].mins * 0.55);
+  const prestageThresholdMins = Math.max(1.6, schedule[0].mins * 0.32);
   game.timeMinutes = SCHOOL_DAY_START_MINUTES;
   game.periodElapsed = 0;
   game.registrationTaken = false;
@@ -4574,6 +4669,11 @@ function resetToSchoolMorning() {
   game.despawnedStudentsToday = 0;
   game.nightCutscenePlayedToday = false;
   game.llm.backlog = [];
+  game.sceneFx = [];
+  game.scenePulseUntil = 0;
+  game.lastAmbientParticleAt = 0;
+  game.lastBellParticleAt = 0;
+  game.lastLunchParticleAt = 0;
 
   if (game.dayCount > 1 && game.dayCount % TOILET_BLOCK_INTERVAL_DAYS === 0) {
     game.toiletsBlocked = true;
@@ -4595,12 +4695,24 @@ function resetToSchoolMorning() {
       entity.arrivedForDay = true;
       entity.arrivalJoinMins = 0;
     } else if (entity.role === 'teacher') {
-      // Teachers now arrive in random order from the school entrance, then head to registration rooms.
-      entity.x = schoolExit.x + 2.8 + (game.rng() * 1.2);
-      entity.y = schoolExit.yMin + 1.2 + (game.rng() * (schoolExit.yMax - schoolExit.yMin - 2.4));
-      entity.arrivedForDay = false;
-      entity.arrivalJoinMins = game.rng() * Math.max(0.01, schedule[0].mins * 0.55);
-      entity.target = null;
+      const teachers = teachersInRoster().sort((a, b) => a.seatIndex - b.seatIndex);
+      const teacherIndex = Math.max(0, teachers.findIndex((candidate) => candidate === entity));
+      const arrivalJoinMins = game.rng() * morningArrivalWindow;
+      if (arrivalJoinMins <= prestageThresholdMins) {
+        const teacherLine = teacherGateLinePosition(teacherIndex);
+        entity.x = teacherLine.x;
+        entity.y = teacherLine.y;
+        entity.arrivedForDay = true;
+        entity.arrivalJoinMins = 0;
+        entity.target = { ...teacherLine };
+      } else {
+        // Later arrivals still enter from the gate, so the field keeps some life.
+        entity.x = schoolExit.x + 2.8 + (game.rng() * 1.2);
+        entity.y = schoolExit.yMin + 1.2 + (game.rng() * (schoolExit.yMax - schoolExit.yMin - 2.4));
+        entity.arrivedForDay = false;
+        entity.arrivalJoinMins = arrivalJoinMins;
+        entity.target = null;
+      }
     } else if (entity.role === 'janitor') {
       const room = roomCenter(JANITOR_IDLE_ROOM);
       entity.x = room.x;
@@ -4616,15 +4728,26 @@ function resetToSchoolMorning() {
       entity.arrivalJoinMins = Infinity;
       entity.target = { ...bay };
     } else {
-      // Students now also enter through the gate and then walk to area-2 queue slots.
-      entity.x = schoolExit.x + 2.8 + (game.rng() * 1.2);
-      entity.y = schoolExit.yMin + 1.2 + (game.rng() * (schoolExit.yMax - schoolExit.yMin - 2.4));
-      entity.arrivedForDay = false;
-      entity.arrivalJoinMins = game.rng() * Math.max(0.01, schedule[0].mins * 0.55);
-      entity.target = null;
+      const arrivalJoinMins = game.rng() * morningArrivalWindow;
+      if (arrivalJoinMins <= prestageThresholdMins) {
+        const queueSpot = gateQueuePosition(entity);
+        entity.x = queueSpot.x;
+        entity.y = queueSpot.y;
+        entity.arrivedForDay = true;
+        entity.arrivalJoinMins = 0;
+        entity.target = { ...queueSpot };
+      } else {
+        // Remaining students trickle in from the gate so mornings still feel alive.
+        entity.x = schoolExit.x + 2.8 + (game.rng() * 1.2);
+        entity.y = schoolExit.yMin + 1.2 + (game.rng() * (schoolExit.yMax - schoolExit.yMin - 2.4));
+        entity.arrivedForDay = false;
+        entity.arrivalJoinMins = arrivalJoinMins;
+        entity.target = null;
+      }
     }
     entity.vx = 0;
     entity.vy = 0;
+    entity.dailyToiletVisits = 0;
     entity.carryingTrash = false;
     entity.hygiene = 100;
     entity.litterWarnUntil = 0;
@@ -5213,7 +5336,7 @@ function drawRoundedBubble(x, y, lines, style) {
   const {
     paddingX, paddingY, lineHeight, radius,
     fillColor, strokeColor, shadowColor, shadowBlur,
-    textColor, font, tailOffsetX = 0,
+    textColor, font, tailOffsetX = 0, anchorX = x,
     bubblyTail = false,
   } = style;
 
@@ -5226,7 +5349,7 @@ function drawRoundedBubble(x, y, lines, style) {
   const left = Math.round(Math.max(4, Math.min(canvas.width - bubbleWidth - 4, unclampedLeft)));
   const top = Math.round(Math.max(4, Math.min(canvas.height - bubbleHeight - 16, unclampedTop)));
   // Tail should point at the speaker head, with optional tiny nudge per bubble type.
-  const rawTailX = Math.round(x + tailOffsetX);
+  const rawTailX = Math.round(anchorX + tailOffsetX);
   const tailAnchorX = Math.max(left + 8, Math.min(left + bubbleWidth - 8, rawTailX));
 
   ctx.save();
@@ -5274,6 +5397,30 @@ function drawRoundedBubble(x, y, lines, style) {
   lines.forEach((line, index) => {
     ctx.fillText(line, left + paddingX, top + paddingY + ((index + 1) * lineHeight) - 2);
   });
+}
+
+function bubbleStackOffset(entity, nowBubble) {
+  if (!entity) return { x: 0, y: 0 };
+  const activeNeighbors = game.entities
+    .filter((candidate) => (
+      candidate
+      && candidate !== entity
+      && hasArrivedForCurrentPeriod(candidate)
+      && distance(candidate, entity) < 5.1
+      && (
+        (candidate.speech && candidate.speech.until > nowBubble)
+        || (candidate.thought && candidate.thought.until > nowBubble)
+      )
+    ));
+  if (!activeNeighbors.length) return { x: 0, y: 0 };
+  const ordered = [entity, ...activeNeighbors]
+    .sort((a, b) => a.y - b.y || a.x - b.x || a.seatIndex - b.seatIndex);
+  const rank = Math.max(0, ordered.findIndex((candidate) => candidate === entity));
+  const layer = Math.floor(rank / 2);
+  const lane = rank % 2;
+  const lateral = rank === 0 ? 0 : ((lane === 0 ? 1 : -1) * (10 + (Math.min(layer, 2) * 7)));
+  const vertical = (layer * 15) + (ordered.length >= 4 ? 6 : 0);
+  return { x: lateral, y: vertical };
 }
 
 function renderEventFeed() {
@@ -5853,6 +6000,8 @@ function setPeriod(index) {
   }
 
   game.bellRingingUntil = performance.now() + 3000;
+  game.scenePulseUntil = performance.now() + 1800;
+  spawnBellBurst();
   announce(`🔔 Bell! ${current.period} in ${current.room}`, { feedType: 'world' });
   if (orderlyAssemblyDismissal) {
     announce('🚶 Assembly dismissed in order: students first, then teachers.', { force: true, feedType: 'world' });
@@ -7105,13 +7254,9 @@ function chooseTarget(entity, currentPeriod) {
     return roomCenter('Kitchen');
   }
 
-  // High bladder urgency overrides normal timetable targets.
-  if (!game.toiletsBlocked && entity.bladder >= 80) {
-    return roomCenter('Toilets');
-  }
-
-  // Teachers occasionally step out to the toilet and then return to class.
-  if (!game.toiletsBlocked && entity.role === 'teacher' && entity.bladder >= 72) {
+  // Toilet trips now cluster around lunch/break windows, with only true emergencies
+  // breaking earlier from lessons.
+  if (shouldNpcHeadToToilets(entity, currentPeriod)) {
     return roomCenter('Toilets');
   }
 
@@ -7233,13 +7378,56 @@ function updateAttendanceHud(currentPeriod = schedule[game.periodIndex]) {
   attendanceEl.title = `Present ${metrics.presentCount}/${metrics.total}, seated ${metrics.seatedCount}/${metrics.total}. Target attendance: ${TARGET_ATTENDANCE_PERCENT}%+.`;
 }
 
+function currentScheduleTotalMinutes() {
+  return schedule.reduce((sum, period) => sum + period.mins, 0);
+}
+
+function scheduleProgressBeforePeriod(periodName = 'Lunch Break') {
+  const totalMins = currentScheduleTotalMinutes();
+  if (!totalMins) return 0.5;
+  const periodIndex = schedule.findIndex((period) => period.period === periodName);
+  if (periodIndex < 0) return 0.5;
+  const elapsedBefore = schedule
+    .slice(0, periodIndex)
+    .reduce((sum, period) => sum + period.mins, 0);
+  return Math.max(0, Math.min(1, elapsedBefore / totalMins));
+}
+
 function schoolDayProgress() {
   // Convert the current timetable position into a stable 0..1 value for day-based systems.
   const elapsedMinsBeforePeriod = schedule
     .slice(0, game.periodIndex)
     .reduce((sum, period) => sum + period.mins, 0);
-  const elapsedMins = Math.min(TOTAL_DAY_GAME_MINUTES, elapsedMinsBeforePeriod + game.periodElapsed);
-  return Math.max(0, Math.min(1, elapsedMins / TOTAL_DAY_GAME_MINUTES));
+  const totalMins = currentScheduleTotalMinutes();
+  const elapsedMins = Math.min(totalMins, elapsedMinsBeforePeriod + game.periodElapsed);
+  return totalMins > 0 ? Math.max(0, Math.min(1, elapsedMins / totalMins)) : 0;
+}
+
+function npcBladderTraitModifier(entity) {
+  const bladderSize = clampScore(entity?.traits?.bladderSize ?? 50, 0, 100);
+  return clampScore((50 - bladderSize) / 900, -0.04, 0.04);
+}
+
+function npcToiletUrgencyThreshold(entity, currentPeriod = schedule[game.periodIndex]) {
+  const visits = entity?.dailyToiletVisits || 0;
+  const bladderSize = clampScore(entity?.traits?.bladderSize ?? 50, 0, 100);
+  const sizeOffset = clampScore((50 - bladderSize) / 7, -5, 5);
+  const dayProgress = schoolDayProgress();
+  const lunchProgress = scheduleProgressBeforePeriod('Lunch Break');
+  const earliestPreferredVisit = Math.max(0.14, lunchProgress - 0.16);
+  const lunchWindow = Math.max(0.18, lunchProgress - NPC_LUNCH_TOILET_WINDOW_EARLY);
+
+  if (visits >= 1) return 96 + Math.max(0, sizeOffset * 0.2);
+  if (dayProgress < earliestPreferredVisit) return 92 + sizeOffset;
+  if (currentPeriod.period === 'Lunch Break') return 54 + sizeOffset;
+  if (currentPeriod.mode === 'break' && dayProgress >= lunchWindow) return 58 + sizeOffset;
+  if (dayProgress >= lunchProgress + 0.14) return 68 + sizeOffset;
+  return 82 + sizeOffset;
+}
+
+function shouldNpcHeadToToilets(entity, currentPeriod = schedule[game.periodIndex]) {
+  if (!entity || game.toiletsBlocked) return false;
+  return entity.bladder >= npcToiletUrgencyThreshold(entity, currentPeriod);
 }
 
 function updateNpcVitals(entity, dt, isRunning) {
@@ -7253,11 +7441,17 @@ function updateNpcVitals(entity, dt, isRunning) {
   if (entity.role === 'janitor' || entity.role === 'dinnerLady') {
     entity.energy = 100;
   }
-  // NPC bladder rises over time, slightly quicker while running.
-  entity.bladder = Math.min(100, entity.bladder + deltaMins * (0.34 + (isRunning ? 0.2 : 0)));
+  // NPC bladder should usually build toward one lunch-time toilet trip, then stay
+  // manageable for the rest of the day unless a small-bladder pupil gets unlucky.
+  const postVisit = (entity.dailyToiletVisits || 0) > 0;
+  const baseBladderRate = postVisit ? NPC_BLADDER_AFTER_VISIT_RATE : NPC_BLADDER_FIRST_VISIT_RATE;
+  const runningBladderBonus = postVisit ? NPC_BLADDER_AFTER_VISIT_RUNNING_BONUS : NPC_BLADDER_FIRST_VISIT_RUNNING_BONUS;
+  const bladderRate = Math.max(0.035, baseBladderRate + npcBladderTraitModifier(entity) + (isRunning ? runningBladderBonus : 0));
+  entity.bladder = Math.min(100, entity.bladder + deltaMins * bladderRate);
 
   if (!game.toiletsBlocked && entityRoom(entity) === 'Toilets' && entity.bladder >= 15) {
     entity.bladder = 0;
+    entity.dailyToiletVisits = (entity.dailyToiletVisits || 0) + 1;
     game.toiletDirt = Math.min(TOILET_MAX_DIRT, game.toiletDirt + TOILET_DIRT_PER_USE * 0.55);
   }
 
@@ -7530,6 +7724,16 @@ function updateAI(dt) {
 
 
     if (isLunchtimePeriod(current) && isStudent) {
+      const urgentToiletBreak = shouldNpcHeadToToilets(entity, current);
+      if (urgentToiletBreak && entity.lunchState !== 'eating' && entity.lunchState !== 'done') {
+        if (entity.lunchState === 'queue' || entity.lunchState === 'beingServed' || entity.lunchState === 'toPlate') {
+          resetLunchState(entity);
+        }
+        entity.isSeated = false;
+        entity.seatedRoom = null;
+        entity.target = roomCenter('Toilets');
+        continue;
+      }
       const layout = diningHallLayout();
       if (layout) {
         // Lunch routine: collect plate, queue for serving, then sit at a long table to eat.
@@ -7846,11 +8050,21 @@ function updateAI(dt) {
       : (inLesson ? (entity.lessonRoom || current.room) : current.room);
     const inAssignedClassroom = inLesson && isStudent && entityRoom(entity) === expectedRoomNow;
     const walkingToClass = inLesson && isStudent && !inAssignedClassroom;
-    if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home' || walkingToClass) && isStudent && game.rng() < 0.0045) {
+    const nearbyStudentCrowd = isStudent ? nearbyStudentCrowdCount(entity, 3.8) : 0;
+    const transitionChatterBaseChance = isStartDayPeriod(current)
+      ? 0.0016
+      : (walkingToClass ? 0.0033 : 0.0045);
+    const transitionCrowdScale = nearbyStudentCrowd >= 6 ? 0.28 : nearbyStudentCrowd >= 4 ? 0.52 : nearbyStudentCrowd >= 2 ? 0.78 : 1;
+    if ((current.mode === 'transition' || current.mode === 'break' || current.mode === 'home' || walkingToClass) && isStudent && game.rng() < (transitionChatterBaseChance * transitionCrowdScale)) {
       ensureDialogueSetup(entity);
       const hallwayChatter = entity.dialogue.hallwayChatter || ['😆 Wait up, I am coming too!'];
-      const line = pickFreshLine(entity, hallwayChatter, 'speech');
-      say(entity, line || hallwayChatter[0], { durationMs: 3600 });
+      if (isStartDayPeriod(current) && nearbyStudentCrowd >= 4 && game.rng() < 0.55) {
+        const hallwayThoughts = entity.dialogue.thoughts || ['🙂 Best keep the queue moving.'];
+        think(entity, pickFreshLine(entity, hallwayThoughts, 'thought') || hallwayThoughts[0], 2600);
+      } else {
+        const line = pickFreshLine(entity, hallwayChatter, 'speech');
+        say(entity, line || hallwayChatter[0], { durationMs: 3600 });
+      }
     }
 
     // If a student wanders into the wrong classroom during lesson, they make an excuse and leave.
@@ -8180,7 +8394,9 @@ function updateAI(dt) {
     // Lightweight separation avoids visual clumping, but we skip it for seated pupils
     // so classroom rows stay stable and students don't drift toward the blackboard.
     // Doorway/stair choke points allow temporary stacking so flows do not deadlock.
-    const crowdChokePoint = isNearDoorway(entity, 2.4) || isNearDoorway(routedTarget, 2.4) || nearStair;
+    const morningGateChokePoint = isStartDayPeriod(current)
+      && (isWithinSchoolGateChute(entity) || isWithinSchoolGateChute(routedTarget));
+    const crowdChokePoint = isNearDoorway(entity, 2.4) || isNearDoorway(routedTarget, 2.4) || nearStair || morningGateChokePoint;
     const canPhaseThroughCrowd = entity.phaseThroughUntil > performance.now() || crowdChokePoint;
     if (!(inLesson && studentInCurrentClass) && !canPhaseThroughCrowd) {
       for (const other of game.entities) {
@@ -8687,20 +8903,287 @@ function fillDitherRect(x, y, w, h, colorA, colorB, step = 4) {
   }
 }
 
+function roomVisualStyle(room) {
+  if (!room) {
+    return {
+      floorA: '#cbe9ce',
+      floorB: '#b6dcb9',
+      stripe: '#a7c7a6',
+      accentDot: '#75c96b',
+      wall: '#6e4f3a',
+      brick: '#7b5a43',
+      windowA: '#9ad8ff',
+      windowB: '#72b6df',
+      label: PALETTE.plum,
+      labelShadow: hexToRgba(PALETTE.ink, 0.3),
+      glowTop: hexToRgba('#fff4ce', 0.08),
+      shaft: hexToRgba('#fff8e1', 0.12),
+      outdoorLight: hexToRgba('#ffe7a6', 0.12),
+    };
+  }
+
+  if (room.type === 'corridor') {
+    if (room.floor === 'upper') {
+      return {
+        floorA: '#7a62c7',
+        floorB: '#674fb4',
+        stripe: '#b8a8f4',
+        accentDot: '#d8d1ff',
+        wall: '#4e3f88',
+        brick: '#68539d',
+        windowA: '#d5d0ff',
+        windowB: '#aa9de7',
+        label: '#f7f1ff',
+        labelShadow: hexToRgba('#2f2459', 0.42),
+        glowTop: hexToRgba('#d4c9ff', 0.12),
+        shaft: hexToRgba('#f4edff', 0.11),
+        outdoorLight: hexToRgba('#ccbfff', 0.1),
+      };
+    }
+    if (room.floor === 'middle') {
+      return {
+        floorA: '#6f95c7',
+        floorB: '#5b80b1',
+        stripe: '#a8d0ff',
+        accentDot: '#d8ebff',
+        wall: '#426082',
+        brick: '#58728f',
+        windowA: '#ccecff',
+        windowB: '#8ec9f3',
+        label: '#eff8ff',
+        labelShadow: hexToRgba('#26415d', 0.38),
+        glowTop: hexToRgba('#b8e0ff', 0.12),
+        shaft: hexToRgba('#eef9ff', 0.12),
+        outdoorLight: hexToRgba('#d8efff', 0.08),
+      };
+    }
+    if (room.floor === 'ground') {
+      return {
+        floorA: '#67aa71',
+        floorB: '#4f905a',
+        stripe: '#b7efc1',
+        accentDot: '#dcf8d8',
+        wall: '#3e6d47',
+        brick: '#5a855f',
+        windowA: '#d8ffe5',
+        windowB: '#9fd6af',
+        label: '#f2fff4',
+        labelShadow: hexToRgba('#244428', 0.36),
+        glowTop: hexToRgba('#eaffd7', 0.1),
+        shaft: hexToRgba('#f7ffe9', 0.11),
+        outdoorLight: hexToRgba('#dfffaa', 0.08),
+      };
+    }
+    return {
+      floorA: '#9f8f64',
+      floorB: '#8a7a55',
+      stripe: '#e6d7a6',
+      accentDot: '#f2e6bb',
+      wall: '#6d5c3f',
+      brick: '#846f4d',
+      windowA: '#f6efd2',
+      windowB: '#d7c790',
+      label: '#fff7df',
+      labelShadow: hexToRgba('#41361f', 0.36),
+      glowTop: hexToRgba('#ffeebf', 0.1),
+      shaft: hexToRgba('#fff8df', 0.1),
+      outdoorLight: hexToRgba('#ffe39a', 0.08),
+    };
+  }
+
+  if (room.type === 'outdoor') {
+    if (room.name === 'School Gates') {
+      return {
+        floorA: '#4d8d6f',
+        floorB: '#3d7059',
+        stripe: '#d9e3d8',
+        accentDot: '#b1d8bf',
+        wall: '#385847',
+        brick: '#5d7a67',
+        windowA: '#dbe8dd',
+        windowB: '#b2c8b7',
+        label: '#f4fff6',
+        labelShadow: hexToRgba('#203a2a', 0.38),
+        glowTop: hexToRgba('#cde9d0', 0.06),
+        shaft: hexToRgba('#f3ffe9', 0.08),
+        outdoorLight: hexToRgba('#fff0b0', 0.16),
+      };
+    }
+    if (room.name === 'Bike Sheds') {
+      return {
+        floorA: '#5f9d67',
+        floorB: '#4c8656',
+        stripe: '#9cc6aa',
+        accentDot: '#cfe4d4',
+        wall: '#35593e',
+        brick: '#5b745f',
+        windowA: '#d7f0dc',
+        windowB: '#acd5ba',
+        label: '#f1fff3',
+        labelShadow: hexToRgba('#213825', 0.36),
+        glowTop: hexToRgba('#dff8ce', 0.07),
+        shaft: hexToRgba('#f5ffe8', 0.09),
+        outdoorLight: hexToRgba('#fff2b8', 0.14),
+      };
+    }
+    return {
+      floorA: '#4caf50',
+      floorB: '#2e7d32',
+      stripe: '#92d67e',
+      accentDot: '#75c96b',
+      wall: '#2c5b2f',
+      brick: '#477a4f',
+      windowA: '#d6ffd8',
+      windowB: '#9ed39f',
+      label: PALETTE.cream,
+      labelShadow: hexToRgba('#1f3c22', 0.34),
+      glowTop: hexToRgba('#dff7b9', 0.08),
+      shaft: hexToRgba('#fcffd8', 0.1),
+      outdoorLight: hexToRgba('#ffe99e', 0.18),
+    };
+  }
+
+  const defaultIndoor = {
+    floorA: room.floor === 'upper' ? '#cebdf5' : room.floor === 'middle' ? '#c5d9f3' : room.floor === 'ground' ? '#d3edd5' : '#e1d2b1',
+    floorB: room.floor === 'upper' ? '#baa4eb' : room.floor === 'middle' ? '#adc7e4' : room.floor === 'ground' ? '#bddfbe' : '#ccb994',
+    stripe: room.floor === 'upper' ? '#e9ddff' : room.floor === 'middle' ? '#d6ebff' : room.floor === 'ground' ? '#e7f6d7' : '#f5e7c2',
+    accentDot: room.floor === 'upper' ? '#e2d7ff' : room.floor === 'middle' ? '#d9eeff' : room.floor === 'ground' ? '#d8f0d4' : '#f4e0aa',
+    wall: '#6e4f3a',
+    brick: '#7b5a43',
+    windowA: '#9ad8ff',
+    windowB: '#72b6df',
+    label: PALETTE.plum,
+    labelShadow: hexToRgba(PALETTE.ink, 0.3),
+    glowTop: hexToRgba('#fff4ce', 0.08),
+    shaft: hexToRgba('#fff8e1', 0.12),
+    outdoorLight: hexToRgba('#ffe7a6', 0.12),
+  };
+
+  if (['Science Lab', 'Physics Lab', 'Chem Prep', 'Medical Bay', 'Computer Room'].includes(room.name)) {
+    return {
+      ...defaultIndoor,
+      floorA: '#d5f0f7',
+      floorB: '#bfe2eb',
+      stripe: '#8cc9d7',
+      accentDot: '#6ec6d9',
+      wall: '#55737b',
+      brick: '#6d8b92',
+      windowA: '#d9f6ff',
+      windowB: '#97daff',
+      label: '#14314a',
+      labelShadow: hexToRgba('#0f2334', 0.28),
+      glowTop: hexToRgba('#bcefff', 0.16),
+      shaft: hexToRgba('#ecfbff', 0.16),
+      outdoorLight: hexToRgba('#ccecff', 0.1),
+    };
+  }
+
+  if (['English', 'History', 'Geography', 'Debate Room', 'Reception', 'Storage'].includes(room.name)) {
+    return {
+      ...defaultIndoor,
+      floorA: '#f0dfc9',
+      floorB: '#e1ccb2',
+      stripe: '#c99f75',
+      accentDot: '#efc58c',
+      wall: '#8a5a41',
+      brick: '#9a6850',
+      windowA: '#ffe9d1',
+      windowB: '#f4bf8f',
+      label: '#4d2f1b',
+      labelShadow: hexToRgba('#fff4e2', 0.18),
+      glowTop: hexToRgba('#ffd9a8', 0.14),
+      shaft: hexToRgba('#fff1d2', 0.14),
+      outdoorLight: hexToRgba('#ffe6b3', 0.12),
+    };
+  }
+
+  if (['Art Room', 'Design Studio', 'Music Room', 'Boiler Room'].includes(room.name)) {
+    return {
+      ...defaultIndoor,
+      floorA: '#f6d6d1',
+      floorB: '#efbeb6',
+      stripe: '#5cb6a9',
+      accentDot: '#ffd166',
+      wall: '#7e4c5d',
+      brick: '#9a6672',
+      windowA: '#ffe0d8',
+      windowB: '#f6a8a0',
+      label: '#3d2243',
+      labelShadow: hexToRgba('#fff0f6', 0.18),
+      glowTop: hexToRgba('#ffd9cf', 0.16),
+      shaft: hexToRgba('#fff0df', 0.14),
+      outdoorLight: hexToRgba('#ffd7b0', 0.1),
+    };
+  }
+
+  if (['Staff Room', 'Headmaster Office', 'Upper Common', 'Maintenance'].includes(room.name)) {
+    return {
+      ...defaultIndoor,
+      floorA: '#d7d6f5',
+      floorB: '#c2c0e9',
+      stripe: '#9b86d6',
+      accentDot: '#e6d7ff',
+      wall: '#5d496e',
+      brick: '#775e85',
+      windowA: '#efe8ff',
+      windowB: '#c3b4f0',
+      label: '#312042',
+      labelShadow: hexToRgba('#faf1ff', 0.18),
+      glowTop: hexToRgba('#e1d7ff', 0.16),
+      shaft: hexToRgba('#f7f2ff', 0.14),
+      outdoorLight: hexToRgba('#eadfff', 0.08),
+    };
+  }
+
+  if (['Dining Hall', 'Kitchen'].includes(room.name)) {
+    return {
+      ...defaultIndoor,
+      floorA: '#f6e3b9',
+      floorB: '#ecd39c',
+      stripe: '#d98a54',
+      accentDot: '#ffd880',
+      wall: '#87603c',
+      brick: '#9c7349',
+      windowA: '#fff1cc',
+      windowB: '#f3c87d',
+      label: '#5b3400',
+      labelShadow: hexToRgba('#fff7df', 0.18),
+      glowTop: hexToRgba('#ffd98a', 0.18),
+      shaft: hexToRgba('#fff4d0', 0.16),
+      outdoorLight: hexToRgba('#ffe29a', 0.14),
+    };
+  }
+
+  if (['Assembly Hall', 'Gym', 'Janitor Room', 'Toilets'].includes(room.name)) {
+    return {
+      ...defaultIndoor,
+      floorA: '#d9efe4',
+      floorB: '#c2e2d2',
+      stripe: '#6aa39b',
+      accentDot: '#bde9df',
+      wall: '#4f6f67',
+      brick: '#66857c',
+      windowA: '#e3fff8',
+      windowB: '#9edfcf',
+      label: '#20423c',
+      labelShadow: hexToRgba('#eefefa', 0.16),
+      glowTop: hexToRgba('#cef9f0', 0.14),
+      shaft: hexToRgba('#f0fff9', 0.14),
+      outdoorLight: hexToRgba('#e1fff6', 0.1),
+    };
+  }
+
+  return defaultIndoor;
+}
+
 // Render inner textures for floors/walls so the school reads as built spaces.
 function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
-  const floorTint = room.floor === 'upper'
-    ? { a: '#7a62c7', b: '#674fb4' }
-    : room.floor === 'middle'
-      ? { a: '#6f95c7', b: '#5b80b1' }
-      : room.floor === 'ground'
-        ? { a: '#67aa71', b: '#4f905a' }
-        : { a: '#9f8f64', b: '#8a7a55' };
+  const style = roomVisualStyle(room);
 
   if (room.type === 'corridor') {
     // Corridor tile stripes to suggest worn linoleum with floor-level color coding.
-    fillDitherRect(drawX, drawY, drawW, drawH, floorTint.a, floorTint.b, 3);
-    ctx.strokeStyle = '#7ea5d8';
+    fillDitherRect(drawX, drawY, drawW, drawH, style.floorA, style.floorB, 3);
+    ctx.strokeStyle = style.stripe;
     for (let x = drawX + 8; x < drawX + drawW; x += 16) {
       ctx.beginPath();
       ctx.moveTo(x, drawY + 2);
@@ -8709,8 +9192,8 @@ function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
     }
   } else if (room.type === 'outdoor') {
     // Grass stipple with slightly brighter specks.
-    fillDitherRect(drawX, drawY, drawW, drawH, PALETTE.grass, PALETTE.moss, 3);
-    ctx.fillStyle = '#75c96b';
+    fillDitherRect(drawX, drawY, drawW, drawH, style.floorA, style.floorB, 3);
+    ctx.fillStyle = style.accentDot;
     for (let y = drawY + 2; y < drawY + drawH; y += 10) {
       for (let x = drawX + 2; x < drawX + drawW; x += 14) {
         ctx.fillRect(x, y, 2, 2);
@@ -8718,10 +9201,8 @@ function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
     }
   } else {
     // Classroom/hall checker flooring with per-floor tint for orientation.
-    const baseA = room.floor === 'upper' ? '#c8b7f4' : room.floor === 'middle' ? '#bcd2f1' : room.floor === 'ground' ? '#cbe9ce' : '#dfd2b0';
-    const baseB = room.floor === 'upper' ? '#b59ee9' : room.floor === 'middle' ? '#a9c1e4' : room.floor === 'ground' ? '#b6dcb9' : '#c7ba98';
-    fillDitherRect(drawX, drawY, drawW, drawH, baseA, baseB, 4);
-    ctx.strokeStyle = '#c9b38e';
+    fillDitherRect(drawX, drawY, drawW, drawH, style.floorA, style.floorB, 4);
+    ctx.strokeStyle = style.stripe;
     for (let y = drawY + 8; y < drawY + drawH; y += 16) {
       ctx.beginPath();
       ctx.moveTo(drawX + 2, y);
@@ -8731,10 +9212,10 @@ function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
   }
 }
 
-  // Draw thick walls around each room; these give the campus stronger structure.
+// Draw thick walls around each room; these give the campus stronger structure.
 function drawRoomWalls(drawX, drawY, drawW, drawH, room) {
-  const wallColor = room.type === 'outdoor' ? '#2c5b2f' : '#6e4f3a';
-  ctx.fillStyle = wallColor;
+  const style = roomVisualStyle(room);
+  ctx.fillStyle = style.wall;
   ctx.fillRect(drawX - 2, drawY - 2, drawW + 4, 2);
   ctx.fillRect(drawX - 2, drawY + drawH, drawW + 4, 2);
   ctx.fillRect(drawX - 2, drawY, 2, drawH);
@@ -8742,23 +9223,278 @@ function drawRoomWalls(drawX, drawY, drawW, drawH, room) {
 
   // 8-bit style pixel windows add visual depth to the larger school façades.
   if (room.type !== 'outdoor' && room.type !== 'corridor') {
-    ctx.fillStyle = '#9ad8ff';
+    ctx.fillStyle = style.windowA;
     for (let wx = drawX + 4; wx < drawX + drawW - 6; wx += 14) {
       ctx.fillRect(wx, drawY + 2, 6, 4);
-      ctx.fillStyle = '#72b6df';
+      ctx.fillStyle = style.windowB;
       ctx.fillRect(wx + 1, drawY + 3, 2, 2);
-      ctx.fillStyle = '#9ad8ff';
+      ctx.fillStyle = style.windowA;
     }
   }
 }
 
-function drawBrickTexture(drawX, drawY, drawW, drawH) {
-  ctx.fillStyle = '#7b5a43';
+function drawBrickTexture(drawX, drawY, drawW, drawH, brickColor = '#7b5a43') {
+  ctx.fillStyle = brickColor;
   for (let by = drawY; by < drawY + drawH; by += 5) {
     const offset = ((by / 5) % 2) * 4;
     for (let bx = drawX + offset; bx < drawX + drawW; bx += 8) {
       ctx.fillRect(bx, by, 6, 1);
     }
+  }
+}
+
+function roomIntersectsCamera(room) {
+  if (!room) return false;
+  return room.x + room.w >= CAMERA.x
+    && room.x <= CAMERA.x + CAMERA.w
+    && room.y + room.h >= CAMERA.y
+    && room.y <= CAMERA.y + CAMERA.h;
+}
+
+function pushSceneParticle(kind, x, y, options = {}) {
+  game.sceneFx.push({
+    kind,
+    x,
+    y,
+    vx: options.vx || 0,
+    vy: options.vy || 0,
+    life: options.life || 1600,
+    maxLife: options.life || 1600,
+    size: options.size || 1,
+    color: options.color || '#ffffff',
+    sway: options.sway || 0,
+    spin: options.spin || 0,
+    phase: options.phase || (game.rng() * Math.PI * 2),
+  });
+  if (game.sceneFx.length > 220) {
+    game.sceneFx.splice(0, game.sceneFx.length - 220);
+  }
+}
+
+function spawnBellBurst() {
+  for (let i = 0; i < 14; i += 1) {
+    const x = CAMERA.x + (CAMERA.w * (0.18 + game.rng() * 0.64));
+    const y = CAMERA.y + 2.4 + (game.rng() * 2.2);
+    const colorPool = ['#ffe29a', '#fff1d0', '#a8dadc', '#ffd166'];
+    pushSceneParticle('spark', x, y, {
+      vx: (game.rng() - 0.5) * 5.2,
+      vy: -1.1 - (game.rng() * 2.4),
+      life: 820 + (game.rng() * 520),
+      size: 0.85 + (game.rng() * 1.1),
+      color: colorPool[Math.floor(game.rng() * colorPool.length)],
+      sway: 0.18 + (game.rng() * 0.22),
+      spin: 4 + (game.rng() * 8),
+    });
+  }
+}
+
+function updateSceneFx(dt, now = performance.now()) {
+  const dtSeconds = dt / 1000;
+  const visibleIndoorRooms = rooms.filter((room) => roomIntersectsCamera(room) && room.type !== 'outdoor');
+
+  if (now < (game.scenePulseUntil || 0) && (now - (game.lastBellParticleAt || 0)) > 70) {
+    spawnBellBurst();
+    game.lastBellParticleAt = now;
+  }
+
+  if (visibleIndoorRooms.length && (now - (game.lastAmbientParticleAt || 0)) > 120) {
+    const current = schedule[game.periodIndex];
+    const ambientRoom = visibleIndoorRooms[Math.floor(game.rng() * visibleIndoorRooms.length)];
+    const style = roomVisualStyle(ambientRoom);
+    const dustColor = game.weather === 'snow' ? '#f6fbff' : game.weather === 'rain' ? '#d7e9ff' : '#fff4ce';
+    pushSceneParticle('dust', ambientRoom.x + 1 + (game.rng() * Math.max(2, ambientRoom.w - 2)), ambientRoom.y + 1 + (game.rng() * Math.max(2, ambientRoom.h - 2)), {
+      vx: (game.rng() - 0.5) * 0.22,
+      vy: -0.06 - (game.rng() * 0.08),
+      life: 2800 + (game.rng() * 2600),
+      size: 0.45 + (game.rng() * 0.55),
+      color: current.period === 'Assembly' ? style.windowA : dustColor,
+      sway: 0.12 + (game.rng() * 0.18),
+    });
+    game.lastAmbientParticleAt = now;
+  }
+
+  if (schedule[game.periodIndex].period === 'Lunch Break' && (now - (game.lastLunchParticleAt || 0)) > 150) {
+    const dining = diningHallLayout();
+    const kitchenVisible = roomIntersectsCamera(roomByName('Kitchen'));
+    const diningVisible = roomIntersectsCamera(roomByName('Dining Hall'));
+    if (dining && (kitchenVisible || diningVisible)) {
+      pushSceneParticle('steam', dining.servingPoint.x - 0.9 + (game.rng() * 1.8), dining.servingPoint.y - 1.1 + (game.rng() * 0.4), {
+        vx: (game.rng() - 0.5) * 0.18,
+        vy: -0.22 - (game.rng() * 0.16),
+        life: 1700 + (game.rng() * 1000),
+        size: 0.7 + (game.rng() * 0.85),
+        color: '#fff7e8',
+        sway: 0.22 + (game.rng() * 0.18),
+      });
+      game.lastLunchParticleAt = now;
+    }
+  }
+
+  for (const particle of game.sceneFx) {
+    particle.phase += dtSeconds * (particle.spin || 0);
+    particle.x += (particle.vx || 0) * dtSeconds;
+    particle.y += (particle.vy || 0) * dtSeconds;
+    if (particle.sway) particle.x += Math.sin((now / 260) + particle.phase) * particle.sway * dtSeconds;
+    if (particle.kind === 'spark') particle.vy += 1.1 * dtSeconds;
+    if (particle.kind === 'steam') particle.size += dtSeconds * 0.35;
+    particle.life -= dt;
+  }
+
+  game.sceneFx = game.sceneFx.filter((particle) => (
+    particle.life > 0
+    && particle.x >= CAMERA.x - 8
+    && particle.x <= CAMERA.x + CAMERA.w + 8
+    && particle.y >= CAMERA.y - 8
+    && particle.y <= CAMERA.y + CAMERA.h + 12
+  ));
+}
+
+function drawSceneLighting(now = performance.now()) {
+  const sx = canvas.width / CAMERA.w;
+  const sy = canvas.height / CAMERA.h;
+
+  ctx.save();
+  if (game.weather === 'sunny') {
+    const sunGlow = ctx.createRadialGradient(canvas.width * 0.82, canvas.height * 0.14, 18, canvas.width * 0.82, canvas.height * 0.14, canvas.width * 0.78);
+    sunGlow.addColorStop(0, 'rgba(255,244,196,0.34)');
+    sunGlow.addColorStop(0.35, 'rgba(255,226,145,0.18)');
+    sunGlow.addColorStop(1, 'rgba(255,220,120,0)');
+    ctx.fillStyle = sunGlow;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  } else if (game.weather === 'rain') {
+    const rainGlow = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    rainGlow.addColorStop(0, 'rgba(184,212,255,0.12)');
+    rainGlow.addColorStop(1, 'rgba(38,52,84,0.08)');
+    ctx.fillStyle = rainGlow;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  } else if (game.weather === 'snow') {
+    const snowGlow = ctx.createRadialGradient(canvas.width * 0.5, canvas.height * 0.12, 16, canvas.width * 0.5, canvas.height * 0.12, canvas.width * 0.84);
+    snowGlow.addColorStop(0, 'rgba(248,252,255,0.18)');
+    snowGlow.addColorStop(1, 'rgba(240,248,255,0)');
+    ctx.fillStyle = snowGlow;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  ctx.restore();
+
+  for (const room of rooms) {
+    if (!roomIntersectsCamera(room)) continue;
+    const style = roomVisualStyle(room);
+    const drawX = Math.floor((room.x - CAMERA.x) * sx);
+    const drawY = Math.floor((room.y - CAMERA.y) * sy);
+    const drawW = Math.ceil(room.w * sx);
+    const drawH = Math.ceil(room.h * sy);
+
+    ctx.save();
+    const topGlow = ctx.createLinearGradient(drawX, drawY, drawX, drawY + drawH);
+    topGlow.addColorStop(0, style.glowTop);
+    topGlow.addColorStop(0.42, 'rgba(255,255,255,0.02)');
+    topGlow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = topGlow;
+    ctx.fillRect(drawX, drawY, drawW, drawH);
+
+    if (room.type !== 'outdoor') {
+      for (let shaftX = drawX + 8; shaftX < drawX + drawW - 10; shaftX += 42) {
+        ctx.fillStyle = style.shaft;
+        ctx.beginPath();
+        ctx.moveTo(shaftX, drawY + 1);
+        ctx.lineTo(shaftX + 16, drawY + 1);
+        ctx.lineTo(shaftX + 5, drawY + drawH);
+        ctx.lineTo(shaftX - 9, drawY + drawH);
+        ctx.closePath();
+        ctx.fill();
+      }
+    } else if (game.weather === 'sunny') {
+      const grassGlow = ctx.createLinearGradient(drawX, drawY, drawX, drawY + drawH);
+      grassGlow.addColorStop(0, style.outdoorLight);
+      grassGlow.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = grassGlow;
+      ctx.fillRect(drawX, drawY, drawW, drawH);
+    }
+    ctx.restore();
+  }
+
+  ctx.save();
+  const vignette = ctx.createRadialGradient(canvas.width * 0.5, canvas.height * 0.5, canvas.height * 0.2, canvas.width * 0.5, canvas.height * 0.5, canvas.width * 0.72);
+  vignette.addColorStop(0, 'rgba(0,0,0,0)');
+  vignette.addColorStop(0.7, 'rgba(8,12,24,0.05)');
+  vignette.addColorStop(1, 'rgba(6,10,18,0.22)');
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.restore();
+}
+
+function drawSceneParticles(now = performance.now()) {
+  const sx = canvas.width / CAMERA.w;
+  const sy = canvas.height / CAMERA.h;
+
+  for (const particle of game.sceneFx) {
+    const px = (particle.x - CAMERA.x) * sx;
+    const py = (particle.y - CAMERA.y) * sy;
+    const lifeRatio = Math.max(0, particle.life / Math.max(1, particle.maxLife));
+    const sizePx = Math.max(1.6, particle.size * ((sx + sy) * 0.2));
+
+    if (particle.kind === 'dust') {
+      ctx.save();
+      ctx.fillStyle = hexToRgba(particle.color, 0.11 + (lifeRatio * 0.16));
+      ctx.beginPath();
+      ctx.arc(px, py, sizePx, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    } else if (particle.kind === 'steam') {
+      ctx.save();
+      const steamGlow = ctx.createRadialGradient(px, py, 0, px, py, sizePx * 2.6);
+      steamGlow.addColorStop(0, hexToRgba(particle.color, 0.24 + (lifeRatio * 0.2)));
+      steamGlow.addColorStop(1, hexToRgba(particle.color, 0));
+      ctx.fillStyle = steamGlow;
+      ctx.beginPath();
+      ctx.arc(px, py, sizePx * 2.1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    } else {
+      ctx.save();
+      const twinkle = 0.5 + (Math.sin((now / 110) + particle.phase) * 0.5);
+      ctx.strokeStyle = hexToRgba(particle.color, 0.24 + (lifeRatio * 0.42 * twinkle));
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(px - sizePx * 1.7, py);
+      ctx.lineTo(px + sizePx * 1.7, py);
+      ctx.moveTo(px, py - sizePx * 1.7);
+      ctx.lineTo(px, py + sizePx * 1.7);
+      ctx.stroke();
+      ctx.fillStyle = hexToRgba('#fffdf5', 0.22 + (lifeRatio * 0.34));
+      ctx.fillRect(px - 1, py - 1, 2, 2);
+      ctx.restore();
+    }
+  }
+}
+
+function drawSceneFadeOverlay(now = performance.now()) {
+  const bellRatio = Math.max(0, Math.min(1, ((game.bellRingingUntil || 0) - now) / 3000));
+  const dayStartRatio = Math.max(0, Math.min(1, ((game.dayStartBannerUntil || 0) - now) / Math.max(1, MORNING_BANNER_MS)));
+  const endDayRatio = game.endDaySequenceActive
+    ? Math.max(0, Math.min(1, ((game.transitionUntil || 0) - now) / Math.max(1, DAY_TRANSITION_MS)))
+    : 0;
+
+  if (bellRatio > 0) {
+    const pulse = Math.sin((1 - bellRatio) * Math.PI);
+    const bellGlow = ctx.createRadialGradient(32, 30, 0, 32, 30, 120);
+    bellGlow.addColorStop(0, `rgba(255,241,188,${(0.16 * pulse).toFixed(3)})`);
+    bellGlow.addColorStop(1, 'rgba(255,241,188,0)');
+    ctx.fillStyle = bellGlow;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
+  if (dayStartRatio > 0) {
+    ctx.fillStyle = `rgba(8, 12, 24, ${(0.24 * dayStartRatio).toFixed(3)})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
+  if (endDayRatio > 0) {
+    const dusk = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    dusk.addColorStop(0, `rgba(22, 28, 54, ${(0.22 * endDayRatio).toFixed(3)})`);
+    dusk.addColorStop(1, `rgba(8, 10, 18, ${(0.36 * endDayRatio).toFixed(3)})`);
+    ctx.fillStyle = dusk;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 }
 
@@ -8783,11 +9519,21 @@ function drawTrees(sx, sy) {
   const windSway = game.weather === 'windy' ? Math.sin(performance.now() / 120) * 2.8 : 0;
   for (const tree of trees) {
     const p = worldToScreen(tree.x, tree.y);
-    ctx.fillStyle = '#6b4f3a';
+    ctx.fillStyle = '#4c3629';
     ctx.fillRect(p.sx - 2, p.sy - 3, 4, 10);
+    ctx.fillStyle = '#7f5c45';
+    ctx.fillRect(p.sx - 1, p.sy - 3, 1, 10);
     ctx.fillStyle = '#2d6a4f';
     ctx.beginPath();
     ctx.arc(p.sx + windSway, p.sy - 9, Math.max(5, sx * 0.42), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#4f9d69';
+    ctx.beginPath();
+    ctx.arc(p.sx + windSway + 2, p.sy - 10, Math.max(3, sx * 0.24), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = hexToRgba('#dff7ce', 0.2);
+    ctx.beginPath();
+    ctx.arc(p.sx + windSway - 2, p.sy - 12, Math.max(2, sx * 0.14), 0, Math.PI * 2);
     ctx.fill();
   }
 }
@@ -8855,9 +9601,10 @@ function drawWorld() {
     const drawY = Math.floor((room.y - CAMERA.y) * sy);
     const drawW = Math.ceil(room.w * sx);
     const drawH = Math.ceil(room.h * sy);
+    const roomStyle = roomVisualStyle(room);
 
     drawRoomTexture(drawX, drawY, drawW, drawH, room);
-    if (room.type !== 'outdoor') drawBrickTexture(drawX, drawY - 3, drawW, 3);
+    if (room.type !== 'outdoor') drawBrickTexture(drawX, drawY - 3, drawW, 3, roomStyle.brick);
     drawRoomWalls(drawX, drawY, drawW, drawH, room);
 
     if (room.type === 'classroom') {
@@ -8957,11 +9704,14 @@ function drawWorld() {
       ctx.fillText('E', doorPos.sx - 2, doorPos.sy + 18);
     }
 
-    ctx.strokeStyle = PALETTE.line;
+    ctx.strokeStyle = hexToRgba(roomStyle.wall, 0.88);
     ctx.lineWidth = 1;
     ctx.strokeRect(drawX, drawY, drawW, drawH);
 
-    ctx.fillStyle = room.type === 'outdoor' ? PALETTE.cream : PALETTE.plum;
+    ctx.fillStyle = roomStyle.labelShadow;
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText(room.name.toUpperCase(), drawX + 7, drawY + 13);
+    ctx.fillStyle = roomStyle.label;
     ctx.font = 'bold 10px monospace';
     ctx.fillText(room.name.toUpperCase(), drawX + 6, drawY + 12);
   }
@@ -9276,17 +10026,26 @@ function drawEntities() {
         ctx.fillRect(px - 11, py - 4, 22, 7);
       }
     } else {
-      const moving = Math.abs(entity.vx) + Math.abs(entity.vy) > 0.05;
+      const moveMagnitude = Math.abs(entity.vx) + Math.abs(entity.vy);
+      const moving = moveMagnitude > 0.05;
       const seated = Boolean(entity.isSeated);
+      const appearance = entity.appearance || {};
       // Preserve orientation while idle and support a side-on frame for horizontal walking.
       if (!['front', 'back', 'side'].includes(entity.renderFacing)) entity.renderFacing = 'front';
       const absVx = Math.abs(entity.vx);
       const absVy = Math.abs(entity.vy);
       if (absVx > 0.05 || absVy > 0.05) {
         // Horizontal dominance => side-facing profile. Vertical dominance => front/back.
-        if (absVx > absVy * 1.2) entity.renderFacing = 'side';
-        else if (entity.vy < -0.035) entity.renderFacing = 'back';
-        else if (entity.vy > 0.035) entity.renderFacing = 'front';
+        let desiredFacing = entity.renderFacing;
+        if (absVx > absVy * 1.2) desiredFacing = 'side';
+        else if (entity.vy < -0.035) desiredFacing = 'back';
+        else if (entity.vy > 0.035) desiredFacing = 'front';
+        if (desiredFacing !== entity.renderFacing) {
+          if (!entity.renderFacingHoldUntil || now >= entity.renderFacingHoldUntil || (absVx + absVy) > 0.42) {
+            entity.renderFacing = desiredFacing;
+            entity.renderFacingHoldUntil = now + 140;
+          }
+        }
       }
 
       // Classroom-seated pupils always face the board; moving up also shows a back view.
@@ -9299,14 +10058,26 @@ function drawEntities() {
         && entityRoom(entity) === 'Assembly Hall';
       const facingBack = seatedFacingAway || assemblyFacingHeadmaster || entity.renderFacing === 'back';
       const facingSide = !facingBack && entity.renderFacing === 'side';
-      // 5-frame walk cycle to replace the previous 2-pose sine swing.
-      const walkFrame = moving && !seated ? Math.floor(entity.animPhase) % 5 : 2;
+      const walkCycle = moving && !seated ? entity.animPhase : 2;
+      const walkFrame = Math.floor(walkCycle) % 5;
+      const nextWalkFrame = (walkFrame + 1) % 5;
+      const walkBlend = moving && !seated ? (walkCycle - Math.floor(walkCycle)) : 0;
       const walkBobOffsets = [-1.5, -0.5, 0.75, -0.5, -1.5];
       const legSwingOffsets = [-3, -1.5, 0, 1.5, 3];
       const armSwingOffsets = [3, 1.5, 0, -1.5, -3];
-      const bob = seated ? 1.6 : walkBobOffsets[walkFrame];
-      const legKick = seated ? 0 : legSwingOffsets[walkFrame];
-      const armKick = seated ? 0.6 : armSwingOffsets[walkFrame];
+      const strideScale = appearance.strideScale || 1;
+      const bounceScale = appearance.bounceScale || 1;
+      const armSwingScale = appearance.armSwingScale || 1;
+      const idleBob = !moving && !seated ? Math.sin((now / 360) + (appearance.idlePhase || 0)) * 0.55 : 0;
+      const bob = seated
+        ? 1.35
+        : (lerpValue(walkBobOffsets[walkFrame], walkBobOffsets[nextWalkFrame], walkBlend) * bounceScale) + idleBob;
+      const legKick = seated
+        ? 0
+        : lerpValue(legSwingOffsets[walkFrame], legSwingOffsets[nextWalkFrame], walkBlend) * strideScale;
+      const armKick = seated
+        ? 0.6
+        : lerpValue(armSwingOffsets[walkFrame], armSwingOffsets[nextWalkFrame], walkBlend) * armSwingScale;
 
       // Punching uses a short forward-thrust frame and a recoil frame.
       const punchElapsed = Math.max(0, 220 - (entity.punchUntil - now));
@@ -9319,7 +10090,6 @@ function drawEntities() {
       // Side-facing sprite direction is intentionally inverted from legacy strikeDir
       // so horizontal travel direction matches the visible profile orientation.
       const sideFacingRight = entity.facing < 0;
-      const appearance = entity.appearance || {};
       const useUniform = isStudentCharacter(entity);
       const isFemaleStudent = useUniform && (entity.sex || appearance.sex) === 'female';
       // Keep uniforms weather-aware: cold days use blazers, warmer days use shirts.
@@ -9334,6 +10104,25 @@ function drawEntities() {
       const heightShift = appearance.heightOffset || 0;
       const skinTone = appearance.skinTone || '#ffd7b5';
       const hairColor = appearance.hairColor || '#513b2f';
+      const shirtColor = appearance.uniformShirt || '#ffffff';
+      const tieColor = appearance.uniformTie || '#2b59c3';
+      const blazerColor = appearance.uniformBlazer || '#2f5fbf';
+      const blazerTrimColor = appearance.uniformTrim || '#234a97';
+      const skirtColor = appearance.uniformSkirt || '#1f3f85';
+      const shoeColor = appearance.shoeColor || '#000000';
+      const shoeW = Math.max(2, Math.min(legW, appearance.shoeWidth || Math.max(2, legW - 1)));
+      const shoeH = 2;
+
+      // Subtle ground shadow helps crowded scenes read depth and motion more clearly.
+      const shadowAlpha = seated ? 0.16 : Math.min(0.24, 0.12 + (moveMagnitude * 0.03));
+      const shadowWidth = Math.max(5, Math.floor((bodyW * 0.48) + (facingSide ? 0 : 1)));
+      const shadowHeight = seated ? 2.2 : 3;
+      ctx.save();
+      ctx.fillStyle = `rgba(8, 12, 24, ${shadowAlpha.toFixed(3)})`;
+      ctx.beginPath();
+      ctx.ellipse(px, py + 4 - (seated ? 1 : 0), shadowWidth, shadowHeight, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
 
       // Head + facial variation per student personality profile.
       ctx.fillStyle = skinTone;
@@ -9491,10 +10280,7 @@ function drawEntities() {
         ctx.fillRect(px - Math.floor(hipsW / 2), py - 13 + bob - heightShift, hipsW, 7);
       }
       if (useUniform) {
-        const shirtColor = '#ffffff';
-        const tieColor = '#2b59c3';
-        const blazerColor = '#2f5fbf';
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = shirtColor;
         if (facingSide) {
           // Side profile: shirt seam only (no tie visible from side-on request).
           const shirtX = sideFacingRight ? px : px - 2;
@@ -9520,13 +10306,27 @@ function drawEntities() {
             ctx.fillStyle = shirtColor;
             ctx.fillRect(px - 1, py - 16 + bob - heightShift, 2, 5);
           }
-          ctx.fillStyle = '#234a97';
+          ctx.fillStyle = blazerTrimColor;
           if (facingSide) {
             const sideTrimW = Math.max(6, Math.floor(hipsW * 0.5));
             const sideTrimX = sideFacingRight ? px - 1 : px - sideTrimW + 1;
             ctx.fillRect(sideTrimX, py - 10 + bob - heightShift, sideTrimW, 2);
           } else {
             ctx.fillRect(px - Math.floor(hipsW / 2), py - 10 + bob - heightShift, hipsW, 2);
+          }
+        } else {
+          // Warm-weather uniform still gets a colored vest/trim so pupils are not all plain white.
+          ctx.fillStyle = blazerColor;
+          if (facingSide) {
+            const sideVestW = Math.max(5, Math.floor(hipsW * 0.45));
+            const sideVestX = sideFacingRight ? px - 1 : px - sideVestW + 1;
+            ctx.fillRect(sideVestX, py - 15 + bob - heightShift, sideVestW, 3);
+            ctx.fillStyle = blazerTrimColor;
+            ctx.fillRect(sideVestX, py - 12 + bob - heightShift, sideVestW, 1);
+          } else {
+            ctx.fillRect(px - Math.floor(hipsW / 2), py - 15 + bob - heightShift, hipsW, 3);
+            ctx.fillStyle = blazerTrimColor;
+            ctx.fillRect(px - Math.floor(hipsW / 2), py - 12 + bob - heightShift, hipsW, 1);
           }
         }
       }
@@ -9593,7 +10393,7 @@ function drawEntities() {
       if (seated) {
         if (isFemaleStudent) {
           const seatedSkirtDrop = skirtLength === 'long' ? 5 : 3;
-          ctx.fillStyle = '#1f3f85';
+          ctx.fillStyle = skirtColor;
           ctx.fillRect(px - Math.floor(bodyW / 2), py - 9 - heightShift, bodyW, seatedSkirtDrop);
           // Female skirts reveal skin-tone legs below hem line.
           ctx.fillStyle = skinTone;
@@ -9606,9 +10406,11 @@ function drawEntities() {
           ctx.fillRect(px - Math.floor(bodyW / 2), py - 5 - heightShift, legW, 6);
           ctx.fillRect(px + Math.floor(bodyW / 2) - legW, py - 5 - heightShift, legW, 6);
         }
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(px - Math.floor(bodyW / 2), py + 1 - heightShift, legW, 2);
-        ctx.fillRect(px + Math.floor(bodyW / 2) - legW, py + 1 - heightShift, legW, 2);
+        ctx.fillStyle = shoeColor;
+        const seatedLeftFootX = (px - Math.floor(bodyW / 2)) + Math.max(0, Math.floor((legW - shoeW) / 2));
+        const seatedRightFootX = (px + Math.floor(bodyW / 2) - legW) + Math.max(0, Math.floor((legW - shoeW) / 2));
+        ctx.fillRect(seatedLeftFootX, py + 1 - heightShift, shoeW, shoeH);
+        ctx.fillRect(seatedRightFootX, py + 1 - heightShift, shoeW, shoeH);
       } else {
         const expressiveLegKick = legKick + emoteLegDelta;
         if (facingSide) {
@@ -9621,12 +10423,16 @@ function drawEntities() {
           ctx.fillRect(sideLegBaseX, nearLegY, legW, nearLegLen);
           ctx.fillStyle = useUniform ? '#0e1626' : '#1a253f';
           ctx.fillRect(sideLegBaseX - (sideFacingRight ? 1 : -1), farLegY + 1, Math.max(1, legW - 1), farLegLen);
-          ctx.fillStyle = '#000000';
-          ctx.fillRect(sideLegBaseX, nearLegY + nearLegLen, legW, 2);
-          ctx.fillRect(sideLegBaseX - (sideFacingRight ? 1 : -1), farLegY + farLegLen + 1, Math.max(1, legW - 1), 1);
+          ctx.fillStyle = shoeColor;
+          const sideNearFootX = sideFacingRight ? sideLegBaseX : sideLegBaseX + Math.max(0, legW - shoeW);
+          const sideFarFootX = sideFacingRight
+            ? sideLegBaseX - 1
+            : (sideLegBaseX + Math.max(0, Math.max(1, legW - 1) - shoeW));
+          ctx.fillRect(sideNearFootX, nearLegY + nearLegLen, Math.min(legW + 1, shoeW + 1), shoeH);
+          ctx.fillRect(sideFarFootX, farLegY + farLegLen + 1, Math.max(1, shoeW - 1), 1);
         } else if (isFemaleStudent) {
           const standingSkirtDrop = skirtLength === 'long' ? 8 : 5;
-          ctx.fillStyle = '#1f3f85';
+          ctx.fillStyle = skirtColor;
           ctx.fillRect(px - Math.floor(bodyW / 2), py - 7 - heightShift, bodyW, standingSkirtDrop);
           // Female skirts reveal skin-tone legs below hem line.
           ctx.fillStyle = skinTone;
@@ -9638,9 +10444,11 @@ function drawEntities() {
           ctx.fillRect(px - legW - 1, py - 6 + expressiveLegKick - heightShift, legW, legL);
           ctx.fillRect(px + 1, py - 6 - expressiveLegKick - heightShift, legW, legL);
         }
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(px - legW - 1, py + 2 + expressiveLegKick + (legL - 8) - heightShift, legW, 2);
-        ctx.fillRect(px + 1, py + 2 - expressiveLegKick + (legL - 8) - heightShift, legW, 2);
+        ctx.fillStyle = shoeColor;
+        const leftFootX = (px - legW - 1) + Math.max(0, Math.floor((legW - shoeW) / 2));
+        const rightFootX = (px + 1) + Math.max(0, Math.floor((legW - shoeW) / 2));
+        ctx.fillRect(leftFootX, py + 2 + expressiveLegKick + (legL - 8) - heightShift, shoeW, shoeH);
+        ctx.fillRect(rightFootX, py + 2 - expressiveLegKick + (legL - 8) - heightShift, shoeW, shoeH);
       }
 
       // Teachers are rendered larger and more formal than students.
@@ -9752,8 +10560,9 @@ function drawEntities() {
 
     const nowBubble = performance.now();
     if (entity.speech && entity.speech.until > nowBubble) {
+      const bubbleOffset = bubbleStackOffset(entity, nowBubble);
       const lines = wrapBubbleText(entity.speech.text, 180);
-      drawRoundedBubble(px, py - 42, lines, {
+      drawRoundedBubble(px + bubbleOffset.x, py - 42 - bubbleOffset.y, lines, {
         paddingX: 8,
         paddingY: 5,
         lineHeight: 11,
@@ -9764,11 +10573,13 @@ function drawEntities() {
         shadowBlur: 6,
         textColor: '#0f1426',
         font: '9px monospace',
+        anchorX: px,
       });
     }
     if (entity.thought && entity.thought.until > nowBubble) {
+      const bubbleOffset = bubbleStackOffset(entity, nowBubble);
       const lines = wrapBubbleText(entity.thought.text, 160);
-      drawRoundedBubble(px, py - 60, lines, {
+      drawRoundedBubble(px + bubbleOffset.x, py - 60 - bubbleOffset.y, lines, {
         paddingX: 8,
         paddingY: 4,
         lineHeight: 10,
@@ -9780,6 +10591,7 @@ function drawEntities() {
         textColor: '#1d3557',
         font: '8px monospace',
         tailOffsetX: 12,
+        anchorX: px,
         bubblyTail: true,
       });
     }
@@ -10416,14 +11228,16 @@ function updateFrame(now, dt) {
       // (dt / 1000). Normalize his animation speed to world displacement so his walk
       // cycle cadence matches pupils during auto mode and no longer looks slow-motion.
       const animationMoveMagnitude = entity === player ? moveMagnitude * 11 : moveMagnitude;
+      const strideScale = entity.appearance?.strideScale || 1;
       // Keep walk cycle readable: slightly slower leg animation while movement speed is higher.
-      entity.animPhase += dt * (0.0027 + animationMoveMagnitude * 0.0042);
+      entity.animPhase += dt * (0.00235 + animationMoveMagnitude * 0.00385) * strideScale;
     }
 
     updateAI(dt);
     drainLlmBacklog();
     updateCollectables(now);
     updateWeatherFx(dt);
+    updateSceneFx(dt, now);
     updateBoardWriting(dt);
     updatePellets(dt);
     scheduleWeeklySickEvent();
@@ -10449,8 +11263,11 @@ function renderFrame(now) {
   updateCamera();
 
   drawWorld();
+  drawSceneLighting(now);
   drawEntities();
+  drawSceneParticles(now);
   drawClassroomChairOverlays();
+  drawSceneFadeOverlay(now);
   drawMiniMap();
   drawStatusOverlay();
   updateDayTransitionOverlay(now);
