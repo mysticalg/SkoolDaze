@@ -205,6 +205,10 @@ function diningHallLayout() {
   if (!hall) return null;
 
   const plateStand = { x: hall.x + 3.2, y: hall.y + 2.3 };
+  const plateSlots = Array.from({ length: 6 }, (_, idx) => ({
+    x: plateStand.x + (((idx % 3) - 1) * 0.95),
+    y: plateStand.y + 1.15 + (Math.floor(idx / 3) * 0.95),
+  }));
   const servingPoint = { x: hall.x + 8.6, y: hall.y + 2.4 };
   const queueStart = { x: hall.x + 13.3, y: hall.y + 2.5 };
   const queueSpacing = 1.55;
@@ -230,15 +234,17 @@ function diningHallLayout() {
     { x: hall.x + 8.3, y: hall.y + 4.8 },
   ];
 
-  const entity = {
+  const layout = {
     hall,
     plateStand,
+    plateSlots,
     servingPoint,
     queueSlots,
     serviceDurationMs: 2000,
     seats,
     patrolRoute,
   };
+  return layout;
 }
 
 function resetLunchState(entity) {
@@ -250,6 +256,12 @@ function resetLunchState(entity) {
   entity.lunchServedAt = 0;
   entity.lunchSeatIndex = -1;
   entity.lunchEatUntil = 0;
+}
+
+function lunchPlateSpotForEntity(layout, entity) {
+  if (!layout?.plateSlots?.length) return layout?.plateStand || null;
+  const slotIndex = Math.abs(stableNameHash(`${entity?.name || entity?.seatIndex || 0}:plate`)) % layout.plateSlots.length;
+  return layout.plateSlots[slotIndex];
 }
 
 // Lightweight synth SFX keeps interactions responsive without external assets.
@@ -648,12 +660,12 @@ const STUDENT_EXPRESSIVE_EMOTES = ['dance-1', 'dance-2', 'dance-3', 'high-five',
 // NPC stamina tuning:
 // - movement drain is 4x slower than the previous build so students do not crash before lunch.
 // - a gentle day-fatigue baseline still brings most pupils to ~30 energy by home time.
-const NPC_BASE_DRAIN_PER_SECOND = 0.0475;
-const NPC_RUNNING_EXTRA_DRAIN_PER_SECOND = 0.145;
-const NPC_LUNCH_RECOVER_PER_SECOND = 0.16;
+const NPC_BASE_DRAIN_PER_SECOND = 0.035;
+const NPC_RUNNING_EXTRA_DRAIN_PER_SECOND = 0.105;
+const NPC_LUNCH_RECOVER_PER_SECOND = 0.26;
 // Seated students should slowly recover stamina during lessons instead of still draining.
-const NPC_SEATED_RECOVER_PER_SECOND = 0.08;
-const NPC_END_OF_DAY_ENERGY_TARGET = 30;
+const NPC_SEATED_RECOVER_PER_SECOND = 0.11;
+const NPC_END_OF_DAY_ENERGY_TARGET = 38;
 // Keep one spare seat in active classrooms so displaced students can re-seat cleanly.
 const LESSON_SPARE_SEATS_PER_ROOM = 1;
 const TOTAL_DAY_GAME_MINUTES = schedule.reduce((sum, period) => sum + period.mins, 0);
@@ -2635,6 +2647,8 @@ const game = {
   // Track anti-spam timings for board barks and late lines.
   lastBoardCalloutAt: 0,
   latePenaltyGiven: false,
+  lastBunkingPenaltyKey: '',
+  lastTattleOnEricAt: 0,
   dayCount: 1,
   // Rotating break-duty teacher changes once per school day.
   dutyTeacherName: null,
@@ -3777,18 +3791,25 @@ function nextFloorToward(fromFloor, destinationFloor) {
   return floorSequence[fromIndex + (destIndex > fromIndex ? 1 : -1)];
 }
 
-function nearestStairTarget(entity, fromFloor, targetFloor) {
+function nearestStairTarget(entity, fromFloor, targetFloor, destination = null) {
   const relevant = getStairLink(fromFloor, targetFloor);
   if (!relevant || !relevant.length) return null;
 
   let best = null;
-  let bestDist = Infinity;
+  let bestScore = Infinity;
   for (const stair of relevant) {
     const candidate = stairPointForFloor(stair, fromFloor);
     if (!candidate) continue;
-    const dist = distance(entity, candidate);
-    if (dist < bestDist) {
-      bestDist = dist;
+    const exitPoint = stairPointForFloor(stair, targetFloor) || candidate;
+    const approachCost = distance(entity, candidate);
+    const onwardCost = destination ? distance(exitPoint, destination) : 0;
+    const crowdPenalty = game.entities.reduce((sum, other) => {
+      if (other === entity || entityFloor(other) !== fromFloor) return sum;
+      return sum + (distance(other, candidate) < 1.7 ? 0.35 : 0);
+    }, 0);
+    const score = approachCost + onwardCost + crowdPenalty;
+    if (score < bestScore) {
+      bestScore = score;
       best = candidate;
     }
   }
@@ -3839,15 +3860,29 @@ function shouldAvoidLunchFight(entity) {
   return calmScore >= 52;
 }
 
+function averageStudentCruiseSpeed() {
+  const activeStudents = game.entities.filter((entity) => (
+    entity !== player
+    && isStudentCharacter(entity)
+    && entity.knockedUntil < performance.now()
+  ));
+  if (!activeStudents.length) return player.personality.speed;
+  return activeStudents.reduce((sum, entity) => sum + entity.personality.speed, 0) / activeStudents.length;
+}
+
 function chooseAutoDestination() {
   // Toilets become top priority when bladder is urgent.
   if (game.bladder >= 75 && !game.toiletsBlocked) return roomCenter('Toilets');
   const current = schedule[game.periodIndex];
   if (performance.now() < (player.assemblyReleaseAt || 0)) return holdAssemblyDismissalPosition(player) || roomCenter('Assembly Hall');
   if (current.mode === 'lesson') {
-    // Auto Eric prefers his assigned desk; if blocked, wait beside it for player action.
-    const reservedSeat = getSeatPosition(current.room, player.seatIndex) || roomCenter(current.room);
-    return ericSeatOccupant(current.room) ? ericSeatWaitingSpot(current.room) : reservedSeat;
+    // Auto Eric prefers his desk but should take an open fallback seat instead of
+    // starting fights or freezing beside a blocker for a whole lesson.
+    const reservedSeat = getSeatPosition(current.room, player.seatIndex, player) || roomCenter(current.room);
+    if (ericSeatOccupant(current.room)) {
+      return nearestFreeSeatInRoom(current.room, player) || ericSeatWaitingSpot(current.room);
+    }
+    return reservedSeat;
   }
   // Keep Eric in the same gate lineup pattern as everyone else on arrival,
   // instead of dragging him to the middle of the School Gates room.
@@ -4110,7 +4145,8 @@ function routeWaypoint(entity, destination) {
 
   if (currentFloor !== destinationFloor) {
     const nextFloor = nextFloorToward(currentFloor, destinationFloor);
-    return nearestStairTarget(entity, currentFloor, nextFloor) || destination;
+    const stairTarget = nearestStairTarget(entity, currentFloor, nextFloor, destination) || destination;
+    return nearestWalkablePoint(stairTarget, [destination, currentRoom ? roomCenter(currentRoom.name) : null]) || stairTarget;
   }
 
   if (destinationRoom && destinationRoom.type !== 'corridor' && destinationRoom.type !== 'outdoor') {
@@ -4124,7 +4160,7 @@ function routeWaypoint(entity, destination) {
     if (stagedDoor && distance(entity, stagedDoor) > 1.1) return stagedDoor;
   }
 
-  return destination;
+  return nearestWalkablePoint(destination, [destinationRoom ? roomCenter(destinationRoom.name) : null]) || destination;
 }
 
 function tryUseStairs(entity, desiredFloor = null, options = {}) {
@@ -4235,44 +4271,64 @@ function getRoomSeatLayout(roomName) {
   return layout;
 }
 
+function studentSeatRosterForRoom(roomName) {
+  if (!roomName) return [];
+  const students = game.entities.filter((entity) => isStudentCharacter(entity));
+  if (roomName === 'Assembly Hall') {
+    return students.sort((a, b) => a.seatIndex - b.seatIndex);
+  }
+
+  const current = schedule[game.periodIndex];
+  let rosterNames = null;
+  if (isRegistrationPeriod(current)) {
+    rosterNames = game.fixedClassRosters?.Registration?.[roomName] || null;
+  } else if (isSupervisedPeriod(current) && !isAssemblyPeriod(current)) {
+    rosterNames = game.fixedClassRosters?.[current.room]?.[roomName] || null;
+  }
+
+  if (Array.isArray(rosterNames) && rosterNames.length) {
+    const byName = new Map(students.map((entity) => [entity.name, entity]));
+    return rosterNames.map((name) => byName.get(name)).filter(Boolean);
+  }
+
+  return students
+    .filter((entity) => (
+      entity.tutorRoom === roomName
+      || entity.lessonRoom === roomName
+      || entity.seatedRoom === roomName
+      || roomAtPosition(entity.target || entity)?.name === roomName
+    ))
+    .sort((a, b) => a.seatIndex - b.seatIndex);
+}
+
 function getSeatPosition(roomName, seatIndex, requester = null) {
   const layout = getRoomSeatLayout(roomName);
   if (!layout || !layout.seats.length) return null;
 
-  // Assembly uses a dedicated student ordering so front rows fill evenly.
-  if (roomName === 'Assembly Hall' && requester && isStudentCharacter(requester)) {
-    const assemblyStudents = game.entities
-      .filter((entity) => isStudentCharacter(entity))
-      .sort((a, b) => a.seatIndex - b.seatIndex);
-    const idx = Math.max(0, assemblyStudents.findIndex((entity) => entity === requester));
-    return layout.seats[idx % layout.seats.length] || layout.seats[0];
+  const resolvedRequester = requester || game.entities.find((entity) => (
+    entity.seatIndex === seatIndex && isStudentCharacter(entity)
+  )) || null;
+
+  if (resolvedRequester && isStudentCharacter(resolvedRequester)) {
+    const roster = studentSeatRosterForRoom(roomName);
+    const idx = roster.findIndex((entity) => entity === resolvedRequester);
+    if (idx >= 0) return layout.seats[idx % layout.seats.length] || layout.seats[0];
   }
 
   const seatCount = layout.seats.length;
-  const ericSlot = player.seatIndex % seatCount;
-
-  if (requester && requester !== player) {
-    // Reserve Eric's desk without causing two NPCs to alias to the same fallback seat.
-    // We map non-Eric students into the seat list with Eric's slot removed, then re-expand.
-    const nonEricSeatCount = Math.max(1, seatCount - 1);
-    let slot = seatIndex % nonEricSeatCount;
-    if (slot >= ericSlot) slot += 1;
-    return layout.seats[slot % seatCount];
-  }
-
-  const slot = seatIndex % seatCount;
+  const slot = ((seatIndex % seatCount) + seatCount) % seatCount;
   return layout.seats[slot];
 }
 
-function isEricAssignedSeat(roomName, seatIndex) {
-  const ericSeat = getSeatPosition(roomName, player.seatIndex);
-  const candidate = getSeatPosition(roomName, seatIndex);
+function isEricAssignedSeat(roomName, seatIndex, requester = null) {
+  const ericSeat = getSeatPosition(roomName, player.seatIndex, player);
+  const candidate = getSeatPosition(roomName, seatIndex, requester);
   if (!ericSeat || !candidate) return false;
   return distance(ericSeat, candidate) < 0.12;
 }
 
 function ericSeatOccupant(roomName) {
-  const ericSeat = getSeatPosition(roomName, player.seatIndex);
+  const ericSeat = getSeatPosition(roomName, player.seatIndex, player);
   if (!ericSeat) return null;
   return game.entities.find((entity) => (
     entity !== player
@@ -4283,7 +4339,7 @@ function ericSeatOccupant(roomName) {
 }
 
 function ericSeatWaitingSpot(roomName) {
-  const seat = getSeatPosition(roomName, player.seatIndex);
+  const seat = getSeatPosition(roomName, player.seatIndex, player);
   if (!seat) return roomCenter(roomName);
   return { x: seat.x - 0.9, y: seat.y + 0.45 };
 }
@@ -4418,14 +4474,14 @@ function updateAutoPilot(dt) {
   const current = schedule[game.periodIndex];
   const destination = chooseAutoDestination();
   const waypoint = routeWaypoint(player, destination);
-  // Auto mode should mirror student travel speed so Eric no longer trails behind.
-  // NPC students use hallwayBoost 3.3 with movement integrated at dt/1000,
-  // while Eric's movement is integrated with dt*0.011, so divide by 11 for parity.
+  // Auto mode should move Eric at roughly the same cruising speed as the student crowd,
+  // rather than using Eric's faster player-tuned personality stat.
+  const averageStudentSpeed = averageStudentCruiseSpeed();
   const studentHallwayBoost = 3.3 / 11;
   // Match student "late for lesson" urgency so auto mode keeps up with corridor traffic.
   const lateForClass = current.mode === 'lesson' && entityRoom(player) !== current.room;
-  const runBoost = lateForClass && player.energy > 20 ? 1.45 : 1;
-  const speed = ((player.personality.speed * game.energy) / 100) * studentHallwayBoost * runBoost;
+  const runBoost = lateForClass && game.energy > 20 ? 1.45 : 1;
+  const speed = ((averageStudentSpeed * game.energy) / 100) * studentHallwayBoost * runBoost;
 
   const dx = waypoint.x - player.x;
   const dy = waypoint.y - player.y;
@@ -4466,7 +4522,7 @@ function updateAutoPilot(dt) {
     const desiredFloor = roomAtPosition(destination)?.floor || entityFloor(player);
     if (!tryUseStairs(player, desiredFloor)) interact();
   }
-  spendEnergy(0.35 * (dt / 1000));
+  spendEnergy((lateForClass ? 1.05 : 0.4) * (dt / 1000));
 }
 
 function updateBladder(dt) {
@@ -4517,7 +4573,7 @@ function distance(a, b) {
 }
 
 
-function isEntityVisibleToPlayer(entity, { margin = 1.5 } = {}) {
+function isEntityVisibleToPlayer(entity, { margin = 3.2 } = {}) {
   if (!entity || entity === player) return true;
   // NPC chatter is only simulated for visible same-room actors to keep LLM queue pressure low.
   if (entityRoom(entity) !== entityRoom(player)) return false;
@@ -4609,7 +4665,7 @@ function deliverResolvedSpeech(entity, resolvedText, addressee, opts = {}, now =
   const finalSpeech = entity.role === 'student' && addressee?.name
     ? ensureAddressedNameInSpeech(resolvedText, addressee.name)
     : sanitizeLlmLine(resolvedText, '...');
-  if (entity.role !== 'player' && !opts.bypassGlobalChatterLimit && (now - (game.lastNpcChatterAt || -Infinity)) < normalizedNpcChatterDelay(game.npcChatterDelayMs)) return false;
+  if (entity.role !== 'player' && !opts.bypassGlobalChatterLimit && !opts.force && (now - (game.lastNpcChatterAt || -Infinity)) < normalizedNpcChatterDelay(game.npcChatterDelayMs)) return false;
   if (!opts.force && !markDialogueUsed(entity, finalSpeech, 'speech')) return false;
   entity.speech = { text: finalSpeech, kind: opts.kind || 'speech', until: now + (opts.durationMs || 2600) };
   entity.lastSpokeAt = now;
@@ -4623,7 +4679,7 @@ function deliverResolvedSpeech(entity, resolvedText, addressee, opts = {}, now =
 
 function deliverResolvedThought(entity, resolvedText, durationMs = 3200, opts = {}, now = performance.now()) {
   const thoughtText = sanitizeLlmLine(resolvedText, '...');
-  if (entity.role !== 'player' && !opts.bypassGlobalChatterLimit && (now - (game.lastNpcChatterAt || -Infinity)) < normalizedNpcChatterDelay(game.npcChatterDelayMs)) return false;
+  if (entity.role !== 'player' && !opts.bypassGlobalChatterLimit && !opts.force && (now - (game.lastNpcChatterAt || -Infinity)) < normalizedNpcChatterDelay(game.npcChatterDelayMs)) return false;
   if (!markDialogueUsed(entity, thoughtText, 'thought')) return false;
   entity.thought = { text: thoughtText, until: now + durationMs };
   entity.lastThoughtAt = now;
@@ -4720,7 +4776,7 @@ function say(entity, text, opts = {}) {
   if (!entity || !text) return;
   const now = performance.now();
   // Keep off-screen NPCs silent to reduce LLM queue pressure and maintain local readability.
-  if (entity.role !== 'player' && !isEntityVisibleToPlayer(entity) && !opts.allowOffscreenSpeech) return;
+  if (entity.role !== 'player' && !opts.force && !isEntityVisibleToPlayer(entity) && !opts.allowOffscreenSpeech) return;
   if (!opts.force && !canUseDialogue(entity, now, 'speech')) return;
   const currentPeriod = schedule[game.periodIndex];
   if (isAssemblyPeriod(currentPeriod) && entityRoom(entity) === 'Assembly Hall' && entity.name !== 'Mr Wacker' && !opts.allowAssemblySpeech) return;
@@ -4776,7 +4832,7 @@ function say(entity, text, opts = {}) {
 function think(entity, text, durationMs = 3200, opts = {}) {
   if (!entity || !text) return;
   const now = performance.now();
-  if (entity.role !== 'player' && !isEntityVisibleToPlayer(entity) && !opts.allowOffscreenSpeech) return;
+  if (entity.role !== 'player' && !opts.force && !isEntityVisibleToPlayer(entity) && !opts.allowOffscreenSpeech) return;
   if (!canUseDialogue(entity, now, 'thought')) return;
   const payload = {
     channel: 'thought',
@@ -5237,7 +5293,7 @@ function resolveClassQuestionAttempt(quiz, student, attemptText, forcedCorrect =
   say(student, normalized || randomFunnyWrongAnswer(), { durationMs: 3000, force: true });
   announce(`📣 ${student.name} answers: "${normalized || '...'}"`, { source: student, range: 9, force: true });
   announce(teacherFeedbackLine(quiz.teacher, student, isCorrect), { source: quiz.teacher, range: 9, force: true });
-  if (!isCorrect) addLines(10, `${student.name} gave a wrong class answer`);
+  if (!isCorrect && student === player) addLines(10, `${student.name} gave a wrong class answer`);
 
   if (student === player) {
     game.charisma = Math.max(0, Math.min(100, game.charisma + (isCorrect ? 2 : -1)));
@@ -5519,7 +5575,7 @@ function recoverPlayerIfWallStuck(dt) {
   const pushingInput = Math.abs(player.vx) + Math.abs(player.vy) > 0.02;
   const insideWalkable = isWalkablePoint(player.x, player.y);
 
-  if (!insideWalkable || (pushingInput && moved < 0.003)) {
+  if (!insideWalkable || (pushingInput && moved < 0.01)) {
     game.playerStuckMs += dt;
   } else {
     game.playerStuckMs = Math.max(0, game.playerStuckMs - (dt * 2));
@@ -5730,7 +5786,7 @@ function handleInput(dt) {
   const current = schedule[game.periodIndex];
   if (isRegistrationPeriod(current) && entityRoom(player) === current.room && !player.isSeated) {
     const blocker = ericSeatOccupant(current.room);
-    const ericSeat = getSeatPosition(current.room, player.seatIndex);
+    const ericSeat = getSeatPosition(current.room, player.seatIndex, player);
     if (blocker && ericSeat && distance(player, ericSeat) < 1.35) {
       const waitSpot = ericSeatWaitingSpot(current.room);
       player.x = waitSpot.x;
@@ -5833,7 +5889,7 @@ function meleeAttack(attacker) {
       if (isSeatPunch) {
         const now = performance.now();
         const seatRoom = target.seatedRoom;
-        const seatPos = getSeatPosition(seatRoom, target.seatIndex) || { x: target.x, y: target.y };
+        const seatPos = getSeatPosition(seatRoom, target.seatIndex, target) || { x: target.x, y: target.y };
         const floorSit = { x: seatPos.x + (attacker.facing >= 0 ? 0.95 : -0.95), y: seatPos.y + 0.38 };
         target.x = floorSit.x;
         target.y = floorSit.y;
@@ -5898,11 +5954,18 @@ function meleeAttack(attacker) {
         adjustEricRelationship(target, delta, 'punched');
       }
       if (target === player && attacker.role !== 'teacher' && attacker.role !== 'janitor') {
+        const currentPeriod = schedule[game.periodIndex];
+        const supervisedFight = isSupervisedPeriod(currentPeriod);
         const teacherWitness = findWitnessingTeacher(attacker, 7.2);
         if (teacherWitness) {
-          announce(`🧑‍🏫 ${teacherWitness.name} caught the fight and marched both pupils to the Headmaster Office.`);
-          sendPlayerToHeadmaster('fighting in class', 20);
-          sendEntityToHeadmaster(attacker, 'fighting in class');
+          if (supervisedFight) {
+            announce(`🧑‍🏫 ${teacherWitness.name} caught the fight and marched both pupils to the Headmaster Office.`);
+            sendPlayerToHeadmaster('fighting in class', 20);
+            sendEntityToHeadmaster(attacker, 'fighting in class');
+          } else {
+            announce(`🧑‍🏫 ${teacherWitness.name} grabbed ${attacker.name} for attacking Eric during ${currentPeriod.period}.`);
+            sendEntityToHeadmaster(attacker, `attacking Eric during ${currentPeriod.period}`);
+          }
         }
       }
       if (attacker === player && target.role === 'teacher') addLines(120, 'striking a teacher');
@@ -6060,11 +6123,23 @@ function knockout(entity, by) {
 }
 
 function isSeatOccupied(roomName, seat, ignoreEntity = null) {
-  return game.entities.some((entity) => (
+  const now = performance.now();
+  return [player, ...game.entities].some((entity) => (
     entity !== ignoreEntity
-    && entity.isSeated
-    && entity.seatedRoom === roomName
-    && distance(entity, seat) < 0.65
+    && entity.knockedUntil < now
+    && (
+      (entity.isSeated && entity.seatedRoom === roomName && distance(entity, seat) < 0.65)
+      || (
+        entity.target
+        && roomAtPosition(entity.target)?.name === roomName
+        && distance(entity.target, seat) < 0.58
+        && (
+          entity.lessonRoom === roomName
+          || entity.displacedSeatRoom === roomName
+          || (entity.isSeated && entity.seatedRoom === roomName)
+        )
+      )
+    )
   ));
 }
 
@@ -6406,7 +6481,7 @@ function interact() {
   // At home-time gates, Eric can choose an optional extra hour for computer gaming.
   const currentPeriod = schedule[game.periodIndex];
   const nearSchoolGate = player.x >= (schoolExit.x - 3.2) && player.y >= schoolExit.yMin && player.y <= schoolExit.yMax;
-  if (nearSchoolGate && currentPeriod.period === 'Home Time' && !game.choseToStayAfterSchool) {
+  if (nearSchoolGate && currentPeriod.period === 'Home Time' && !game.choseToStayAfterSchool && !game.autoMode) {
     game.choseToStayAfterSchool = true;
     game.stayingAfterSchoolUntil = game.timeMinutes + 60;
     announce(`🕹️ Eric chose to stay after school until ${formatTime(game.stayingAfterSchoolUntil)} for computer time.`, { force: true });
@@ -6872,7 +6947,7 @@ function chooseTarget(entity, currentPeriod) {
   // Lunch hall routine: all students head to the dining hall to eat during lunch service.
   if (isLunchtimePeriod(currentPeriod) && isStudentCharacter(entity)) {
     const layout = diningHallLayout();
-    return layout?.plateStand || roomCenter('Dining Hall');
+    return lunchPlateSpotForEntity(layout, entity) || layout?.plateStand || roomCenter('Dining Hall');
   }
 
   if (entity.role === 'teacher') {
@@ -7005,8 +7080,15 @@ function updateNpcVitals(entity, dt, isRunning) {
   const recoverPerSecond = NPC_LUNCH_RECOVER_PER_SECOND;
   const period = schedule[game.periodIndex];
   const isLunch = period.period === 'Lunch Break';
-  const inFoodZone = entityRoom(entity) === 'P.E. Field' || entityRoom(entity) === 'Reception';
-  const canRecoverFromMeal = period.mode === 'break' && isLunch && inFoodZone;
+  const inFoodZone = ['Dining Hall', 'P.E. Field', 'Reception', 'Kitchen'].includes(entityRoom(entity));
+  const canRecoverFromMeal = period.mode === 'break'
+    && isLunch
+    && (
+      inFoodZone
+      || entity.lunchState === 'eating'
+      || entity.lunchState === 'toSeat'
+      || entity.hasLunchPlate
+    );
   const studentSeatedRecovery = entity.role !== 'teacher' && entity.role !== 'janitor' && entity.role !== 'nurse' && entity.role !== 'dinnerLady'
     && entity.isSeated
     && !isLunch;
@@ -7254,12 +7336,13 @@ function updateAI(dt) {
         // Lunch routine: collect plate, queue for serving, then sit at a long table to eat.
         if (entity.lunchState === 'idle') {
           entity.lunchState = 'toPlate';
-          entity.target = layout.plateStand;
+          entity.target = lunchPlateSpotForEntity(layout, entity) || layout.plateStand;
         }
 
         if (entity.lunchState === 'toPlate') {
-          entity.target = layout.plateStand;
-          if (distance(entity, layout.plateStand) < 1.05) {
+          const plateSpot = lunchPlateSpotForEntity(layout, entity) || layout.plateStand;
+          entity.target = plateSpot;
+          if (distance(entity, plateSpot) < 0.78) {
             entity.hasLunchPlate = true;
             entity.lunchState = 'queue';
           }
@@ -7382,7 +7465,7 @@ function updateAI(dt) {
       // Registration keeps Eric's desk free most mornings; if not free, player can choose how to react.
       const reserveEricSeat = isRegistrationPeriod(current) && game.ericSeatReservedToday;
       const assignedSeat = getSeatPosition(entity.lessonRoom, entity.seatIndex, entity);
-      const usesEricSeat = isEricAssignedSeat(entity.lessonRoom, entity.seatIndex);
+      const usesEricSeat = isEricAssignedSeat(entity.lessonRoom, entity.seatIndex, entity);
       if (reserveEricSeat && usesEricSeat && entity !== player) {
         entity.target = nearestFreeSeatInRoom(entity.lessonRoom, entity) || roomCenter(entity.lessonRoom);
       } else {
@@ -7618,15 +7701,35 @@ function updateAI(dt) {
       }
     }
 
-    // Teacher discipline: if they catch player in wrong room, assign lines.
-    if (entity.role === 'teacher' && distance(entity, player) < 1.8 && entityRoom(player) !== current.room && supervised && teacherPresent && !isTeacherBackTurned(entity)) {
+    // Teacher discipline: one bunking penalty per monitored period is enough.
+    const bunkingPenaltyKey = `${game.dayCount}:${game.periodIndex}`;
+    const bunkingGraceWindow = game.periodElapsed < 4;
+    if (
+      entity.role === 'teacher'
+      && distance(entity, player) < 1.8
+      && entityRoom(player) !== current.room
+      && supervised
+      && teacherPresent
+      && !isTeacherBackTurned(entity)
+      && !bunkingGraceWindow
+      && game.lastBunkingPenaltyKey !== bunkingPenaltyKey
+    ) {
       addLines(40, `${entity.name} caught you bunking ${current.period}`);
+      game.lastBunkingPenaltyKey = bunkingPenaltyKey;
     }
 
     // Swot tattles if player is misbehaving nearby.
-    if (entity.profile.tattles && distance(entity, player) < 2 && game.rng() < (0.0012 + ((entity.traits?.honor || 40) / 50000)) && game.lines > 0) {
+    const canTattleOnEric = (performance.now() - (game.lastTattleOnEricAt || 0)) > 18000;
+    if (
+      entity.profile.tattles
+      && distance(entity, player) < 2
+      && game.rng() < (0.0012 + ((entity.traits?.honor || 40) / 50000))
+      && game.lines > 0
+      && canTattleOnEric
+    ) {
       addLines(10, `${entity.name} tattled`);
       announce(`📣 ${entity.name}: "Sir! Eric is being bad!"`, { source: entity, range: 7.5 });
+      game.lastTattleOnEricAt = performance.now();
     }
 
     // Bully behaviour is period-aware so mornings stay mostly calm.
@@ -7896,8 +7999,8 @@ function updateAI(dt) {
       continue;
     }
 
-    // Eric always reclaims his reserved seat if someone is in it.
-    if (inLesson && entity === player) {
+    // Auto mode should not pick classroom fights just because Eric's desk is occupied.
+    if (inLesson && entity === player && !game.autoMode) {
       const ericSeat = getSeatPosition(expectedRoom, player.seatIndex, player);
       const intruder = ericSeatOccupant(expectedRoom);
       if (ericSeat && intruder && distance(player, ericSeat) < 1.45 && distance(player, intruder) < 1.55) {
@@ -7959,18 +8062,34 @@ function updateAI(dt) {
 
     constrain(entity);
 
-    // Anti-stuck recovery: if a teacher is late and barely moving for several
-    // seconds, snap to a clean waypoint toward their expected room.
+    // Anti-stuck recovery: watch for general navigation stalls, not just lesson lateness,
+    // so break/lunch routing and off-wall recovery also self-heal.
     const moved = Math.hypot(entity.x - entity.lastX, entity.y - entity.lastY);
     entity.lastX = entity.x;
     entity.lastY = entity.y;
-    const farFromAssignedTarget = distance(entity, entity.target) > 1.6;
-    entity.stuckSeconds = (lateForClass && farFromAssignedTarget && moved < 0.06)
-      ? (entity.stuckSeconds + dtSeconds)
-      : Math.max(0, entity.stuckSeconds - (dtSeconds * 0.5));
+    const farFromAssignedTarget = !entity.target || distance(entity, entity.target) > 1.6;
+    const offWalkable = !isWalkablePoint(entity.x, entity.y);
+    const targetRoomNow = roomAtPosition(entity.target)?.name || null;
+    const needsTravelRecovery = farFromAssignedTarget
+      && !entity.isSeated
+      && (
+        lateForClass
+        || current.mode === 'break'
+        || current.mode === 'transition'
+        || current.mode === 'home'
+        || (targetRoomNow && entityRoom(entity) !== targetRoomNow)
+      );
+    if (offWalkable) {
+      entity.stuckSeconds += dtSeconds;
+    } else if (needsTravelRecovery && moved < 0.06) {
+      entity.stuckSeconds += dtSeconds;
+    } else {
+      entity.stuckSeconds = Math.max(0, entity.stuckSeconds - (dtSeconds * 0.5));
+    }
 
     // If routing fails for too long, teleport straight to destination.
-    if (entity.stuckSeconds > 3.2) {
+    const stuckRescueThreshold = offWalkable ? 1.2 : 3.2;
+    if (entity.stuckSeconds > stuckRescueThreshold) {
       const rescueTarget = entity.role === 'teacher'
         ? (getTeacherSeatPosition(expectedRoom) || entity.target)
         : (inLesson
@@ -10034,10 +10153,10 @@ function onCanvasClick(event) {
 // Main loop
 // -----------------------------------------------------------------------------
 let last = performance.now();
-function loop(now) {
-  const dt = Math.min(32, now - last);
-  last = now;
+let frameRequestId = 0;
+let manualStepMode = false;
 
+function updateFrame(now, dt) {
   if (game.endDaySequenceActive && now >= game.transitionUntil) {
     game.nightCutscenePlayedToday = true;
     game.dayCount += 1;
@@ -10095,7 +10214,9 @@ function loop(now) {
     recoverEnergy(dt / 1000);
     updateTodo();
   }
+}
 
+function renderFrame(now) {
   updateCamera();
 
   drawWorld();
@@ -10104,8 +10225,36 @@ function loop(now) {
   drawMiniMap();
   drawStatusOverlay();
   updateDayTransitionOverlay(now);
+}
 
-  requestAnimationFrame(loop);
+function runFrame(now, dt) {
+  updateFrame(now, dt);
+  renderFrame(now);
+}
+
+function loop(now) {
+  const dt = Math.min(32, now - last);
+  last = now;
+  runFrame(now, dt);
+
+  if (!manualStepMode) {
+    frameRequestId = requestAnimationFrame(loop);
+  } else {
+    frameRequestId = 0;
+  }
+}
+
+function startMainLoop() {
+  manualStepMode = false;
+  if (frameRequestId) cancelAnimationFrame(frameRequestId);
+  frameRequestId = 0;
+  last = performance.now();
+  frameRequestId = requestAnimationFrame(loop);
+}
+
+function stopMainLoop() {
+  if (frameRequestId) cancelAnimationFrame(frameRequestId);
+  frameRequestId = 0;
 }
 
 function togglePause() {
@@ -10280,7 +10429,7 @@ async function startGameFromSplash() {
     updateNameToggleButton();
     renderEventFeed();
     setStartupLoadingProgress(100, '🚪 School day ready. Opening campus…');
-    requestAnimationFrame(loop);
+    startMainLoop();
   } finally {
     hideStartupLoadingProgress();
     if (startGameBtn) {
@@ -10520,18 +10669,66 @@ if (Array.isArray(game.llm.manualModels) && game.llm.manualModels.length) {
 applyLlmUiState();
 refreshOllamaModels({ silent: true });
 
-// Lightweight debug hooks help automated validation without changing gameplay UI.
-window.__skoolDazeDebug = {
-  getState: () => ({
+function buildDebugState() {
+  const current = schedule[game.periodIndex];
+  const visibleEntities = game.entities
+    .filter((entity) => entity === player || isEntityVisibleToPlayer(entity, { margin: 0.8 }))
+    .map((entity) => ({
+      name: entity.name,
+      role: entity.role,
+      room: entityRoom(entity),
+      x: Number(entity.x.toFixed(2)),
+      y: Number(entity.y.toFixed(2)),
+      targetRoom: entity.target ? (roomAtPosition(entity.target)?.name || null) : null,
+      seated: Boolean(entity.isSeated),
+      seatedRoom: entity.seatedRoom || null,
+      speech: entity.speech?.until > performance.now() ? entity.speech.text : null,
+      thought: entity.thought?.until > performance.now() ? entity.thought.text : null,
+      energy: typeof entity.energy === 'number' ? Number(entity.energy.toFixed(1)) : null,
+    }));
+  const insideWalls = [player, ...game.entities]
+    .filter((entity) => entity && !isWalkablePoint(entity.x, entity.y))
+    .map((entity) => ({
+      name: entity.name,
+      room: entityRoom(entity),
+      x: Number(entity.x.toFixed(2)),
+      y: Number(entity.y.toFixed(2)),
+      targetRoom: entity.target ? (roomAtPosition(entity.target)?.name || null) : null,
+    }));
+  const seatedStudents = game.entities.filter((entity) => isStudentCharacter(entity) && entity.isSeated && entity.seatedRoom);
+  const seatBuckets = new Map();
+  const seatConflicts = [];
+  for (const entity of seatedStudents) {
+    const key = `${entity.seatedRoom}:${entity.x.toFixed(2)},${entity.y.toFixed(2)}`;
+    const existing = seatBuckets.get(key);
+    if (existing) {
+      seatConflicts.push([existing, entity.name, entity.seatedRoom]);
+    } else {
+      seatBuckets.set(key, entity.name);
+    }
+  }
+
+  return {
     time: game.timeMinutes,
-    period: schedule[game.periodIndex].period,
-    targetRoom: schedule[game.periodIndex].room,
+    timeLabel: formatTime(game.timeMinutes),
+    period: current.period,
+    targetRoom: current.room,
     playerRoom: entityRoom(player),
     playerSeated: player.isSeated,
+    player: {
+      x: Number(player.x.toFixed(2)),
+      y: Number(player.y.toFixed(2)),
+      vx: Number(player.vx.toFixed(2)),
+      vy: Number(player.vy.toFixed(2)),
+      energy: Number(game.energy.toFixed(1)),
+      bladder: Number(game.bladder.toFixed(1)),
+      hygiene: Number(game.hygiene.toFixed(1)),
+      autoMode: game.autoMode,
+    },
     lines: game.lines,
     collectables: game.collectables.map((c) => ({ name: c.name, x: c.x, y: c.y })),
     // Teacher status is exposed for automated movement/seating validation.
-    assignedTeacher: assignedTeacherForRoom(schedule[game.periodIndex].room),
+    assignedTeacher: assignedTeacherForRoom(current.room),
     teachers: game.entities
       .filter((entity) => entity.role === 'teacher')
       .map((entity) => ({
@@ -10545,7 +10742,59 @@ window.__skoolDazeDebug = {
         x: Number(entity.x.toFixed(2)),
         y: Number(entity.y.toFixed(2)),
       })),
-  }),
+    visibleEntities,
+    lunchStates: Object.fromEntries(['idle', 'toPlate', 'queue', 'beingServed', 'toSeat', 'eating', 'done']
+      .map((state) => [state, game.entities.filter((entity) => isStudentCharacter(entity) && entity.lunchState === state).length])),
+    issues: {
+      insideWalls,
+      seatConflicts,
+    },
+  };
+}
+
+function buildRenderableGameState() {
+  const debugState = buildDebugState();
+  return {
+    coordinateSystem: 'origin top-left; x increases right; y increases downward; world units match room layout coordinates',
+    clock: debugState.timeLabel,
+    period: debugState.period,
+    targetRoom: debugState.targetRoom,
+    player: {
+      room: debugState.playerRoom,
+      seated: debugState.playerSeated,
+      x: debugState.player.x,
+      y: debugState.player.y,
+      energy: debugState.player.energy,
+      bladder: debugState.player.bladder,
+      hygiene: debugState.player.hygiene,
+      autoMode: debugState.player.autoMode,
+      lines: debugState.lines,
+    },
+    visibleEntities: debugState.visibleEntities,
+    lunchStates: debugState.lunchStates,
+    issues: debugState.issues,
+  };
+}
+
+window.render_game_to_text = () => JSON.stringify(buildRenderableGameState());
+window.advanceTime = (ms = 1000 / 60) => {
+  const stepMs = 1000 / 60;
+  const totalMs = Math.max(stepMs, Number(ms) || stepMs);
+  const steps = Math.max(1, Math.round(totalMs / stepMs));
+  manualStepMode = true;
+  stopMainLoop();
+  for (let i = 0; i < steps; i += 1) {
+    const nextNow = last + stepMs;
+    updateFrame(nextNow, stepMs);
+    last = nextNow;
+  }
+  renderFrame(last);
+  return Promise.resolve(window.render_game_to_text());
+};
+
+// Lightweight debug hooks help automated validation without changing gameplay UI.
+window.__skoolDazeDebug = {
+  getState: () => buildDebugState(),
   setTimeScale: (value) => {
     if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
       game.timeScale = value;
@@ -10556,6 +10805,19 @@ window.__skoolDazeDebug = {
     game.idleMs = 0;
     updateAutoStatus();
   },
+  setPeriod: (value) => {
+    if (Number.isInteger(value) && value >= 0 && value < schedule.length) {
+      setPeriod(value);
+    }
+  },
+  stopLoop: () => {
+    manualStepMode = true;
+    stopMainLoop();
+  },
+  resumeLoop: () => {
+    startMainLoop();
+  },
+  step: (ms = 1000 / 60) => window.advanceTime(ms),
   // Test hook: place Eric directly for automated stuck-recovery checks.
   setPlayerPosition: (x, y) => {
     if (Number.isFinite(x) && Number.isFinite(y)) {

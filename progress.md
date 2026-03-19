@@ -1,0 +1,27 @@
+Original prompt: can you take a look, there's various bugs currently; Eric runs faster than the other boys in auto, the npcs run out of energy too quickly, NPCs and Eric in auto mode get stuck in walls and go to strange places, during lesson some npcs sit in the same chair, this shouldnt be possible, during lunch they all go to the field and group up on a certain spot (i think they might be using a vending machine). Sometimes the speech bubbles dont show up. Please improve the AI guidance
+
+- Loaded the `develop-web-game` skill and inspected the single-file gameplay logic in `game.js`.
+- Confirmed an immediate lunch-flow bug: `diningHallLayout()` constructs the layout object but never returns it, so lunch-specific routing/seating falls back to generic break behavior.
+- Identified likely hotspots for the remaining issues: auto-mode speed parity, NPC energy drain/recovery, route waypointing and stuck recovery, chair occupancy/reservation, and dialogue visibility/delivery throttles.
+- Patched lunch guidance so the dining hall layout is returned, lunch pickup uses deterministic plate slots instead of one shared tile, and lunch targeting stays in the dining hall instead of drifting to generic break behavior.
+- Patched classroom seating so active rosters map students to unique seat positions per room, and in-flight seat targets now reserve chairs before students finish sitting down.
+- Patched AI guidance so auto mode uses student crowd speed rather than Eric's faster player stat, stair routing scores by onward destination instead of pure nearest-stair distance, and stuck recovery now catches off-walkable NPCs plus more non-lesson travel stalls.
+- Patched dialogue reliability so forced speech/thought can bypass the global chatter limiter and off-screen visibility guard, which keeps important bubbles from being swallowed during camera/teleport edge cases.
+- Tuned NPC stamina so passive/running drain is lighter and lunch recovery now applies in the dining hall/kitchen as well as legacy food zones.
+- Verification:
+  - `node --check game.js` passes.
+  - Direct Playwright probes show Eric now routes toward the central ground-floor stairs for Science Lab from the field, lesson rosters have zero duplicate seat positions across active rooms, forced teacher speech delivers, and lunch stays in the dining hall with students progressing through `toPlate`/`queue` states instead of heading to the field.
+  - Web-game client smoke run completed successfully and produced `output/web-game/shot-0.png` with no captured console error file.
+- Follow-up regression work for "fully test the game and make sure nothing weird happens":
+  - Reproduced and cleared several false-negative control tests by driving the browser directly: stairs, doors, sitting, melee, and catapult all work when positioned on valid interaction points.
+  - Found a real auto-mode discipline bug: multiple teachers could stack the same bunking penalty in one period. Patched this to one bunking penalty per monitored period with a grace window.
+  - Patched auto Eric so he no longer auto-fights over his assigned seat, can use a free fallback seat in class, and no longer accidentally opts into the optional after-school computer hour at the gates.
+  - Fixed seat reservation to count the player too, so NPCs no longer treat Eric's occupied/targeted seat as free.
+  - Fixed a class-question penalty bug where Eric was getting lines for other students answering incorrectly.
+  - Throttled tattling so students cannot spam repeated line penalties every few seconds once Eric already has trouble.
+  - Tightened off-walkable rescue so wall-clipped NPCs accumulate stuck time immediately instead of only when almost stationary.
+- Final verification:
+  - `node --check game.js` still passes after the regression fixes.
+  - A deterministic full-day auto-mode smoke run finished with no captured `insideWalls` or seat-conflict anomalies, visible speech samples throughout the day, lunch peaking at 28 students in the dining hall vs 7 in the field, and Eric ending the run on 50 lines instead of the earlier 650+ runaway case.
+  - Additional visual checkpoints were saved to `output/playwright/registration.png`, `output/playwright/lunch.png`, and `output/playwright/lesson5.png`; lunch now clusters around the dining hall service flow rather than the old field vending hotspot, and lesson seating looked visually de-conflicted.
+  - Extra fairness patch: when another pupil attacks Eric during break/home time and a teacher witnesses it, staff now punish the aggressor instead of sending Eric to the Headmaster for "fighting in class."
