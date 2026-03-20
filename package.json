@@ -1,0 +1,22 @@
+{
+  "name": "bellbound-academy",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Bellbound Academy web shell and Android wrapper tooling.",
+  "scripts": {
+    "build:web": "node scripts/build-web.mjs",
+    "serve:dist": "npx http-server dist -p 4173 -c-1",
+    "android:sync": "npm run build:web && npx cap sync android",
+    "android:open": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.2.0",
+    "@capacitor/cli": "^8.2.0",
+    "@capacitor/core": "^8.2.0",
+    "http-server": "^14.1.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.58.2",
+    "typescript": "^5.9.3"
+  }
+}

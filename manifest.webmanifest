@@ -1,0 +1,25 @@
+{
+  "name": "Bellbound Academy",
+  "short_name": "Bellbound",
+  "description": "A real-time school-life sim with lessons, lunch, social AI, and a full bell-driven day.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#0b0f17",
+  "theme_color": "#102640",
+  "icons": [
+    {
+      "src": "./app-icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./app-icons/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

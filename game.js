@@ -29,6 +29,7 @@ const closeTodoDialogBtn = document.getElementById('closeTodoDialog');
 const helpDialog = document.getElementById('helpDialog');
 const helpBtn = document.getElementById('helpBtn');
 const pauseBtn = document.getElementById('pauseBtn');
+const fullscreenBtn = document.getElementById('fullscreenBtn');
 const toggleNamesBtn = document.getElementById('toggleNamesBtn');
 const entityTooltipEl = document.getElementById('entityTooltip');
 const interactionPanelEl = document.getElementById('interactionPanel');
@@ -57,6 +58,9 @@ const startupLoadingBarEl = document.getElementById('startupLoadingBar');
 const openSplashSettingsBtn = document.getElementById('openSplashSettings');
 const splashSettingsDialog = document.getElementById('splashSettingsDialog');
 const closeSplashSettingsBtn = document.getElementById('closeSplashSettings');
+const touchControlsEl = document.getElementById('touchControls');
+const touchHintEl = document.getElementById('touchHint');
+const touchControlButtons = Array.from(document.querySelectorAll('[data-touch-control]'));
 const optStudentCountEl = document.getElementById('optStudentCount');
 const optTeacherCountEl = document.getElementById('optTeacherCount');
 const optRatioBullyEl = document.getElementById('optRatioBully');
@@ -104,6 +108,11 @@ if (closeTodoDialogBtn && todoDialog) {
 // Large campus coordinate space. We now render through a camera window so
 // players can scroll through multiple levels and corridors.
 const WORLD = { w: 170, h: 140 };
+const APP_NAME = 'Bellbound Academy';
+const PLAYER_DISPLAY_NAME = 'Alex';
+const TOUCH_CONTROL_MEDIA_QUERY = '(pointer: coarse), (max-width: 900px)';
+const touchControlReleaseTimers = new Map();
+const touchControlHeldKeys = new Set();
 
 // Camera view keeps the same aspect ratio as the canvas while following Eric.
 const CAMERA = { w: 72, h: 40, x: 0, y: 0 };
@@ -137,6 +146,12 @@ function hexToRgba(hex, alpha = 1) {
   const g = (value >> 8) & 255;
   const b = value & 255;
   return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function playerFacingText(text) {
+  return String(text ?? '')
+    .replace(/\bSkool Daze Tribute\b/g, APP_NAME)
+    .replace(/\bEric\b/g, PLAYER_DISPLAY_NAME);
 }
 
 const rooms = [
@@ -1556,11 +1571,11 @@ const LLM_MAX_TIMEOUT_MS = 30000;
 const LLM_MAX_INFLIGHT = 20;
 const LLM_MIN_INFLIGHT = 2;
 const LLM_MAX_INFLIGHT_LIMIT = 40;
-const LLM_STORAGE_KEY = 'skooldaze.llm.settings.v1';
-const SPLASH_STORAGE_KEY = 'skooldaze.splash.settings.v1';
+const LLM_STORAGE_KEY = 'bellboundacademy.llm.settings.v1';
+const SPLASH_STORAGE_KEY = 'bellboundacademy.splash.settings.v1';
 
 const LLM_GAME_PRIMER = [
-  'You are the text engine for Skool Daze Tribute, a real-time British school simulation game.',
+  `You are the text engine for ${APP_NAME}, a real-time British school simulation game.`,
   'Core channels: speech bubbles, thought bubbles, public announcements, and quiz JSON content.',
   'Output must be fast, concise, and safe to parse: no markdown wrappers, no roleplay preambles.',
   'Speech/thought should stay under 14 words and preserve NPC personality from provided traits.',
@@ -1574,7 +1589,7 @@ const LLM_GAME_PRIMER = [
 const OPENAI_OAUTH_AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize';
 const OPENAI_OAUTH_CLIENT_ID = 'codex-web';
 const OPENAI_OAUTH_SCOPES = 'openid profile offline_access';
-const OPENAI_OAUTH_STATE_KEY = 'skooldaze.openai.oauth.state';
+const OPENAI_OAUTH_STATE_KEY = 'bellboundacademy.openai.oauth.state';
 
 function setLlmStatus(text, isError = false) {
   if (!optLlmStatusEl) return;
@@ -3003,9 +3018,9 @@ function mkEntity(name, role, x, y, color, traits = {}) {
   return entity;
 }
 
-const player = mkEntity('Eric', 'player', 48, 64, '#ffe04d', {
+const player = mkEntity(PLAYER_DISPLAY_NAME, 'player', 48, 64, '#ffe04d', {
   title: 'Troublemaker with potential',
-  // Keep Eric's baseline identity stable even when intake options are adjusted.
+  // Keep Alex's baseline identity stable even when intake options are adjusted.
   sex: 'male',
   prefers: ['P.E. Field'],
   quotes: ['Not me, sir!', 'I was only looking!'],
@@ -5080,6 +5095,7 @@ function rememberClassroomCallout(roomName, text, now = performance.now()) {
 
 function say(entity, text, opts = {}) {
   if (!entity || !text) return;
+  const localizedText = playerFacingText(text);
   const now = performance.now();
   // Keep off-screen NPCs silent to reduce LLM queue pressure and maintain local readability.
   if (entity.role !== 'player' && !opts.force && !isEntityVisibleToPlayer(entity) && !opts.allowOffscreenSpeech) return;
@@ -5108,7 +5124,7 @@ function say(entity, text, opts = {}) {
     addresseeSex: addressee?.sex || '',
     conversationContext: threadContext,
     conversationTurn: threadTurn,
-    fallback: String(text),
+    fallback: String(localizedText),
   };
 
   // Some lines (like registration roll call) must stay deterministic for gameplay clarity.
@@ -5117,7 +5133,7 @@ function say(entity, text, opts = {}) {
   const shouldDefer = allowLlmRewrite && llmModeEnabled() && (game.llm.noFallback || opts.force !== true);
   const spokenText = allowLlmRewrite
     ? resolveLlmText(payload, { allowFallback: !shouldDefer })
-    : sanitizeLlmLine(text, '...');
+    : sanitizeLlmLine(localizedText, '...');
   if (allowLlmRewrite && !spokenText && shouldDefer) {
     const pendingKey = entity.pendingSpeech ? llmCacheKey(entity.pendingSpeech.payload) : '';
     const requestKey = llmCacheKey(payload);
@@ -5132,11 +5148,12 @@ function say(entity, text, opts = {}) {
     return;
   }
 
-  deliverResolvedSpeech(entity, spokenText || String(text), addressee, opts, now);
+  deliverResolvedSpeech(entity, spokenText || String(localizedText), addressee, opts, now);
 }
 
 function think(entity, text, durationMs = 3200, opts = {}) {
   if (!entity || !text) return;
+  const localizedText = playerFacingText(text);
   const now = performance.now();
   if (entity.role !== 'player' && !opts.force && !isEntityVisibleToPlayer(entity) && !opts.allowOffscreenSpeech) return;
   if (!canUseDialogue(entity, now, 'thought')) return;
@@ -5153,7 +5170,7 @@ function think(entity, text, durationMs = 3200, opts = {}) {
     addresseeName: '',
     addresseeRole: '',
     addresseeSex: '',
-    fallback: String(text),
+    fallback: String(localizedText),
   };
   const shouldDefer = llmModeEnabled() && game.llm.noFallback;
   const thoughtText = resolveLlmText(payload, { allowFallback: !shouldDefer });
@@ -5169,7 +5186,7 @@ function think(entity, text, durationMs = 3200, opts = {}) {
     };
     return;
   }
-  deliverResolvedThought(entity, thoughtText || String(text), durationMs, opts, now);
+  deliverResolvedThought(entity, thoughtText || String(localizedText), durationMs, opts, now);
 }
 
 function chooseTradeItemsWithLlm(actor, partner) {
@@ -5436,7 +5453,7 @@ function renderEventFeed() {
 }
 
 function pushFeedEvent(message, type = 'action', timeMins = game.timeMinutes) {
-  const safeMessage = sanitizeLlmLine(message, '…');
+  const safeMessage = sanitizeLlmLine(playerFacingText(message), '…');
   game.eventLog.unshift({ message: safeMessage, type, time: formatTime(timeMins) });
   game.eventLog = game.eventLog.slice(0, 64);
   renderEventFeed();
@@ -5455,6 +5472,7 @@ function announce(message, options = {}) {
 
   // Speech-style events can be local so the feed reflects what Eric can realistically hear.
   if (!force && source && !canPlayerHearSpeaker(source, range)) return;
+  const localizedMessage = playerFacingText(message);
   const finalMessage = resolveLlmText({
     channel: source ? 'speech' : 'announcement',
     subject: source ? roomSubjectName(entityRoom(source)) : roomSubjectName(schedule[game.periodIndex]?.room),
@@ -5463,9 +5481,9 @@ function announce(message, options = {}) {
     speakerSex: source?.sex || 'unspecified',
     traitSummary: source ? summarizeTraitBundle(source.traits) : 'neutral',
     room: source ? entityRoom(source) : (schedule[game.periodIndex]?.room || 'School'),
-    fallback: String(message),
+    fallback: String(localizedMessage),
   });
-  const safeMessage = sanitizeLlmLine(finalMessage, String(message));
+  const safeMessage = sanitizeLlmLine(finalMessage, String(localizedMessage));
 
   if (source) {
     const spoken = safeMessage.replace(/^.*?:\s*"?/, '').replace(/"$/, '').trim();
@@ -11308,14 +11326,124 @@ function togglePause() {
   pauseBtn.textContent = game.paused ? '▶️' : '⏸️';
 }
 
+function toggleAutoMode(source = 'key') {
+  game.autoMode = !game.autoMode;
+  game.idleMs = 0;
+  updateAutoStatus();
+  announce(`🤖 Auto mode ${game.autoMode ? 'enabled' : 'disabled'} by ${source}.`);
+  updateTodo();
+}
+
+function setVirtualKeyState(key, pressed) {
+  if (!key) return;
+  game.keys[key] = pressed;
+  game.keys[String(key).toLowerCase()] = pressed;
+  if (!pressed) touchControlHeldKeys.delete(key);
+}
+
+function releaseAllTouchControls() {
+  for (const timer of touchControlReleaseTimers.values()) clearTimeout(timer);
+  touchControlReleaseTimers.clear();
+  for (const key of Array.from(touchControlHeldKeys)) {
+    setVirtualKeyState(key, false);
+  }
+  for (const button of touchControlButtons) button.classList.remove('is-pressed');
+}
+
+function pulseVirtualKey(key, durationMs = 110) {
+  if (!key) return;
+  const existingTimer = touchControlReleaseTimers.get(key);
+  if (existingTimer) clearTimeout(existingTimer);
+  setVirtualKeyState(key, true);
+  const nextTimer = setTimeout(() => {
+    setVirtualKeyState(key, false);
+    touchControlReleaseTimers.delete(key);
+  }, durationMs);
+  touchControlReleaseTimers.set(key, nextTimer);
+}
+
+function updateTouchControlsVisibility() {
+  if (!touchControlsEl) return;
+  const shouldShow = window.matchMedia(TOUCH_CONTROL_MEDIA_QUERY).matches;
+  touchControlsEl.hidden = !shouldShow;
+  if (touchHintEl) touchHintEl.hidden = !shouldShow;
+  document.body.classList.toggle('touch-controls-active', shouldShow);
+  if (!shouldShow) releaseAllTouchControls();
+}
+
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+    } else {
+      await document.documentElement.requestFullscreen();
+    }
+  } catch (error) {
+    console.warn('Fullscreen toggle failed.', error);
+  }
+}
+
+function updateFullscreenButton() {
+  if (!fullscreenBtn) return;
+  const active = Boolean(document.fullscreenElement);
+  fullscreenBtn.textContent = active ? '🗗' : '⛶';
+  fullscreenBtn.setAttribute('aria-pressed', String(active));
+}
+
+function bindTouchControls() {
+  if (!touchControlButtons.length) return;
+  for (const button of touchControlButtons) {
+    let activePointerId = null;
+    const hold = button.dataset.hold === 'true';
+    const key = button.dataset.key || '';
+    const action = button.dataset.action || '';
+
+    const press = (event) => {
+      event.preventDefault();
+      button.classList.add('is-pressed');
+      activePointerId = event.pointerId ?? 'touch';
+      if (key) {
+        if (hold) {
+          touchControlHeldKeys.add(key);
+          setVirtualKeyState(key, true);
+        } else {
+          pulseVirtualKey(key);
+        }
+      } else if (action === 'toggle-auto') {
+        toggleAutoMode('touch');
+      } else if (action === 'pause') {
+        togglePause();
+      } else if (action === 'help') {
+        helpDialog?.showModal();
+      } else if (action === 'fullscreen') {
+        toggleFullscreen();
+      }
+    };
+
+    const release = (event) => {
+      if (event?.pointerId != null && activePointerId != null && event.pointerId !== activePointerId) return;
+      if (event) event.preventDefault();
+      button.classList.remove('is-pressed');
+      if (hold && key) setVirtualKeyState(key, false);
+      activePointerId = null;
+    };
+
+    button.addEventListener('pointerdown', press);
+    button.addEventListener('pointerup', release);
+    button.addEventListener('pointercancel', release);
+    button.addEventListener('pointerleave', (event) => {
+      if (hold && activePointerId != null) release(event);
+    });
+  }
+}
+
 window.addEventListener('keydown', (event) => {
   if (event.key.toLowerCase() === 'p') togglePause();
-  if (event.key.toLowerCase() === 'u') {
-    game.autoMode = !game.autoMode;
-    game.idleMs = 0;
-    updateAutoStatus();
-    announce(`🤖 Auto mode ${game.autoMode ? 'enabled' : 'disabled'} by key.`);
-    updateTodo();
+  if (event.key.toLowerCase() === 'u') toggleAutoMode('key');
+  if (event.key.toLowerCase() === 'f') {
+    event.preventDefault();
+    toggleFullscreen();
+    return;
   }
   game.keys[event.key] = true;
   game.keys[event.key.toLowerCase()] = true;
@@ -11327,6 +11455,7 @@ window.addEventListener('keyup', (event) => {
 });
 
 pauseBtn.onclick = togglePause;
+if (fullscreenBtn) fullscreenBtn.onclick = () => toggleFullscreen();
 
 if (filterActionsEl) {
   filterActionsEl.addEventListener('change', () => {
@@ -11369,6 +11498,7 @@ closeInteractionPanelBtn.onclick = () => {
 function closeTransientMenus() {
   // Keep floating overlays in sync with browser chrome focus changes so
   // auxiliary menus never linger after their parent bar/dialog is dismissed.
+  releaseAllTouchControls();
   if (interactionPanelEl) interactionPanelEl.hidden = true;
   game.selectedInteractionTarget = null;
   if (entityTooltipEl) entityTooltipEl.hidden = true;
@@ -11382,11 +11512,17 @@ window.addEventListener('blur', closeTransientMenus);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') closeTransientMenus();
 });
+document.addEventListener('fullscreenchange', updateFullscreenButton);
+window.addEventListener('resize', updateTouchControlsVisibility);
+window.matchMedia(TOUCH_CONTROL_MEDIA_QUERY).addEventListener('change', updateTouchControlsVisibility);
 
 
 if (openSplashSettingsBtn && splashSettingsDialog) {
   openSplashSettingsBtn.addEventListener('click', () => splashSettingsDialog.showModal());
 }
+bindTouchControls();
+updateTouchControlsVisibility();
+updateFullscreenButton();
 
 function syncGirlsRatioOptionState() {
   if (!optGirlsRatioEl || !optSchoolIntakeEl) return;

@@ -20,6 +20,7 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
 .topbar {
@@ -265,6 +266,92 @@ canvas {
   border-radius: 8px;
   display: block;
   image-rendering: pixelated;
+  touch-action: none;
+}
+
+.touch-controls {
+  position: absolute;
+  left: 0.75rem;
+  right: 0.75rem;
+  bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 0.9rem;
+  z-index: 48;
+  pointer-events: none;
+}
+
+.touch-controls[hidden] {
+  display: none !important;
+}
+
+.touch-pad,
+.touch-actions {
+  pointer-events: auto;
+}
+
+.touch-pad {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(3.2rem, 4.2rem));
+  grid-template-areas:
+    ". up run"
+    "left down right";
+  gap: 0.42rem;
+  align-items: center;
+}
+
+.touch-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(3.1rem, 4.4rem));
+  gap: 0.42rem;
+}
+
+.touch-btn {
+  min-height: 3rem;
+  border: 1px solid rgba(163, 210, 255, 0.7);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(12, 31, 57, 0.94), rgba(9, 21, 40, 0.94));
+  color: #eef7ff;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(8px);
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.touch-btn:active,
+.touch-btn.is-pressed {
+  transform: translateY(1px) scale(0.985);
+  background: linear-gradient(180deg, rgba(20, 58, 101, 0.96), rgba(14, 35, 64, 0.96));
+  border-color: #9dd8ff;
+}
+
+.touch-btn-up { grid-area: up; }
+.touch-btn-left { grid-area: left; }
+.touch-btn-down { grid-area: down; }
+.touch-btn-right { grid-area: right; }
+.touch-btn-run { grid-area: run; font-size: 0.78rem; }
+.touch-btn-primary { border-color: rgba(255, 221, 141, 0.8); }
+
+.touch-hint {
+  position: absolute;
+  left: 0.95rem;
+  top: 0.85rem;
+  z-index: 46;
+  margin: 0;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid rgba(140, 198, 255, 0.62);
+  border-radius: 999px;
+  background: rgba(10, 22, 40, 0.78);
+  color: #d7edff;
+  font-size: 0.68rem;
+  letter-spacing: 0.01em;
+}
+
+.touch-hint[hidden] {
+  display: none !important;
 }
 
 
@@ -529,6 +616,60 @@ dialog h3 {
   body { overflow: auto; }
   main { grid-template-columns: 1fr; }
   .panel { max-height: none; overflow: visible; }
+}
+
+@media (max-width: 900px) {
+  .topbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .topbar h1 {
+    max-width: none;
+    font-size: 1rem;
+  }
+
+  .top-controls {
+    flex-wrap: wrap;
+  }
+
+  main {
+    gap: 0.75rem;
+    padding: 0.7rem;
+  }
+
+  .canvas-wrap {
+    padding: 0.35rem;
+  }
+
+  .touch-actions {
+    grid-template-columns: repeat(4, minmax(2.8rem, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .start-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .touch-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .touch-pad {
+    justify-content: start;
+  }
+
+  .touch-actions {
+    grid-template-columns: repeat(4, minmax(2.65rem, 1fr));
+  }
+
+  .touch-btn {
+    min-height: 2.7rem;
+    border-radius: 12px;
+    font-size: 0.76rem;
+  }
 }
 
 

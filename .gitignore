@@ -1,2 +1,9 @@
 .playwright-cli/
 output/
+dist/
+node_modules/
+android/.gradle/
+android/local.properties
+android/key.properties
+android/*.jks
+android/*.keystore

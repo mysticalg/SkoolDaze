@@ -3,19 +3,26 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Skool Daze Tribute (HTML5)</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext x='8' y='12' text-anchor='middle' font-size='12'%3E%F0%9F%8F%AB%3C/text%3E%3C/svg%3E" />
+  <title>Bellbound Academy</title>
+  <meta name="theme-color" content="#102640" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Bellbound Academy" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="app-icons/icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <section id="startOverlay" class="start-overlay" aria-live="polite">
     <div class="start-card">
-      <h2>🏫 Skool Daze Tribute</h2>
-      <p class="start-subtitle">Set up your school day, then hit start.</p>
-      <p class="todo-help">⚙️ All startup options now live in the Settings popup so the splash screen stays clean and fast.</p>
+      <h2>🏫 Bellbound Academy</h2>
+      <p class="start-subtitle">Set up the day, then step into a lively school sim built for desktop and mobile play.</p>
+      <p class="todo-help">⚙️ Startup options live in Settings so the splash screen stays quick, touch-friendly, and store-ready.</p>
 
       <div class="splash-actions">
         <button id="openSplashSettings" class="secondary-btn splash-settings-btn" type="button" title="Open startup settings window">⚙️ Open Settings</button>
+        <button id="installAppBtn" class="secondary-btn splash-settings-btn" type="button" title="Install Bellbound Academy on this device" hidden>📲 Install App</button>
         <button id="startGameBtn" class="start-btn" type="button" title="Start the school day with current settings">▶️ Start school day</button>
       </div>
       <div id="startupLoading" class="startup-loading" hidden aria-live="polite" aria-label="Startup loading progress">
@@ -80,15 +87,11 @@
           <label title="Chaotic students with odd routines.">🌀 Weird <input id="optRatioWeird" type="number" min="0" max="100" value="25" /></label>
         </div>
 
-        <h3>🤖 AI Dialogue Engine</h3>
+        <h3>🧠 AI Dialogue Engine</h3>
         <div class="start-grid llm-grid">
           <label class="llm-toggle" title="Enable to generate classroom chatter and prompts from an AI model.">
             🧠 Enable LLM mode
             <input id="optLlmEnabled" type="checkbox" />
-          </label>
-          <label class="llm-toggle" title="When enabled, local AI prompts allow uncensored, explicit, vulgar, and offensive language styles.">
-            🔞 NSFW / uncensored style
-            <input id="optLlmNsfw" type="checkbox" />
           </label>
           <label class="llm-toggle" title="When enabled, NPC speech/thought waits for model output and does not use built-in fallback lines.">
             🧵 No fallback (LLM-only dialogue)
@@ -97,12 +100,6 @@
           <label class="llm-toggle" title="When enabled, world preload asks the LLM to rename NPCs using each character's role, sex, and trait profile.">
             🏷️ LLM-picked NPC names
             <input id="optLlmNpcNames" type="checkbox" checked />
-          </label>
-          <label title="Use local Ollama models or remote cloud providers.">🌐 LLM source
-            <select id="optLlmSource" disabled>
-              <option value="local" selected>Local (Ollama)</option>
-              <option value="remote">Remote (Cloud API)</option>
-            </select>
           </label>
           <label title="Extra instruction prepended to AI prompts. Keep short for speed.">🧩 AI pre-prompt
             <textarea id="optLlmPrePrompt" rows="2" placeholder="Example: Keep dialogue witty, concise, and Yorkshire-accented where natural." disabled></textarea>
@@ -133,27 +130,12 @@
               <option value="40">XXL (40)</option>
             </select>
           </label>
-          <label title="Choose your remote provider when cloud mode is active.">☁️ Remote provider
-            <select id="optLlmRemoteProvider" disabled>
-              <option value="openai" selected>OpenAI</option>
-              <option value="grok">Grok (xAI)</option>
-            </select>
-          </label>
-          <label title="Model name for cloud provider (example: gpt-4.1-mini or grok-2-latest).">🧾 Remote model
-            <input id="optLlmRemoteModel" type="text" placeholder="gpt-4.1-mini" disabled />
-          </label>
-          <label title="Remote API bearer token. OpenAI can be filled automatically by OAuth sign-in.">🔑 Remote token
-            <input id="optLlmRemoteToken" type="password" placeholder="Paste token or use OpenAI sign-in" disabled autocomplete="off" />
-          </label>
         </div>
-        <p class="todo-help">📝 NSFW mode only changes AI prompt style guidance; generated text still depends on your chosen model.</p>
+        <p class="todo-help">📝 Release-safe default: AI tooling stays local-first, concise, and optional.</p>
         <div class="llm-actions llm-actions-wrap">
           <button id="optLlmRefreshModels" type="button" class="secondary-btn" title="Refresh model list from Ollama">🔄 Refresh models</button>
           <button id="optLlmImportModels" type="button" class="secondary-btn" title="Paste output from 'ollama list' to import model names when browser API access is blocked">📋 Import ollama list</button>
-          <button id="optLlmOpenAiAuth" type="button" class="secondary-btn" title="Sign in with OpenAI OAuth in this same browser tab and save token for API calls" disabled>🔐 Sign in OpenAI (this tab)</button>
-          <button id="optLlmClearToken" type="button" class="secondary-btn" title="Clear saved cloud token from this browser" disabled>🧹 Clear token</button>
         </div>
-        <p id="optLlmTokenStatus" class="todo-help" aria-live="polite">🔒 No remote token saved.</p>
         <p id="optLlmStatus" class="todo-help" aria-live="polite">ℹ️ LLM mode uses default game text until AI replies are ready.</p>
 
         <div class="settings-footer-actions">
@@ -164,7 +146,7 @@
   </section>
 
   <header class="topbar">
-    <h1>🏫 Skool Daze Tribute</h1>
+    <h1>🏫 Bellbound Academy</h1>
     <div class="hud" aria-live="polite">
       <span id="clock">🕘 Time: 08:00</span>
       <span class="floor-clock-group" title="Day + bell schedule status.">
@@ -176,7 +158,7 @@
       <span id="trouble">📝 Lines: 0</span>
       <span id="energy">⚡ Energy: 100</span>
       <span id="charisma" title="Higher charisma helps social interactions land better.">🗣️ Charisma: 50</span>
-      <span id="bladder" title="If this reaches full, Eric must reach the toilet quickly.">🚻 Bladder: 0%</span>
+      <span id="bladder" title="If this reaches full, Alex must reach the toilet quickly.">🚻 Bladder: 0%</span>
       <span id="hygiene" title="Low hygiene causes social shaming from students and staff.">🧼 Hygiene: 100%</span>
       <span id="autoStatus" title="Auto mode can be toggled with U or engages after idle time.">🤖 Auto: OFF</span>
       <span id="weather" title="Weekly weather affects outside visuals and student behaviour.">🌤️ Weather: Sunny</span>
@@ -185,6 +167,7 @@
     </div>
     <div class="top-controls">
       <button id="pauseBtn" class="control" title="Pause or resume game">⏯️</button>
+      <button id="fullscreenBtn" class="control" title="Toggle fullscreen view" aria-label="Toggle fullscreen">⛶</button>
       <button id="helpBtn" class="control" title="Open controls and tips" aria-label="Help">❔</button>
       <button id="toggleNamesBtn" class="control" title="Toggle NPC name labels so bars are easier to read" aria-label="Toggle NPC names">🏷️ Names: ON</button>
     </div>
@@ -194,6 +177,26 @@
     <!-- Keep gameplay hints in Help so all player-facing guidance is found in one consistent location. -->
     <section class="canvas-wrap">
       <canvas id="game" width="1280" height="700" aria-label="School game area"></canvas>
+      <section id="touchControls" class="touch-controls" hidden aria-label="Touch controls">
+        <div class="touch-pad">
+          <button type="button" class="touch-btn touch-btn-up" data-touch-control="move" data-key="ArrowUp" data-hold="true" aria-label="Move up">▲</button>
+          <button type="button" class="touch-btn touch-btn-run" data-touch-control="move" data-key="r" data-hold="true" aria-label="Run">RUN</button>
+          <button type="button" class="touch-btn touch-btn-left" data-touch-control="move" data-key="ArrowLeft" data-hold="true" aria-label="Move left">◀</button>
+          <button type="button" class="touch-btn touch-btn-down" data-touch-control="move" data-key="ArrowDown" data-hold="true" aria-label="Move down">▼</button>
+          <button type="button" class="touch-btn touch-btn-right" data-touch-control="move" data-key="ArrowRight" data-hold="true" aria-label="Move right">▶</button>
+        </div>
+        <div class="touch-actions">
+          <button type="button" class="touch-btn touch-btn-primary" data-touch-control="action" data-key="e" aria-label="Interact or use">Use</button>
+          <button type="button" class="touch-btn" data-touch-control="action" data-key="q" aria-label="Sit or stand">Sit</button>
+          <button type="button" class="touch-btn" data-touch-control="action" data-key="z" aria-label="Punch">Hit</button>
+          <button type="button" class="touch-btn" data-touch-control="action" data-key="x" aria-label="Fire catapult">Prank</button>
+          <button type="button" class="touch-btn" data-touch-control="action" data-key="t" aria-label="Trade">Trade</button>
+          <button type="button" class="touch-btn" data-touch-control="action" data-key="v" aria-label="Throw item or rubbish">Throw</button>
+          <button type="button" class="touch-btn" data-touch-control="system" data-action="toggle-auto" aria-label="Toggle auto mode">Auto</button>
+          <button type="button" class="touch-btn" data-touch-control="system" data-action="pause" aria-label="Pause the game">Pause</button>
+        </div>
+      </section>
+      <p id="touchHint" class="touch-hint" hidden>Touch controls are active on this device.</p>
       <div id="dayTransitionOverlay" class="day-transition-overlay" aria-live="polite" hidden>
         <div class="day-transition-card">
           <h3 id="dayTransitionTitle">🌙 Night falls</h3>
@@ -254,7 +257,7 @@
 
       <h2>Legend</h2>
       <ul>
-        <li><span class="dot player"></span> Eric (you)</li>
+        <li><span class="dot player"></span> Alex (you)</li>
         <li><span class="dot teacher"></span> Teachers</li>
         <li><span class="dot bully"></span> Bully</li>
         <li><span class="dot swot"></span> Swot</li>
@@ -268,28 +271,29 @@
   </main>
 
   <dialog id="helpDialog">
-    <h2>How this tribute works</h2>
+    <h2>How Bellbound Academy works</h2>
     <!-- Keep controls and character legend together so players can learn from one place. -->
     <h3>🎮 Controls</h3>
     <ul class="help-controls">
-      <li title="Move around rooms and corridors."><strong>🧭 Move:</strong> Arrow Keys / WASD</li>
-      <li title="Close range punch."><strong>👊 Punch:</strong> Z</li>
-      <li title="Long range projectile prank."><strong>🎯 Catapult:</strong> X</li>
-      <li title="Use nearby doors and stairs, plus read boards, fountains, and shield pickups."><strong>🚪 Interact:</strong> E (doors + stairs)</li>
-      <li title="Sit in the nearest classroom chair, press again to stand."><strong>🪑 Sit / Stand:</strong> Q</li>
+      <li title="Move around rooms and corridors."><strong>🧭 Move:</strong> Arrow Keys / WASD or on-screen touch pad</li>
+      <li title="Close range punch."><strong>👊 Punch:</strong> Z or Hit</li>
+      <li title="Long range projectile prank."><strong>🎯 Catapult:</strong> X or Prank</li>
+      <li title="Use nearby doors and stairs, plus read boards, fountains, and shield pickups."><strong>🚪 Interact:</strong> E or Use</li>
+      <li title="Sit in the nearest classroom chair, press again to stand."><strong>🪑 Sit / Stand:</strong> Q or Sit</li>
       <li title="Use near a vending machine to buy food or drink. Dispose of packaging in bins."><strong>🥤 Vending:</strong> C</li>
-      <li title="Throw carried rubbish. It can knock pupils over, but teachers may punish you if they see it."><strong>🗑️ Throw rubbish:</strong> V</li>
-      <li title="Trade items and pocket money with nearby students or teachers. High barter skill can unlock freebies."><strong>🤝 Trade / Barter:</strong> T</li>
-      <li title="Use near toilet urinals to quickly reduce bladder pressure."><strong>🚻 Urinals:</strong> E (in toilets)</li>
-      <li title="Toggle computer control. It also enables automatically when you stop controlling Eric for a while."><strong>🤖 Auto:</strong> U (or leave Eric idle)</li>
-      <li title="Hold Shift (or R) while moving to run faster at a higher energy cost."><strong>🏃 Run:</strong> Shift / R + Move</li>
-      <li title="Pause game logic and rendering updates."><strong>⏯️ Pause:</strong> P or top bar button</li>
-      <li title="The view scrolls with Eric so you can navigate floors with stairs."><strong>🧭 Navigation:</strong> Follow corridors and use marked stairs between levels. Floor colors: Upper purple, Middle blue, Ground green.</li>
+      <li title="Throw carried rubbish. It can knock pupils over, but teachers may punish you if they see it."><strong>🗑️ Throw rubbish:</strong> V or Throw</li>
+      <li title="Trade items and pocket money with nearby students or teachers. High barter skill can unlock freebies."><strong>🤝 Trade / Barter:</strong> T or Trade</li>
+      <li title="Use near toilet urinals to quickly reduce bladder pressure."><strong>🚻 Urinals:</strong> E / Use (in toilets)</li>
+      <li title="Toggle computer control. It also enables automatically when you stop controlling Alex for a while."><strong>🤖 Auto:</strong> U or Auto</li>
+      <li title="Hold Shift (or R) while moving to run faster at a higher energy cost."><strong>🏃 Run:</strong> Shift / R or hold RUN</li>
+      <li title="Pause game logic and rendering updates."><strong>⏯️ Pause:</strong> P or Pause button</li>
+      <li title="Switch to an immersive, store-style view on desktop or Android."><strong>⛶ Fullscreen:</strong> F or top bar button</li>
+      <li title="The view scrolls with Alex so you can navigate floors with stairs."><strong>🧭 Navigation:</strong> Follow corridors and use marked stairs between levels. Floor colors: Upper purple, Middle blue, Ground green.</li>
     </ul>
 
     <h3>🧑‍🏫 Character legend</h3>
     <ul class="help-legend">
-      <li title="The player character you control."><span class="dot player"></span> Eric (you)</li>
+      <li title="The player character you control."><span class="dot player"></span> Alex (you)</li>
       <li title="Teachers monitor lessons and discipline."><span class="dot teacher"></span> Teachers</li>
       <li title="Aggressive students who start trouble."><span class="dot bully"></span> Bully</li>
       <li title="Rule-focused students who may report behaviour."><span class="dot swot"></span> Swot</li>
@@ -298,8 +302,8 @@
     </ul>
 
     <p>
-      This is an original HTML5 fan tribute inspired by classic school chaos gameplay.
-      It includes bell schedules, lesson routines, personality-driven AI, discipline, and shield objectives.
+      Bellbound Academy is an original HTML5 school-life sim with bell schedules, lesson routines,
+      social AI, discipline systems, and a full day of structured chaos.
     </p>
     <ul>
       <li>Attend the right room after each bell to avoid lines.</li>
@@ -311,12 +315,9 @@
       <li>Knockouts can be used tactically to reach difficult shields.</li>
       <li>Collect all shield letters to reveal the safe code.</li>
     </ul>
-    <!-- Keep supporter links inside Help so players can find extras in one familiar place. -->
-    <p class="help-support" title="Optional support link for the project creator.">
-      ☕ Enjoying the tribute? Support the creator:
-      <a href="https://buymeacoffee.com/dhooksterm" target="_blank" rel="noopener noreferrer" aria-label="Buy Me a Coffee link for dhooksterm">
-        buymeacoffee.com/dhooksterm
-      </a>
+    <p class="help-support" title="Mobile and Android note.">
+      📱 Phones and tablets show a touch pad plus action buttons automatically.
+      The Android shell uses the same game logic and can run offline once installed.
     </p>
     <button id="closeHelp" class="dialog-close" type="button" aria-label="Close Help dialog">✖ Close Help</button>
   </dialog>
@@ -332,6 +333,7 @@
     Use a classic script so the game runs when opened from simple local servers
     (including common Windows setups) without module/CORS restrictions.
   -->
+  <script src="app-shell.js"></script>
   <script src="backend/traits-db.js"></script>
   <script src="game.js"></script>
 </body>

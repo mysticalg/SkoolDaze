@@ -1,9 +1,8 @@
-# Skool Daze Tribute (HTML5)
+# Bellbound Academy
 
-🎮 **Play now:** https://mysticalg.github.io/SkoolDaze/
+Bellbound Academy is an original school-life sim with a full bell-driven day, social AI, classroom antics, and mobile-friendly controls.
 
-This project is an **original fan tribute** inspired by classic ZX Spectrum school-day gameplay.
-It does **not** include or reuse original ROM code/assets.
+The repo still lives in the older `SkoolDaze` folder for continuity, but the player-facing app branding has been moved toward an original commercial release.
 
 ## What's included now
 
@@ -15,6 +14,7 @@ It does **not** include or reuse original ROM code/assets.
 - Shield-letter mission progression with high shield access via knocked-out pupils.
 - HUD with time/period/target room/energy/discipline status.
 - Event feed and objective checklist for intuitive guidance.
+- Touch controls, fullscreen toggle, installable app shell, and offline caching groundwork for Android.
 
 ## Run
 
@@ -26,17 +26,34 @@ Open `http://localhost:8000`.
 
 ## Controls
 
-- Move: Arrow Keys / WASD
-- Punch: `Z`
-- Catapult: `X`
-- Interact: `E`
-- Pause: `P`
+- Move: Arrow Keys / WASD or touch pad
+- Punch: `Z` or `Hit`
+- Catapult: `X` or `Prank`
+- Interact: `E` or `Use`
+- Sit / stand: `Q` or `Sit`
+- Pause: `P` or `Pause`
+- Fullscreen: `F`
 
-## Research references used for gameplay direction
+## Android / Play Prep
 
-- Skool Daze overview and mission loop: https://en.wikipedia.org/wiki/Skool_Daze
-- Gameplay and release details: https://www.mobygames.com/game/26331/skool-daze/
-- Spectrum archive summary: https://spectrumcomputing.co.uk/entry/4678/ZX-Spectrum/Skool_Daze
+The repo now includes:
+
+- `manifest.webmanifest` and `sw.js` for installable/offline app behavior
+- `app-shell.js` for service worker registration and install prompt wiring
+- `scripts/build-web.mjs` to stage a clean `dist/` folder for native packaging
+- `capacitor.config.ts` and npm scripts for a Capacitor Android wrapper
+
+Typical flow:
+
+```bash
+npm install
+npm run build:web
+npx cap add android
+npx cap sync android
+npx cap open android
+```
+
+Before a real store release, update the package id in `capacitor.config.ts`, replace the placeholder app icons in `app-icons/`, and complete Play Console listing/privacy/billing details.
 
 ## GitHub Pages auto-deploy
 
@@ -47,8 +64,3 @@ To enable it in your repo settings:
 1. Go to **Settings → Pages**.
 2. Under **Build and deployment**, set **Source** to **GitHub Actions**.
 3. Push to `main` (or run the workflow manually) and your game will be published.
-
-## Support
-
-If you'd like to support this project, you can buy me a coffee:
-[buymeacoffee.com/dhooksterm](https://buymeacoffee.com/dhooksterm)

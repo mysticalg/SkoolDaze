@@ -67,3 +67,55 @@ Original prompt: can you take a look, there's various bugs currently; Eric runs 
     - `node --check game.js` passes after the graphics/FX work.
     - Real-browser screenshots were inspected at `output/playwright/graphics-fx-start-2.png` and `output/playwright/graphics-fx-lunch-2.png`; the start scene now shows a visible fade/pulse treatment and the lunch scene shows warmer room lighting plus visible atmosphere/particle motion.
     - Re-ran the required web-game client smoke successfully after the graphics/FX pass; latest artifact is `output/web-game/shot-0.png`.
+- Google Play conversion pass:
+  - Rebranded the player-facing shell from `Skool Daze Tribute` to `Bellbound Academy` across `index.html`, `README.md`, the manifest, and the LLM primer/local storage keys in `game.js` so the web/app shell no longer presents itself as a commercial fan tribute.
+  - Renamed the visible player character from Eric to Alex in the shell and routed announcement/feed text through a lightweight `playerFacingText(...)` normalizer so legacy gameplay strings display the new release-facing name without rewriting the entire AI simulation.
+  - Removed the startup-screen NSFW/cloud-token/OpenAI sign-in controls from the default UI and kept the release-path AI setup local-first so the mobile/Play build is less likely to trip policy issues around explicit-mode toggles and embedded credential entry.
+  - Added installable app-shell assets: `app-shell.js`, `manifest.webmanifest`, `sw.js`, and new SVG launcher icons in `app-icons/`.
+  - Added touch/mobile shell polish in `index.html`, `styles.css`, and `game.js`: fullscreen button, touch D-pad + action buttons, mobile hint chip, safe-area-aware layout, touch-action-safe canvas styling, and key-state bridging for touch controls.
+  - Added Android wrapper tooling: `package.json`, `package-lock.json`, `scripts/build-web.mjs`, `capacitor.config.ts`, installed Capacitor/TypeScript/Playwright/http-server dependencies, generated `android/`, and synced the staged `dist/` build into the native shell.
+  - Native Android polish:
+    - Locked `MainActivity` to landscape in `android/app/src/main/AndroidManifest.xml`.
+    - Replaced the default Capacitor launcher colors/vector with a Bellbound Academy-style schoolhouse icon in `android/app/src/main/res/...`.
+    - Added root `.gitignore` entries for `dist/`, `node_modules/`, `android/.gradle/`, and `android/local.properties`.
+  - Verification:
+    - `node --check game.js`, `node --check app-shell.js`, and `node --check scripts/build-web.mjs` all pass.
+    - `npm install`, `npm run build:web`, `npx cap add android`, and `npm run android:sync` all completed successfully.
+    - Required web-game smoke run succeeded against the built `dist/` shell via the installed Playwright client; latest artifacts were refreshed under `output/web-game/`.
+    - Important dev-server gotcha: Windows `python -m http.server` served the service worker with an unsupported MIME type and caused a stale console error artifact; switching to `http-server` fixed the real build path. Prefer `npm run serve:dist` or `http-server dist` for future PWA/service-worker checks.
+    - A dedicated mobile Playwright probe at `390x844` confirmed `touchControls` and `touchHint` become visible automatically, and holding the right-touch button moved Alex by `+2.89` world units with zero console errors. Screenshot saved to `output/playwright/mobile-conversion-check.png`.
+    - A follow-up shell probe confirmed the manifest link is present, the fullscreen button exists, and the service worker becomes active on the built shell.
+  - Remaining commercial-release TODOs:
+    - Replace generated Android mipmap icons/splash art with bespoke production assets rather than the current vector-and-template hybrid.
+    - Decide whether to fully rename all internal/social references away from the legacy `Eric` relationship key, or keep that internal-only compatibility layer.
+    - Update the placeholder app id (`io.mysticalg.bellboundacademy`) before any real store submission.
+    - Do a longer manual Android-device play pass once the project is opened in Android Studio and built as an actual APK/AAB.
+- Native build + publish attempt:
+  - Confirmed Java and the local Android SDK are available on this machine; SDK platforms/build-tools include API 36, so the Capacitor Android wrapper can compile locally.
+  - Added ignored `android/local.properties` pointing to the local SDK so Gradle can build from this workspace.
+  - Native validation completed successfully:
+    - `android\\gradlew.bat assembleDebug` passed and produced `android/app/build/outputs/apk/debug/app-debug.apk`.
+    - `android\\gradlew.bat testDebugUnitTest lintDebug` passed; lint HTML report is at `android/app/build/reports/lint-results-debug.html`.
+    - `android\\gradlew.bat bundleRelease` passed and produced `android/app/build/outputs/bundle/release/app-release.aab`.
+  - Important publish blocker discovered:
+    - Verifying the generated AAB with JDK `jarsigner` reports `jar is unsigned`, so the current release bundle is not upload-ready for Google Play yet.
+    - No Play Console credentials, service-account env vars, or Fastlane/CI publishing setup were present in the workspace, so there is no safe way to perform the actual store upload from here.
+  - Current closest-to-release artifacts:
+    - Debug APK: `android/app/build/outputs/apk/debug/app-debug.apk`
+    - Release bundle (currently unsigned): `android/app/build/outputs/bundle/release/app-release.aab`
+  - To finish Play publication, the next agent/user needs:
+    - An upload-key decision: either provide an existing keystore or explicitly approve generating a new upload keystore.
+    - Play Console access (interactive login or service-account based publishing flow) plus store-listing/app-content details.
+- Play Console + signing follow-up:
+  - The Google Play app was created successfully as a `Free` `Game` under the final store name `Bellbound Academy` and package id `io.mysticalg.bellboundacademy`.
+  - Play Console dashboard URL at creation time: `https://play.google.com/console/u/0/developers/9006788457089651743/app/4973958548977592739/app-dashboard`.
+  - Generated a new local upload keystore and wired release signing into Gradle:
+    - Keystore file: `android/bellbound-upload.jks` (gitignored)
+    - Properties file: `android/key.properties` (gitignored)
+    - Alias: `bellboundupload`
+    - Gradle release signing now loads `android/key.properties` and uses `rootProject.file(...)` for the keystore path.
+  - Rebuilt the release bundle after signing setup:
+    - `android\\gradlew.bat bundleRelease` passes.
+    - `jarsigner -verify -verbose -certs android/app/build/outputs/bundle/release/app-release.aab` now reports `jar verified`.
+    - Signed release artifact: `android/app/build/outputs/bundle/release/app-release.aab`.
+  - Current blocker is no longer packaging/signing; it is Play Console session continuity plus store-listing/app-content completion and final upload.
