@@ -185,8 +185,14 @@
           <button type="button" class="touch-btn touch-btn-down" data-touch-control="move" data-key="ArrowDown" data-hold="true" aria-label="Move down">▼</button>
           <button type="button" class="touch-btn touch-btn-right" data-touch-control="move" data-key="ArrowRight" data-hold="true" aria-label="Move right">▶</button>
         </div>
+        <div class="touch-camera" aria-label="Camera controls">
+          <button id="touchZoomOutBtn" type="button" class="touch-btn touch-btn-camera" data-touch-control="system" data-action="zoom-out" aria-label="Zoom out">−</button>
+          <button id="touchCameraResetBtn" type="button" class="touch-btn touch-btn-camera touch-btn-camera-reset" data-touch-control="system" data-action="reset-camera" aria-label="Reset camera to Alex">100%</button>
+          <button id="touchZoomInBtn" type="button" class="touch-btn touch-btn-camera" data-touch-control="system" data-action="zoom-in" aria-label="Zoom in">+</button>
+        </div>
         <div class="touch-actions">
           <button type="button" class="touch-btn touch-btn-primary" data-touch-control="action" data-key="e" aria-label="Interact or use">Use</button>
+          <button type="button" class="touch-btn" data-touch-control="action" data-key="c" aria-label="Use vending machine or buy food">Vend</button>
           <button type="button" class="touch-btn" data-touch-control="action" data-key="q" aria-label="Sit or stand">Sit</button>
           <button type="button" class="touch-btn" data-touch-control="action" data-key="z" aria-label="Punch">Hit</button>
           <button type="button" class="touch-btn" data-touch-control="action" data-key="x" aria-label="Fire catapult">Prank</button>
@@ -196,7 +202,7 @@
           <button type="button" class="touch-btn" data-touch-control="system" data-action="pause" aria-label="Pause the game">Pause</button>
         </div>
       </section>
-      <p id="touchHint" class="touch-hint" hidden>Touch controls are active on this device.</p>
+      <p id="touchHint" class="touch-hint" hidden>Touch controls, drag pan, and pinch zoom are active on this device.</p>
       <div id="dayTransitionOverlay" class="day-transition-overlay" aria-live="polite" hidden>
         <div class="day-transition-card">
           <h3 id="dayTransitionTitle">🌙 Night falls</h3>
@@ -280,7 +286,7 @@
       <li title="Long range projectile prank."><strong>🎯 Catapult:</strong> X or Prank</li>
       <li title="Use nearby doors and stairs, plus read boards, fountains, and shield pickups."><strong>🚪 Interact:</strong> E or Use</li>
       <li title="Sit in the nearest classroom chair, press again to stand."><strong>🪑 Sit / Stand:</strong> Q or Sit</li>
-      <li title="Use near a vending machine to buy food or drink. Dispose of packaging in bins."><strong>🥤 Vending:</strong> C</li>
+            <li title="Use near a vending machine to buy food or drink. Dispose of packaging in bins."><strong>🥤 Vending:</strong> C or Vend</li>
       <li title="Throw carried rubbish. It can knock pupils over, but teachers may punish you if they see it."><strong>🗑️ Throw rubbish:</strong> V or Throw</li>
       <li title="Trade items and pocket money with nearby students or teachers. High barter skill can unlock freebies."><strong>🤝 Trade / Barter:</strong> T or Trade</li>
       <li title="Use near toilet urinals to quickly reduce bladder pressure."><strong>🚻 Urinals:</strong> E / Use (in toilets)</li>

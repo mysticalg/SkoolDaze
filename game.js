@@ -36,6 +36,7 @@ const interactionPanelEl = document.getElementById('interactionPanel');
 const interactionTitleEl = document.getElementById('interactionTitle');
 const interactionMetaEl = document.getElementById('interactionMeta');
 const interactionOptionsEl = document.getElementById('interactionOptions');
+const interactionHintEl = document.getElementById('interactionHint');
 const closeInteractionPanelBtn = document.getElementById('closeInteractionPanel');
 const classQuestionPanelEl = document.getElementById('classQuestionPanel');
 const classQuestionTitleEl = document.getElementById('classQuestionTitle');
@@ -61,6 +62,9 @@ const closeSplashSettingsBtn = document.getElementById('closeSplashSettings');
 const touchControlsEl = document.getElementById('touchControls');
 const touchHintEl = document.getElementById('touchHint');
 const touchControlButtons = Array.from(document.querySelectorAll('[data-touch-control]'));
+const touchCameraResetBtn = document.getElementById('touchCameraResetBtn');
+const touchZoomInBtn = document.getElementById('touchZoomInBtn');
+const touchZoomOutBtn = document.getElementById('touchZoomOutBtn');
 const optStudentCountEl = document.getElementById('optStudentCount');
 const optTeacherCountEl = document.getElementById('optTeacherCount');
 const optRatioBullyEl = document.getElementById('optRatioBully');
@@ -116,6 +120,77 @@ const touchControlHeldKeys = new Set();
 
 // Camera view keeps the same aspect ratio as the canvas while following Eric.
 const CAMERA = { w: 72, h: 40, x: 0, y: 0 };
+const CAMERA_BASE = { w: CAMERA.w, h: CAMERA.h };
+const CAMERA_ZOOM_LIMITS = { min: 0.85, max: 2.35 };
+const CANVAS_NATIVE_SIZE = { w: canvas.width || 1280, h: canvas.height || 700 };
+const PERFORMANCE_PRESETS = {
+  high: {
+    renderScale: 1,
+    dither: true,
+    ditherStrideScale: 1,
+    detailedTextures: true,
+    sceneLighting: true,
+    sceneParticles: true,
+    scanlines: true,
+    showChairOverlays: true,
+    drawNpcVitals: true,
+    miniMapRefreshMs: 350,
+    weatherSpawnMultiplier: 1,
+  },
+  balanced: {
+    renderScale: 0.82,
+    dither: true,
+    ditherStrideScale: 1.7,
+    detailedTextures: true,
+    sceneLighting: false,
+    sceneParticles: false,
+    scanlines: false,
+    showChairOverlays: false,
+    drawNpcVitals: true,
+    miniMapRefreshMs: 650,
+    weatherSpawnMultiplier: 0.55,
+  },
+  low: {
+    renderScale: 0.66,
+    dither: false,
+    ditherStrideScale: 3,
+    detailedTextures: false,
+    sceneLighting: false,
+    sceneParticles: false,
+    scanlines: false,
+    showChairOverlays: false,
+    drawNpcVitals: false,
+    miniMapRefreshMs: 1100,
+    weatherSpawnMultiplier: 0.25,
+  },
+};
+const PERFORMANCE_LEVELS = ['high', 'balanced', 'low'];
+const PERFORMANCE_STRESS_THRESHOLDS = {
+  balanced: 26,
+  low: 40,
+};
+const TOUCH_WORLD_ACTION_LONG_PRESS_MS = 420;
+const canvasGestureState = {
+  pointers: new Map(),
+  pinchStartDistance: 0,
+  pinchStartZoom: 1,
+  lastPinchMidpoint: null,
+  lastTouchHandledAt: -Infinity,
+  lastTapAt: -Infinity,
+  lastTapClientX: 0,
+  lastTapClientY: 0,
+  lastClickAt: -Infinity,
+  lastClickClientX: 0,
+  lastClickClientY: 0,
+  suppressTapUntilPointersClear: false,
+  longPressTimerId: 0,
+  longPressPointerId: null,
+  longPressTarget: null,
+  longPressTriggered: false,
+};
+
+const miniMapBaseCanvas = document.createElement('canvas');
+let miniMapBaseCacheKey = '';
 
 // Full retro-inspired palette so every room/entity can have richer color identity.
 const PALETTE = {
@@ -146,6 +221,97 @@ function hexToRgba(hex, alpha = 1) {
   const g = (value >> 8) & 255;
   const b = value & 255;
   return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function detectInitialPerformanceLevel() {
+  const cores = Math.max(1, Number(navigator.hardwareConcurrency) || 8);
+  const memory = Math.max(1, Number(navigator.deviceMemory) || 8);
+  if (cores <= 2 || memory <= 4) return 'low';
+  if (cores <= 4 || memory <= 6) return 'balanced';
+  return 'high';
+}
+
+function currentPerformanceLevel() {
+  return game.performance?.level || 'high';
+}
+
+function currentPerformanceProfile() {
+  return PERFORMANCE_PRESETS[currentPerformanceLevel()] || PERFORMANCE_PRESETS.high;
+}
+
+function setCachedElementText(cacheKey, element, value) {
+  if (!element) return false;
+  const text = String(value ?? '');
+  if (game.uiCache?.text?.[cacheKey] === text) return false;
+  game.uiCache.text[cacheKey] = text;
+  element.textContent = text;
+  return true;
+}
+
+function setCachedElementTitle(cacheKey, element, value) {
+  if (!element) return false;
+  const title = String(value ?? '');
+  if (game.uiCache?.title?.[cacheKey] === title) return false;
+  game.uiCache.title[cacheKey] = title;
+  element.title = title;
+  return true;
+}
+
+function setCachedElementHtml(cacheKey, element, value) {
+  if (!element) return false;
+  const html = String(value ?? '');
+  if (game.uiCache?.html?.[cacheKey] === html) return false;
+  game.uiCache.html[cacheKey] = html;
+  element.innerHTML = html;
+  return true;
+}
+
+function syncCanvasResolution(force = false) {
+  const profile = currentPerformanceProfile();
+  const nextWidth = Math.max(640, Math.round(CANVAS_NATIVE_SIZE.w * profile.renderScale));
+  const nextHeight = Math.max(360, Math.round(CANVAS_NATIVE_SIZE.h * profile.renderScale));
+  if (!force && canvas.width === nextWidth && canvas.height === nextHeight) return false;
+  canvas.width = nextWidth;
+  canvas.height = nextHeight;
+  miniMapBaseCacheKey = '';
+  return true;
+}
+
+function setPerformanceLevel(level, { automatic = false } = {}) {
+  if (!PERFORMANCE_PRESETS[level] || game.performance.level === level) return false;
+  game.performance.level = level;
+  game.performance.lastLevelChangeAt = performance.now();
+  game.performance.autoAdjusted = automatic || game.performance.autoAdjusted;
+  syncCanvasResolution(true);
+  if (!currentPerformanceProfile().sceneParticles) game.sceneFx.length = 0;
+  return true;
+}
+
+function maybeAutoAdjustPerformance(dt, now = performance.now()) {
+  if (!gameStarted || game.paused || game.performance.mode !== 'auto') return;
+  const perf = game.performance;
+  perf.avgFrameMs = perf.avgFrameMs ? ((perf.avgFrameMs * 0.9) + (dt * 0.1)) : dt;
+  if ((now - perf.lastLevelChangeAt) < 1400) return;
+
+  if (perf.avgFrameMs >= PERFORMANCE_STRESS_THRESHOLDS.low && perf.level !== 'low') {
+    if (!perf.stressSince) perf.stressSince = now;
+    if ((now - perf.stressSince) > 1200) {
+      setPerformanceLevel('low', { automatic: true });
+      perf.stressSince = now;
+    }
+    return;
+  }
+
+  if (perf.avgFrameMs >= PERFORMANCE_STRESS_THRESHOLDS.balanced && perf.level === 'high') {
+    if (!perf.stressSince) perf.stressSince = now;
+    if ((now - perf.stressSince) > 1000) {
+      setPerformanceLevel('balanced', { automatic: true });
+      perf.stressSince = now;
+    }
+    return;
+  }
+
+  perf.stressSince = 0;
 }
 
 function playerFacingText(text) {
@@ -2685,6 +2851,28 @@ const game = {
   lastLateTick: 0,
   autoMode: false,
   idleMs: 0,
+  cameraZoom: 1,
+  cameraPanX: 0,
+  cameraPanY: 0,
+  performance: {
+    mode: 'auto',
+    level: detectInitialPerformanceLevel(),
+    avgFrameMs: 16.7,
+    stressSince: 0,
+    lastLevelChangeAt: 0,
+    autoAdjusted: false,
+  },
+  uiCache: {
+    text: {},
+    title: {},
+    html: {},
+    nextTodoRefreshAt: 0,
+    nextAttendanceRefreshAt: 0,
+    todoSignature: '',
+    attendanceSignature: '',
+    attendancePeriodKey: '',
+  },
+  playerTapTarget: null,
   bladder: 0,
   dailyToiletVisits: 0,
   drinksToday: 0,
@@ -2733,6 +2921,7 @@ const game = {
   playerStuckMs: 0,
   playerLastX: 0,
   playerLastY: 0,
+  playerPendingAction: null,
   // Daily dialogue memory prevents repeated barks from the same NPC in one day.
   dialogueDayKey: 1,
   ericSeatReservedToday: true,
@@ -3501,6 +3690,12 @@ function applyStartupOptions() {
   game.playerLastX = player.x;
   game.playerLastY = player.y;
   game.playerStuckMs = 0;
+  clearPlayerPendingAction();
+  clearPlayerTapTarget();
+  game.cameraZoom = 1;
+  game.cameraPanX = 0;
+  game.cameraPanY = 0;
+  updateTouchCameraHud();
 
   assignDailyDutyTeacher();
   warmupLlmResponses();
@@ -3646,15 +3841,18 @@ function teacherGateLinePosition(teacherIndex) {
   };
 }
 
-function nearbyStudentCrowdCount(entity, radius = 3.7) {
+function nearbyStudentCrowdCount(entity, radius = 3.7, candidates = game.entities, now = performance.now()) {
   if (!entity) return 0;
-  return game.entities.filter((candidate) => (
-    candidate
-    && candidate !== entity
-    && isStudentCharacter(candidate)
-    && candidate.knockedUntil < performance.now()
-    && distance(candidate, entity) < radius
-  )).length;
+  let count = 0;
+  const radiusSq = radius * radius;
+  for (const candidate of candidates) {
+    if (!candidate || candidate === entity || !isStudentCharacter(candidate) || candidate.knockedUntil >= now) continue;
+    const dx = candidate.x - entity.x;
+    const dy = candidate.y - entity.y;
+    if (Math.abs(dx) > radius || Math.abs(dy) > radius) continue;
+    if ((dx * dx) + (dy * dy) < radiusSq) count += 1;
+  }
+  return count;
 }
 
 function isWithinSchoolGateChute(point, paddingX = 2.8, paddingY = 1.4) {
@@ -3714,7 +3912,10 @@ function isTeacherBackTurned(teacher, now = performance.now()) {
 function assignedTeacherEntityForPeriod(period = schedule[game.periodIndex]) {
   const assignedName = assignedTeacherForRoom(period.room);
   if (!assignedName) return null;
-  return game.entities.find((entity) => entity.role === 'teacher' && entity.name === assignedName) || null;
+  for (const entity of game.entities) {
+    if (entity.role === 'teacher' && entity.name === assignedName) return entity;
+  }
+  return null;
 }
 
 function isAssignedTeacherBackTurnedForPeriod(period = schedule[game.periodIndex], now = performance.now()) {
@@ -3796,25 +3997,170 @@ function entityFloor(entity) {
 function updateFloorStatus() {
   if (!floorStatusEl) return;
   const meta = floorMeta[entityFloor(player)] || floorMeta.ground;
-  floorStatusEl.textContent = `🧭 Floor: ${meta.label} (${meta.color})`;
-  floorStatusEl.title = game.toiletsBlocked
+  setCachedElementText('floorStatus', floorStatusEl, `🧭 Floor: ${meta.label} (${meta.color})`);
+  setCachedElementTitle('floorStatus', floorStatusEl, game.toiletsBlocked
     ? `Current floor: ${meta.label}. Toilets blocked/flooded while Mr Mop cleans.`
-    : `Current floor: ${meta.label}. Toilet dirt: ${Math.round(game.toiletDirt)}%.`;
+    : `Current floor: ${meta.label}. Toilet dirt: ${Math.round(game.toiletDirt)}%.`);
 }
 
 function updateAutoStatus() {
-  autoStatusEl.textContent = `🤖 Auto: ${game.autoMode ? 'ON' : 'OFF'}`;
+  setCachedElementText('autoStatus', autoStatusEl, `🤖 Auto: ${game.autoMode ? 'ON' : 'OFF'}`);
+}
+
+function clearPlayerTapTarget() {
+  game.playerTapTarget = null;
+}
+
+function clearPlayerPendingAction() {
+  game.playerPendingAction = null;
+}
+
+function closeInteractionPanel() {
+  if (interactionPanelEl) interactionPanelEl.hidden = true;
+  game.selectedInteractionTarget = null;
+}
+
+function touchNavigationActive() {
+  return document.body.classList.contains('touch-controls-active');
+}
+
+function clampNumber(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function getCameraViewSize(zoom = game.cameraZoom || 1) {
+  return {
+    w: CAMERA_BASE.w / zoom,
+    h: CAMERA_BASE.h / zoom,
+  };
+}
+
+function clampCameraPan() {
+  const { w, h } = getCameraViewSize();
+  const minPanX = (w / 2) - player.x;
+  const maxPanX = (WORLD.w - (w / 2)) - player.x;
+  const minPanY = (h / 2) - player.y;
+  const maxPanY = (WORLD.h - (h / 2)) - player.y;
+
+  game.cameraPanX = minPanX > maxPanX ? 0 : clampNumber(game.cameraPanX, minPanX, maxPanX);
+  game.cameraPanY = minPanY > maxPanY ? 0 : clampNumber(game.cameraPanY, minPanY, maxPanY);
+}
+
+function nudgeCameraPan(deltaX, deltaY) {
+  game.cameraPanX += deltaX;
+  game.cameraPanY += deltaY;
+  clampCameraPan();
+  game.idleMs = 0;
+  updateTouchCameraHud();
+}
+
+function setCameraZoom(nextZoom, anchorScreen = null, anchorWorld = null) {
+  const clampedZoom = clampNumber(nextZoom, CAMERA_ZOOM_LIMITS.min, CAMERA_ZOOM_LIMITS.max);
+  if (Math.abs(clampedZoom - game.cameraZoom) < 0.001) return false;
+
+  game.cameraZoom = clampedZoom;
+  const { w, h } = getCameraViewSize(clampedZoom);
+  if (anchorScreen) {
+    const ratioX = clampNumber(anchorScreen.mouseX / canvas.width, 0, 1);
+    const ratioY = clampNumber(anchorScreen.mouseY / canvas.height, 0, 1);
+    const worldAnchor = anchorWorld || screenToWorld(anchorScreen.mouseX, anchorScreen.mouseY);
+    const desiredCenterX = worldAnchor.x + ((0.5 - ratioX) * w);
+    const desiredCenterY = worldAnchor.y + ((0.5 - ratioY) * h);
+    game.cameraPanX = desiredCenterX - player.x;
+    game.cameraPanY = desiredCenterY - player.y;
+  }
+  clampCameraPan();
+  updateTouchCameraHud();
+  return true;
+}
+
+function currentCameraCenterWorld() {
+  return {
+    x: CAMERA.x + (CAMERA.w / 2),
+    y: CAMERA.y + (CAMERA.h / 2),
+  };
+}
+
+function changeCameraZoomByStep(step) {
+  const anchorScreen = { mouseX: canvas.width / 2, mouseY: canvas.height / 2 };
+  return setCameraZoom((game.cameraZoom || 1) + step, anchorScreen, currentCameraCenterWorld());
+}
+
+function recenterCameraOnPlayer(options = {}) {
+  const { resetZoom = false } = options;
+  if (resetZoom) game.cameraZoom = 1;
+  game.cameraPanX = 0;
+  game.cameraPanY = 0;
+  clampCameraPan();
+  game.idleMs = 0;
+  updateTouchCameraHud();
+  return true;
+}
+
+function updateTouchCameraHud() {
+  if (touchZoomOutBtn) {
+    touchZoomOutBtn.disabled = game.cameraZoom <= (CAMERA_ZOOM_LIMITS.min + 0.01);
+  }
+  if (touchZoomInBtn) {
+    touchZoomInBtn.disabled = game.cameraZoom >= (CAMERA_ZOOM_LIMITS.max - 0.01);
+  }
+  if (touchCameraResetBtn) {
+    const centered = Math.hypot(game.cameraPanX || 0, game.cameraPanY || 0) < 0.12;
+    const baseZoom = Math.abs((game.cameraZoom || 1) - 1) < 0.01;
+    touchCameraResetBtn.textContent = `${Math.round((game.cameraZoom || 1) * 100)}%`;
+    touchCameraResetBtn.disabled = centered && baseZoom;
+    touchCameraResetBtn.title = baseZoom && centered
+      ? 'Camera already centered on Alex.'
+      : 'Reset zoom and center back on Alex.';
+  }
+}
+
+function setPlayerTapTarget(destination) {
+  if (!destination) return false;
+  const fallbackRoom = roomAtPosition(destination);
+  const safeTarget = nearestWalkablePoint(destination, [fallbackRoom ? roomCenter(fallbackRoom.name) : null]) || destination;
+  if (!safeTarget) return false;
+  game.playerTapTarget = { x: safeTarget.x, y: safeTarget.y };
+  game.idleMs = 0;
+  closeInteractionPanel();
+  if (game.autoMode) {
+    game.autoMode = false;
+    updateAutoStatus();
+    announce('ðŸ¤– Auto mode disabled by touch navigation.');
+  }
+  return true;
+}
+
+function approachPointForInteractionTarget(target) {
+  if (!target) return null;
+  const dx = target.x - player.x;
+  const dy = target.y - player.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const desiredGap = 1.55;
+  const primary = {
+    x: target.x - ((dx / len) * desiredGap),
+    y: target.y - ((dy / len) * desiredGap),
+  };
+  const sideX = -(dy / len) * 1.1;
+  const sideY = (dx / len) * 1.1;
+  return nearestWalkablePoint(primary, [
+    { x: primary.x + sideX, y: primary.y + sideY },
+    { x: primary.x - sideX, y: primary.y - sideY },
+    { x: target.x, y: target.y - desiredGap },
+    { x: target.x, y: target.y + desiredGap },
+    roomCenter(entityRoom(target)),
+  ]) || primary;
 }
 
 function updateCharismaHud() {
-  charismaEl.textContent = `🗣️ Charisma: ${Math.round(game.charisma)}`;
-  charismaEl.title = 'Higher charisma improves social outcomes when talking with students.';
+  setCachedElementText('charisma', charismaEl, `🗣️ Charisma: ${Math.round(game.charisma)}`);
+  setCachedElementTitle('charisma', charismaEl, 'Higher charisma improves social outcomes when talking with students.');
 }
 
 function updateWeatherHud() {
   const meta = weatherModes[game.weather] || weatherModes.sunny;
-  weatherEl.textContent = `${meta.icon} Weather: ${meta.label}`;
-  weatherEl.title = `Weekly weather is ${meta.label}. It changes every 7 school days.`;
+  setCachedElementText('weather', weatherEl, `${meta.icon} Weather: ${meta.label}`);
+  setCachedElementTitle('weather', weatherEl, `Weekly weather is ${meta.label}. It changes every 7 school days.`);
 }
 
 function pickWeeklyWeather() {
@@ -4774,6 +5120,12 @@ function resetToSchoolMorning() {
   game.playerLastX = player.x;
   game.playerLastY = player.y;
   game.playerStuckMs = 0;
+  clearPlayerPendingAction();
+  clearPlayerTapTarget();
+  game.cameraZoom = 1;
+  game.cameraPanX = 0;
+  game.cameraPanY = 0;
+  updateTouchCameraHud();
 
   assignDailyDutyTeacher();
   assignDailyTradingCards();
@@ -4844,6 +5196,46 @@ function updateAutoPilot(dt) {
     if (!tryUseStairs(player, desiredFloor)) interact();
   }
   spendEnergy((lateForClass ? 1.05 : 0.4) * (dt / 1000));
+}
+
+function updatePlayerTapNavigation(dt, speed) {
+  const destination = game.playerTapTarget;
+  if (!destination) return false;
+
+  const dxToDestination = destination.x - player.x;
+  const dyToDestination = destination.y - player.y;
+  const distanceToDestination = Math.hypot(dxToDestination, dyToDestination);
+  if (distanceToDestination < 0.34) {
+    clearPlayerTapTarget();
+    player.vx = 0;
+    player.vy = 0;
+    return true;
+  }
+
+  if (player.isSeated) {
+    player.isSeated = false;
+    player.seatedRoom = null;
+  }
+
+  const waypoint = routeWaypoint(player, destination);
+  const dx = waypoint.x - player.x;
+  const dy = waypoint.y - player.y;
+  const lenRaw = Math.hypot(dx, dy);
+  const len = lenRaw || 1;
+  if (lenRaw < 0.1) {
+    player.vx = 0;
+    player.vy = 0;
+    return true;
+  }
+
+  player.vx = (dx / len) * speed;
+  player.vy = (dy / len) * speed;
+
+  if (len < 1.1) {
+    const desiredFloor = roomAtPosition(destination)?.floor || entityFloor(player);
+    tryUseStairs(player, desiredFloor);
+  }
+  return true;
 }
 
 function updateBladder(dt) {
@@ -5795,9 +6187,9 @@ function updateBoardWriting(dt) {
   }
 }
 
-function updateTodo() {
+function updateTodo(force = false, now = performance.now()) {
   const current = schedule[game.periodIndex];
-  const found = shields.filter((s) => s.found).length;
+  const found = game.safeCombo?.length || shields.filter((s) => s.found).length;
   const todoItems = [
     `Be in: ${current.room}`,
     `Period: ${current.period}`,
@@ -5818,16 +6210,21 @@ function updateTodo() {
     `Avoid teachers while bunking`,
   ];
 
+  const signature = todoItems.join('\n');
+  if (!force && signature === game.uiCache.todoSignature && now < game.uiCache.nextTodoRefreshAt) return;
+  game.uiCache.todoSignature = signature;
+  game.uiCache.nextTodoRefreshAt = now + 450;
+
   // Keep full objectives in the dialog list and condensed objectives in the one-line carousel.
-  todoEl.innerHTML = todoItems.map((t) => `<li>${t}</li>`).join('');
+  setCachedElementHtml('todoList', todoEl, todoItems.map((t) => `<li>${t}</li>`).join(''));
   if (todoCarouselTextEl) {
-    todoCarouselTextEl.textContent = todoItems.join('  •  ');
+    setCachedElementText('todoCarousel', todoCarouselTextEl, todoItems.join('  •  '));
   }
 }
 
 function addLines(amount, reason) {
   game.lines += amount;
-  troubleEl.textContent = `📝 Lines: ${game.lines}`;
+  setCachedElementText('trouble', troubleEl, `📝 Lines: ${game.lines}`);
   announce(`📝 ${amount} lines for ${reason}`);
 }
 
@@ -5842,12 +6239,12 @@ function spendEntityEnergy(entity, amount) {
 
 function spendEnergy(amount) {
   game.energy = Math.max(5, game.energy - amount);
-  energyEl.textContent = `⚡ Energy: ${Math.round(game.energy)}`;
+  setCachedElementText('energy', energyEl, `⚡ Energy: ${Math.round(game.energy)}`);
 }
 
 function recoverEnergy(dtSeconds) {
   game.energy = Math.min(100, game.energy + dtSeconds * 2.2);
-  energyEl.textContent = `⚡ Energy: ${Math.round(game.energy)}`;
+  setCachedElementText('energy', energyEl, `⚡ Energy: ${Math.round(game.energy)}`);
 }
 
 function constrain(entity) {
@@ -6101,19 +6498,27 @@ function handleInput(dt) {
   }
 
   const manualMovement = game.keys.ArrowLeft || game.keys.a || game.keys.ArrowRight || game.keys.d || game.keys.ArrowUp || game.keys.w || game.keys.ArrowDown || game.keys.s;
-  if (manualMovement || game.keys.z || game.keys.x || game.keys.e || game.keys.c || game.keys.q || game.keys.t || game.keys.v) {
+  const manualAction = game.keys.z || game.keys.x || game.keys.e || game.keys.c || game.keys.q || game.keys.t || game.keys.v;
+  if (manualMovement || manualAction) {
     // Manual control immediately overrides autopilot for responsiveness.
     if (game.autoMode) {
       game.autoMode = false;
       updateAutoStatus();
       announce('🤖 Auto mode disabled by player input.');
     }
+    clearPlayerPendingAction();
+    clearPlayerTapTarget();
     game.idleMs = 0;
   }
+  if (game.playerTapTarget || game.playerPendingAction) game.idleMs = 0;
 
   if (game.autoMode) {
     updateAutoPilot(dt);
     return;
+  }
+
+  if (!manualMovement && game.playerPendingAction) {
+    updatePlayerPendingWorldAction();
   }
 
   if (player.isSeated) {
@@ -6121,15 +6526,23 @@ function handleInput(dt) {
       toggleSeat();
       game.keys.q = false;
     }
-    player.vx = 0;
-    player.vy = 0;
-    return;
+    if (!game.playerTapTarget) {
+      player.vx = 0;
+      player.vy = 0;
+      return;
+    }
+    player.isSeated = false;
+    player.seatedRoom = null;
   }
 
-  if (game.keys.ArrowLeft || game.keys.a) player.vx = -speed;
-  if (game.keys.ArrowRight || game.keys.d) player.vx = speed;
-  if (game.keys.ArrowUp || game.keys.w) player.vy = -speed;
-  if (game.keys.ArrowDown || game.keys.s) player.vy = speed;
+  if (manualMovement) {
+    if (game.keys.ArrowLeft || game.keys.a) player.vx = -speed;
+    if (game.keys.ArrowRight || game.keys.d) player.vx = speed;
+    if (game.keys.ArrowUp || game.keys.w) player.vy = -speed;
+    if (game.keys.ArrowDown || game.keys.s) player.vy = speed;
+  } else if (game.playerTapTarget) {
+    updatePlayerTapNavigation(dt, speed);
+  }
 
   // Running drains stamina faster than walking.
   if (Math.abs(player.vx) + Math.abs(player.vy) > 0.1) {
@@ -6794,6 +7207,397 @@ function toggleSeat() {
   announce(`🪑 Eric sits down in ${currentRoom}. Press Q again to stand.`);
 }
 
+function standPlayerUp(reason = `${player.name} stands up.`) {
+  if (!player.isSeated) return false;
+  player.isSeated = false;
+  player.seatedRoom = null;
+  player.lunchSeatIndex = -1;
+  announce(reason);
+  return true;
+}
+
+function playerUseVendingMachine(machine) {
+  if (!machine) {
+    announce('🥤 Find a vending machine first (marked VM).');
+    return false;
+  }
+  if (distance(player, machine) >= 2.1) {
+    announce('🥤 Move closer to the vending machine first.');
+    return false;
+  }
+  if (game.playerCarryingTrash) {
+    announce('🧻 Eric is already carrying rubbish. Use a bin first.');
+    return false;
+  }
+  if (game.rng() < 0.5) {
+    game.drinksToday += 1;
+    game.energy = Math.min(100, game.energy + 9);
+    game.bladder = Math.min(100, game.bladder + 16);
+    announce('🥤 Eric bought a drink. Energy up, bladder rising.');
+  } else {
+    game.energy = Math.min(100, game.energy + 14);
+    announce('🍫 Eric bought a snack. Energy boosted.');
+  }
+  energyEl.textContent = `⚡ Energy: ${Math.round(game.energy)}`;
+  updateBladderHud();
+  game.playerCarryingTrash = true;
+  playSfx('interact');
+  return true;
+}
+
+function playerTakeLunchAtService(target) {
+  const currentPeriod = schedule[game.periodIndex];
+  if (currentPeriod.period !== 'Lunch Break') {
+    announce('🍽️ Lunch service only opens during lunch break.');
+    return false;
+  }
+  if (entityRoom(player) !== 'Dining Hall') {
+    announce('🍽️ Head into the dining hall first.');
+    return false;
+  }
+  if (game.playerCarryingTrash) {
+    announce('🧻 Eric is already carrying rubbish. Bin that first.');
+    return false;
+  }
+  game.energy = Math.min(100, game.energy + 18);
+  game.bladder = Math.min(100, game.bladder + 5);
+  player.hasLunchPlate = false;
+  player.lunchState = 'done';
+  game.playerCarryingTrash = true;
+  energyEl.textContent = `⚡ Energy: ${Math.round(game.energy)}`;
+  updateBladderHud();
+  playSfx('interact');
+  const serviceName = target?.heading ? target.heading.replace(/^[^A-Za-z0-9]+/, '') : 'the serving counter';
+  announce(`🍽️ ${player.name} grabbed lunch from ${serviceName}. Energy restored, tray still in hand.`);
+  return true;
+}
+
+function playerUseTrashCan(bin) {
+  if (!bin) return false;
+  if (distance(player, bin) >= 2.1) {
+    announce('🗑️ Move closer to the bin first.');
+    return false;
+  }
+  if (!game.playerCarryingTrash) {
+    announce('🗑️ Eric has no rubbish to bin right now.');
+    return false;
+  }
+  game.playerCarryingTrash = false;
+  playSfx('interact');
+  announce(`🗑️ ${player.name} used ${bin.label} and binned the rubbish.`);
+  return true;
+}
+
+function playerDrinkFromFountain(fountain) {
+  if (!fountain) return false;
+  if (distance(player, fountain) >= 2.1) {
+    announce('⛲ Move closer to the fountain first.');
+    return false;
+  }
+  game.bladder = Math.max(0, game.bladder - 30);
+  game.energy = Math.min(100, game.energy + 4);
+  updateBladderHud();
+  energyEl.textContent = `⚡ Energy: ${Math.round(game.energy)}`;
+  playSfx('interact');
+  announce(`⛲ ${player.name} drank from ${fountain.label}. Refreshed and ready.`);
+  return true;
+}
+
+function playerUseShower(shower) {
+  if (!shower) return false;
+  if (distance(player, shower) >= 1.9 || entityRoom(player) !== 'Gym') {
+    announce('🚿 Move into the gym showers first.');
+    return false;
+  }
+  const hadLowHygiene = game.hygiene < 40;
+  game.hygiene = 100;
+  game.charisma = Math.min(100, game.charisma + 10);
+  updateHygieneHud();
+  updateCharismaHud();
+  playSfx('interact');
+  announce(`🚿 ${player.name} used ${shower.label}. Hygiene maxed and charisma boosted.`);
+
+  const nearbyStudents = game.entities.filter((entity) => (
+    entity.role !== 'player'
+    && entity.role !== 'teacher'
+    && game.smelledStudents[entity.name]
+    && entity.knockedUntil < performance.now()
+    && distance(entity, player) < 6.4
+  ));
+  if (hadLowHygiene && nearbyStudents.length) {
+    const clapbacks = [
+      'glad you took a shower, stinker',
+      'Welcome back from the bog of stench!',
+      'fresh at last — took you long enough',
+    ];
+    for (const student of nearbyStudents.slice(0, 3)) {
+      const line = clapbacks[Math.floor(game.rng() * clapbacks.length)];
+      announce(`😄 ${student.name}: "${line}"`, { source: student, range: 8, force: true });
+      adjustEricRelationship(student, 4 + (game.charisma * 0.02), 'clean comeback');
+      student.ericReputation = Math.min(100, (student.ericReputation || 0) + 4);
+      game.smelledStudents[student.name] = false;
+    }
+  }
+  return true;
+}
+
+function playerUseLocker(locker) {
+  if (!locker) return false;
+  if (distance(player, locker) >= 1.3) {
+    announce('🗄️ Move closer to the locker first.');
+    return false;
+  }
+  const lockerNumber = lockerNumberFromId(locker.id);
+  if (!lockerHasMatchingKey(player, locker)) {
+    announce(`🔒 Locker ${lockerNumber} is locked. Need ${lockerKeyLabel(locker)}.`);
+    return false;
+  }
+  const moved = stashOverflowToLocker(player, INVENTORY_SOFT_CAP);
+  if (moved > 0) {
+    playSfx('interact');
+    announce(`🗄️ ${player.name} stashed ${moved} item${moved === 1 ? '' : 's'} in Locker ${lockerNumber}.`);
+  } else {
+    const lockerSize = (locker.storage || []).length;
+    announce(`🗄️ Locker ${lockerNumber} open. Stored items: ${lockerSize}.`);
+  }
+  return true;
+}
+
+function playerUseUrinal(urinal) {
+  if (!urinal) return false;
+  if (distance(player, urinal) >= 1.7 || entityRoom(player) !== 'Toilets') {
+    announce('🚻 Move into the toilets first.');
+    return false;
+  }
+  if (game.toiletsBlocked) {
+    announce('🚫 Urinals are unusable while toilets are flooded.', { force: true });
+    return false;
+  }
+  const previousBladder = game.bladder;
+  game.bladder = Math.max(0, game.bladder - 75);
+  game.dailyToiletVisits += 1;
+  game.toiletDirt = Math.min(TOILET_MAX_DIRT, game.toiletDirt + TOILET_DIRT_PER_USE * 0.8);
+  game.warnedNeedToilet = game.bladder >= 75;
+  updateBladderHud();
+  playSfx('urinal');
+  announce(`🚹 ${player.name} used ${urinal.label}. Bladder ${Math.round(previousBladder)}% → ${Math.round(game.bladder)}%.`);
+  return true;
+}
+
+function playerUseComputerStation(station) {
+  if (!station) return false;
+  if (distance(player, station) >= 1.7 || entityRoom(player) !== 'Computer Room') {
+    announce('🖥️ Move closer to a computer terminal first.');
+    return false;
+  }
+  const currentPeriod = schedule[game.periodIndex];
+  const lunchOrAfterHours = currentPeriod.period === 'Lunch Break' || game.choseToStayAfterSchool;
+  if (lunchOrAfterHours && hasVideoGameItem(player)) {
+    game.playerComputerStationId = station.id;
+    game.playerComputerPlayUntil = performance.now() + 12000;
+    station.use = 'game';
+    station.userName = player.name;
+    game.energy = Math.min(100, game.energy + 6);
+    updateTodo();
+    announce(`🎮 ${player.name} loaded a traded video game on the school computer.`, { force: true });
+    return true;
+  }
+
+  const meta = computerUseMeta[station.use] || computerUseMeta.word;
+  const userText = station.userName ? ` used by ${station.userName}` : ' idle';
+  announce(`🖥️ ${meta.icon} ${meta.label}${userText}.`, { force: true });
+  if (currentPeriod.period !== 'Lunch Break' && !game.choseToStayAfterSchool && hasVideoGameItem(player)) {
+    announce('💡 You have a video game item. Use computers at lunch or during after-school free-play.');
+  }
+  return true;
+}
+
+function playerReadBlackboard(board) {
+  if (!board) return false;
+  if (distance(player, board) >= 2.2) {
+    announce('📋 Move closer to the blackboard first.');
+    return false;
+  }
+  playSfx('interact');
+  announce(board.text ? `📋 Board: "${board.text}"` : `📋 ${board.room} board is blank.`);
+  return true;
+}
+
+function playerWriteBlackboard(board) {
+  if (!board) return false;
+  if (distance(player, board) >= 2.2) {
+    announce('📝 Move closer to the blackboard first.');
+    return false;
+  }
+  const chalkNotes = [
+    'LATENESS IS A STATE OF MIND',
+    'FREE PERIOD PLEASE',
+    'ALEX WAS HERE',
+    'HOMEWORK ATE ITSELF',
+    'NO TESTS TODAY',
+    'WHO STOLE MY CHIPS?',
+  ];
+  const message = chalkNotes[Math.floor(game.rng() * chalkNotes.length)];
+  setBoardText(board, message);
+  player.writingUntil = performance.now() + 1350;
+  playSfx('chalk');
+  announce(`📝 ${player.name} chalked "${message}" onto the ${board.room} board.`);
+  const currentPeriod = schedule[game.periodIndex];
+  if (currentPeriod.mode === 'lesson' && currentPeriod.room === board.room) {
+    addLines(8, 'writing on the board during lesson');
+    announce('🧑‍🏫 That definitely was not teacher-approved board work.', { force: true });
+  }
+  return true;
+}
+
+function resolveCollectableTarget(itemTarget) {
+  if (!itemTarget) return null;
+  if (itemTarget.source && game.collectables.includes(itemTarget.source)) return itemTarget.source;
+  return game.collectables.find((item) => (
+    item
+    && item.name === itemTarget.itemName
+    && Math.hypot((item.x || 0) - itemTarget.x, (item.y || 0) - itemTarget.y) < 1
+  )) || null;
+}
+
+function playerPickUpCollectable(itemTarget) {
+  const item = resolveCollectableTarget(itemTarget);
+  if (!item) {
+    announce('📦 That item is gone already.');
+    return false;
+  }
+  if (distance(player, item) >= 1.3) {
+    announce('📦 Move closer to pick that up.');
+    return false;
+  }
+  const nearbyCollectableIndex = game.collectables.indexOf(item);
+  if (nearbyCollectableIndex < 0) {
+    announce('📦 That item is gone already.');
+    return false;
+  }
+  const picked = game.collectables.splice(nearbyCollectableIndex, 1)[0];
+  player.inventory.push(picked.name);
+  player.money += Math.max(1, Math.round((picked.value || 4) * 0.5));
+  announce(`🧲 ${player.name} found ${picked.icon} ${picked.name} and stashed it for trading.`);
+  logSchoolHistory(`${player.name} found ${picked.name} near ${entityRoom(player)}.`, player);
+  playSfx('interact');
+  return true;
+}
+
+function playerPickUpProp(prop) {
+  if (!prop) return false;
+  if ((prop.hiddenUntil || 0) > performance.now()) {
+    announce(`🧰 ${prop.kind} is not available right now.`);
+    return false;
+  }
+  if (distance(player, prop) >= 1.8 || entityRoom(player) !== prop.room) {
+    announce(`🧰 Move closer to the ${prop.kind} first.`);
+    return false;
+  }
+  if (!prop.throwable) {
+    announce(`${prop.icon || '🧰'} ${prop.kind} is fixed in place.`);
+    return false;
+  }
+  if (game.playerHeldItem) {
+    announce(`🧰 ${player.name} is already holding a ${game.playerHeldItem.kind}.`);
+    return false;
+  }
+  game.playerHeldItem = prop;
+  announce(`🧰 ${player.name} picked up a ${prop.kind}. Press V again to throw it.`);
+  return true;
+}
+
+function playerInspectProp(prop) {
+  if (!prop) return false;
+  announce(`${prop.icon || '🧰'} ${prop.kind} in ${prop.room}.`);
+  return true;
+}
+
+function playerUseDoorAction(door) {
+  if (!door) return false;
+  const entering = entityRoom(player) !== door.room;
+  if (!useDoor(player, door)) return false;
+  announce(`${door.icon || '🚪'} ${player.name} ${entering ? 'entered' : 'left'} ${door.room}.`);
+  playSfx('door');
+  updateFloorStatus();
+  return true;
+}
+
+function playerUseStairAction(stair) {
+  if (!stair) return false;
+  const currentFloor = entityFloor(player);
+  const fromPoint = stairPointForFloor(stair, stair.fromFloor);
+  const toPoint = stairPointForFloor(stair, stair.toFloor);
+  const activePoint = stairPointForFloor(stair, currentFloor);
+  if (!activePoint || distance(player, activePoint) >= STAIR_INTERACT_RADIUS) {
+    announce('🪜 Move closer to the stairwell first.');
+    return false;
+  }
+  const standingOnFrom = currentFloor === stair.fromFloor && distance(player, fromPoint) < STAIR_INTERACT_RADIUS;
+  const destination = standingOnFrom ? toPoint : fromPoint;
+  const destinationFloor = standingOnFrom ? stair.toFloor : stair.fromFloor;
+  const movingUp = floorOrder[destinationFloor] > floorOrder[currentFloor];
+  player.x = destination.x;
+  player.y = destination.y + (movingUp ? 0.4 : -0.4);
+  announce(`🪜 Used ${stair.label} to ${movingUp ? 'go up' : 'go down'} a floor.`);
+  playSfx('stair');
+  updateFloorStatus();
+  return true;
+}
+
+function diningSeatOccupiedByAnyone(layout, seatIndex, ignoreEntity = null) {
+  if (!layout || seatIndex < 0 || seatIndex >= layout.seats.length) return false;
+  const now = performance.now();
+  const seat = layout.seats[seatIndex];
+  return [player, ...game.entities].some((entity) => (
+    entity
+    && entity !== ignoreEntity
+    && entity.knockedUntil < now
+    && (
+      (entity.isSeated && entity.seatedRoom === 'Dining Hall' && distance(entity, seat) < 0.65)
+      || (Number.isFinite(entity.lunchSeatIndex) && entity.lunchSeatIndex === seatIndex)
+      || (entity.target && distance(entity.target, seat) < 0.58 && entityRoom(entity.target) !== 'Corridor')
+    )
+  ));
+}
+
+function playerSitAtSeatTarget(target) {
+  if (!target) return false;
+  const roomName = target.roomName || entityRoom(player);
+  const alreadyHere = player.isSeated && player.seatedRoom === roomName && distance(player, target) < 0.3;
+  if (alreadyHere) {
+    return standPlayerUp(`🧍 ${player.name} stood up from the seat.`);
+  }
+  if (distance(player, target) >= 2.25) {
+    announce('🪑 Move closer to that seat first.');
+    return false;
+  }
+
+  if (target.kind === 'dining-seat') {
+    const layout = diningHallLayout();
+    if (!layout || diningSeatOccupiedByAnyone(layout, target.seatIndex, player)) {
+      announce('🪑 That dining seat is taken.');
+      return false;
+    }
+    player.lunchSeatIndex = target.seatIndex;
+  } else {
+    if (isSeatOccupied(roomName, target, player)) {
+      announce('🪑 That seat is taken.');
+      return false;
+    }
+    player.lunchSeatIndex = -1;
+  }
+
+  player.x = target.x;
+  player.y = target.y;
+  player.vx = 0;
+  player.vy = 0;
+  player.isSeated = true;
+  player.seatedRoom = roomName;
+  announce(`🪑 ${player.name} sat down in ${roomName}.`);
+  return true;
+}
+
 function interact() {
   // Stairs are intentionally activated with interact for predictable movement.
   const currentFloor = entityFloor(player);
@@ -7037,7 +7841,7 @@ function updateMission() {
   game.safeCombo = letters.join('');
   const shieldProgress = `${letters.length}/${shields.length}`;
   const cardProgress = `${game.cardCollectionCount}/256`;
-  missionEl.textContent = `🛡️ Shields ${shieldProgress} | 🃏 Card Collection ${cardProgress}`;
+  setCachedElementText('mission', missionEl, `🛡️ Shields ${shieldProgress} | 🃏 Card Collection ${cardProgress}`);
 
   if (letters.length === shields.length && !game.missionComplete) {
     game.missionComplete = true;
@@ -7057,21 +7861,16 @@ function teacherBoardSpot(periodRoom) {
   return { ...teacherSeat, room: periodRoom };
 }
 
-function isAssignedTeacherSeatedForPeriod(currentPeriod = schedule[game.periodIndex]) {
+function isAssignedTeacherSeatedForPeriod(currentPeriod = schedule[game.periodIndex], now = performance.now()) {
   if (!isSupervisedPeriod(currentPeriod)) return true;
   const assignedTeacherName = assignedTeacherForRoom(currentPeriod.room);
   const assignedSeat = getTeacherSeatPosition(currentPeriod.room);
-  return game.entities.some((entity) => (
-    entity.role === 'teacher'
-    && (!assignedTeacherName || entity.name === assignedTeacherName)
-    && entityRoom(entity) === currentPeriod.room
-    && (
-      (entity.isSeated && entity.seatedRoom === currentPeriod.room)
-      // Fallback: treat teacher as seated when they are effectively parked at desk.
-      || distance(entity, assignedSeat) < 0.72
-    )
-    && entity.knockedUntil < performance.now()
-  ));
+  for (const entity of game.entities) {
+    if (entity.role !== 'teacher' || (assignedTeacherName && entity.name !== assignedTeacherName) || entity.knockedUntil >= now) continue;
+    if (entityRoom(entity) !== currentPeriod.room) continue;
+    if ((entity.isSeated && entity.seatedRoom === currentPeriod.room) || distance(entity, assignedSeat) < 0.72) return true;
+  }
+  return false;
 }
 
 function assignedTeacherForRoom(roomName) {
@@ -7336,64 +8135,90 @@ function chooseTarget(entity, currentPeriod) {
   return shouldAttend ? roomCenter(currentPeriod.room) : roomCenter('P.E. Field');
 }
 
-function isTeacherPresentForPeriod(currentPeriod) {
+function isTeacherPresentForPeriod(currentPeriod, now = performance.now()) {
   if (!isSupervisedPeriod(currentPeriod)) return true;
   if (isRegistrationPeriod(currentPeriod)) {
     // Registration uses multiple tutor rooms, so any active tutor roll-call counts as staffed.
-    return game.entities.some((entity) => entity.role === 'teacher' && entity.knockedUntil < performance.now());
+    for (const entity of game.entities) {
+      if (entity.role === 'teacher' && entity.knockedUntil < now) return true;
+    }
+    return false;
   }
   // Count attendance by room presence so lessons don't stall when teachers pace near the board.
-  return game.entities.some((entity) => (
-    entity.role === 'teacher'
-    && entityRoom(entity) === currentPeriod.room
-    && entity.knockedUntil < performance.now()
-  ));
+  for (const entity of game.entities) {
+    if (entity.role === 'teacher' && entity.knockedUntil < now && entityRoom(entity) === currentPeriod.room) return true;
+  }
+  return false;
 }
 
-function lessonComplianceForPeriod(currentPeriod = schedule[game.periodIndex]) {
-  const activeStudents = game.entities.filter((entity) => (
-    entity.role !== 'teacher'
-    && entity.role !== 'janitor'
-    && entity.role !== 'nurse'
-    && hasArrivedForCurrentPeriod(entity, currentPeriod)
-    && entity.knockedUntil < performance.now()
-  ));
+function lessonComplianceForPeriod(currentPeriod = schedule[game.periodIndex], now = performance.now()) {
+  let total = 0;
+  let presentCount = 0;
+  let seatedCount = 0;
+  for (const entity of game.entities) {
+    if (entity.role === 'teacher' || entity.role === 'janitor' || entity.role === 'nurse') continue;
+    if (!hasArrivedForCurrentPeriod(entity, currentPeriod) || entity.knockedUntil >= now) continue;
+    total += 1;
+    const expectedRoom = entity.lessonRoom || currentPeriod.room;
+    const inExpectedRoom = entityRoom(entity) === expectedRoom;
+    if (inExpectedRoom) {
+      presentCount += 1;
+      if (entity.isSeated && entity.seatedRoom === expectedRoom) seatedCount += 1;
+    }
+  }
 
-  if (!activeStudents.length) {
+  if (!total) {
     return { attendancePercent: 100, seatedPercent: 100, presentCount: 0, seatedCount: 0, total: 0 };
   }
 
-  const presentCount = activeStudents.filter((entity) => entityRoom(entity) === (entity.lessonRoom || currentPeriod.room)).length;
-  const seatedCount = activeStudents.filter((entity) => (
-    entityRoom(entity) === (entity.lessonRoom || currentPeriod.room)
-    && entity.isSeated
-    && entity.seatedRoom === (entity.lessonRoom || currentPeriod.room)
-  )).length;
-
   return {
-    attendancePercent: (presentCount / activeStudents.length) * 100,
-    seatedPercent: (seatedCount / activeStudents.length) * 100,
+    attendancePercent: (presentCount / total) * 100,
+    seatedPercent: (seatedCount / total) * 100,
     presentCount,
     seatedCount,
-    total: activeStudents.length,
+    total,
   };
 }
 
-function updateAttendanceHud(currentPeriod = schedule[game.periodIndex]) {
+function updateAttendanceHud(currentPeriod = schedule[game.periodIndex], force = false, now = performance.now()) {
   if (!attendanceEl) return;
   const inLesson = isSupervisedPeriod(currentPeriod);
   if (!inLesson) {
-    attendanceEl.textContent = `🎯 Attendance: n/a | Seated: n/a`;
-    attendanceEl.title = 'Attendance tracking activates during supervised lesson periods.';
+    setCachedElementText('attendance', attendanceEl, '🎯 Attendance: n/a | Seated: n/a');
+    setCachedElementTitle('attendance', attendanceEl, 'Attendance tracking activates during supervised lesson periods.');
     return;
   }
 
-  const metrics = lessonComplianceForPeriod(currentPeriod);
+  const periodKey = `${game.dayCount}:${game.periodIndex}:${currentPeriod.room}`;
+  if (!force && game.uiCache.attendancePeriodKey === periodKey && now < game.uiCache.nextAttendanceRefreshAt) return;
+
+  const metrics = lessonComplianceForPeriod(currentPeriod, now);
   const attendanceRounded = Math.round(metrics.attendancePercent);
   const seatedRounded = Math.round(metrics.seatedPercent);
   const statusIcon = attendanceRounded >= TARGET_ATTENDANCE_PERCENT ? '✅' : '⚠️';
-  attendanceEl.textContent = `${statusIcon} Attendance: ${attendanceRounded}% | Seated: ${seatedRounded}%`;
-  attendanceEl.title = `Present ${metrics.presentCount}/${metrics.total}, seated ${metrics.seatedCount}/${metrics.total}. Target attendance: ${TARGET_ATTENDANCE_PERCENT}%+.`;
+  const text = `${statusIcon} Attendance: ${attendanceRounded}% | Seated: ${seatedRounded}%`;
+  const title = `Present ${metrics.presentCount}/${metrics.total}, seated ${metrics.seatedCount}/${metrics.total}. Target attendance: ${TARGET_ATTENDANCE_PERCENT}%+.`;
+  game.uiCache.attendanceSignature = `${text}|${title}`;
+  game.uiCache.attendancePeriodKey = periodKey;
+  game.uiCache.nextAttendanceRefreshAt = now + 600;
+  setCachedElementText('attendance', attendanceEl, text);
+  setCachedElementTitle('attendance', attendanceEl, title);
+}
+
+function refreshScheduleHud(current, periodWaiting, teacherPresent, now = performance.now()) {
+  setCachedElementText('clock', clockEl, `🕘 ${formatTime(game.timeMinutes)}`);
+  if (dayLabelEl) setCachedElementText('dayLabel', dayLabelEl, `📅 Day: ${weekdayLabelForDay()}`);
+  const waitingLabel = !periodWaiting
+    ? ''
+    : (!teacherPresent ? ' (waiting for teacher to arrive)' : ' (waiting for teacher to sit)');
+  setCachedElementText('period', periodEl, `🔔 Period: ${current.period}${waitingLabel}`);
+  setCachedElementText('roomTarget', roomTargetEl, `📍 Target: ${current.room}`);
+  if (current.period === 'Home Time' && game.choseToStayAfterSchool && game.timeMinutes < game.stayingAfterSchoolUntil) {
+    setCachedElementText('period', periodEl, `🔔 Period: Home Time (Free play until ${formatTime(game.stayingAfterSchoolUntil)})`);
+    setCachedElementText('roomTarget', roomTargetEl, '📍 Target: Computer Room (optional)');
+  }
+  updateAttendanceHud(current, false, now);
+  updateFloorStatus();
 }
 
 function currentScheduleTotalMinutes() {
@@ -7678,7 +8503,51 @@ function updateAI(dt) {
   const teacherPresent = isTeacherPresentForPeriod(current);
   const assignedTeacherName = assignedTeacherForRoom(current.room);
   const now = performance.now();
-  const headmaster = game.entities.find((entity) => entity.role === 'teacher' && entity.name === 'Mr Wacker');
+  const activeEntities = [];
+  const activeStudents = [];
+  const activeDinnerLadies = [];
+  let headmaster = null;
+  let teacherInCurrentRoom = null;
+  let teacherInComputerRoom = null;
+  for (const entity of game.entities) {
+    if (entity.knockedUntil >= now) continue;
+    activeEntities.push(entity);
+    if (entity.role === 'teacher') {
+      if (entity.name === 'Mr Wacker') headmaster = entity;
+      const roomName = entityRoom(entity);
+      if (!teacherInCurrentRoom && roomName === current.room) teacherInCurrentRoom = entity;
+      if (!teacherInComputerRoom && roomName === 'Computer Room') teacherInComputerRoom = entity;
+    } else {
+      if (isStudentCharacter(entity)) activeStudents.push(entity);
+      if (entity.role === 'dinnerLady') activeDinnerLadies.push(entity);
+    }
+  }
+  const lunchLayout = isLunchtimePeriod(current) ? diningHallLayout() : null;
+  let lunchServingCount = 0;
+  if (lunchLayout) {
+    const diningHallQueueStudents = [];
+    for (const candidate of activeStudents) {
+      if (candidate === player || !candidate.arrivedForDay) continue;
+      if (entityRoom(candidate) !== 'Dining Hall') continue;
+      if (candidate.lunchState === 'queue' || candidate.lunchState === 'beingServed' || candidate.lunchState === 'toPlate') {
+        diningHallQueueStudents.push(candidate);
+        if (candidate.lunchState === 'beingServed') lunchServingCount += 1;
+      }
+    }
+    const queueOrder = lunchQueueOrder(diningHallQueueStudents, lunchLayout);
+    for (let i = 0; i < queueOrder.length; i += 1) {
+      const queuedStudent = queueOrder[i];
+      queuedStudent.lunchQueueIndex = i;
+      if ((queuedStudent.lunchState === 'queue' || queuedStudent.lunchState === 'beingServed') && !queuedStudent.lunchQueueTicket) {
+        queuedStudent.lunchQueueTicket = game.nextLunchQueueTicket++;
+      }
+      if (queuedStudent.lunchState === 'queue') {
+        queuedStudent.target = lunchLayout.queueSlots[Math.min(i, lunchLayout.queueSlots.length - 1)];
+      }
+    }
+  }
+  const lunchDutyLady = activeDinnerLadies[0] || null;
+  const dinnerLadyWatchingField = dinnerLadyCanObserve(lunchDutyLady);
   // Deliver any deferred LLM-only dialogue once responses are ready.
   flushDeferredLlmDialogue(now);
 
@@ -7734,8 +8603,6 @@ function updateAI(dt) {
     const dtSeconds = dt / 1000;
     const isStudent = entity.role !== 'teacher' && entity.role !== 'janitor' && entity.role !== 'nurse' && entity.role !== 'dinnerLady';
     const isOutside = ['P.E. Field', 'School Gates', 'Bike Sheds'].includes(entityRoom(entity));
-    const lunchDutyLady = dinnerLadyEntity();
-    const dinnerLadyWatchingField = dinnerLadyCanObserve(lunchDutyLady);
 
     // Students occasionally emote (dance/wave/high-five/etc.) to express social mood.
     if (isStudent) maybeTriggerAmbientStudentEmote(entity, current, now);
@@ -7752,7 +8619,7 @@ function updateAI(dt) {
         entity.target = roomCenter('Toilets');
         continue;
       }
-      const layout = diningHallLayout();
+      const layout = lunchLayout;
       if (layout) {
         // Lunch routine: collect plate, queue for serving, then sit at a long table to eat.
         if (entity.lunchState === 'idle') {
@@ -7770,43 +8637,18 @@ function updateAI(dt) {
           }
         }
 
-        const lunchStudents = game.entities.filter((candidate) => (
-          candidate !== player
-          && candidate.role !== 'teacher'
-          && candidate.role !== 'janitor'
-          && candidate.role !== 'nurse'
-          && candidate.role !== 'dinnerLady'
-          && candidate.arrivedForDay
-          && entityRoom(candidate) === 'Dining Hall'
-          && (candidate.lunchState === 'queue' || candidate.lunchState === 'beingServed' || candidate.lunchState === 'toPlate')
-        ));
-        const queueOrder = lunchQueueOrder(lunchStudents, layout);
-        for (let i = 0; i < queueOrder.length; i += 1) {
-          queueOrder[i].lunchQueueIndex = i;
-          if ((queueOrder[i].lunchState === 'queue' || queueOrder[i].lunchState === 'beingServed') && !queueOrder[i].lunchQueueTicket) {
-            queueOrder[i].lunchQueueTicket = game.nextLunchQueueTicket++;
-          }
-          if (queueOrder[i].lunchState === 'queue') {
-            queueOrder[i].target = layout.queueSlots[Math.min(i, layout.queueSlots.length - 1)];
-          }
-        }
-
         if (entity.lunchState === 'queue') {
           const maxServingSlots = 2;
-          const activeServers = game.entities.filter((candidate) => (
-            candidate !== entity
-            && candidate.lunchState === 'beingServed'
-            && entityRoom(candidate) === 'Dining Hall'
-          )).length;
           const serviceSlotIndex = Math.min(Math.max(entity.lunchQueueIndex, 0), maxServingSlots - 1);
           const serviceSlot = layout.queueSlots[serviceSlotIndex] || layout.queueSlots[0];
           const atFront = entity.lunchQueueIndex >= 0
             && entity.lunchQueueIndex < maxServingSlots
             && distance(entity, serviceSlot) < 1.15;
-          if (atFront && activeServers < maxServingSlots) {
+          if (atFront && lunchServingCount < maxServingSlots) {
             entity.lunchState = 'beingServed';
             entity.lunchServiceSlotIndex = serviceSlotIndex;
             entity.lunchServedAt = now + layout.serviceDurationMs;
+            lunchServingCount += 1;
           }
         }
 
@@ -8018,7 +8860,7 @@ function updateAI(dt) {
         entity.temptedComputerUse = null;
       }
 
-      const teacherInRoom = game.entities.find((candidate) => candidate.role === 'teacher' && entityRoom(candidate) === 'Computer Room');
+      const teacherInRoom = teacherInComputerRoom;
       const skiving = entity.computerTask === 'game' || entity.computerTask === 'pictures';
       if (teacherInRoom && skiving && distance(teacherInRoom, entity) < 8.2 && game.rng() < 0.08) {
         say(teacherInRoom, '🧑‍🏫 Back to work please — this is ICT, not arcade club.', { durationMs: 3000 });
@@ -8042,10 +8884,8 @@ function updateAI(dt) {
 
     // Students form friendships and enemies from trait chemistry.
     if (isStudent && game.rng() < 0.0014) {
-      const peer = game.entities.find((candidate) => (
+      const peer = activeStudents.find((candidate) => (
         candidate !== entity
-        && candidate.role !== 'teacher'
-        && candidate.role !== 'janitor'
         && distance(candidate, entity) < 2.3
       ));
       if (peer) {
@@ -8068,7 +8908,7 @@ function updateAI(dt) {
       : (inLesson ? (entity.lessonRoom || current.room) : current.room);
     const inAssignedClassroom = inLesson && isStudent && entityRoom(entity) === expectedRoomNow;
     const walkingToClass = inLesson && isStudent && !inAssignedClassroom;
-    const nearbyStudentCrowd = isStudent ? nearbyStudentCrowdCount(entity, 3.8) : 0;
+        const nearbyStudentCrowd = isStudent ? nearbyStudentCrowdCount(entity, 3.8, activeStudents, now) : 0;
     const transitionChatterBaseChance = isStartDayPeriod(current)
       ? 0.0016
       : (walkingToClass ? 0.0033 : 0.0045);
@@ -8139,11 +8979,7 @@ function updateAI(dt) {
       markEntityHandRaised(entity, now, 2000);
       const sillyQuestions = ['🙃 Sir, can we do homework in our dreams?', '😅 Miss, is zero afraid of minus numbers?', '🤔 If I eat my notes, do I absorb the lesson?', '🧪 If we mix maths and music, do we get algebra beats?', '📏 Can I measure effort with a ruler and hand that in?', '🛰️ If I answer in space-voice, is it still correct?', '🍟 Is lunch technically a science experiment?', '🎭 If I act confident, do I get confidence marks?', '🦆 Is a duck in uniform allowed in assembly?', '📚 If I highlight everything, does that count as revision?', '🧠 Can my future self come sit this test for me?', '⏰ Can we have a two-minute break every two minutes?'];
       say(entity, sillyQuestions[Math.floor(game.rng() * sillyQuestions.length)], { durationMs: 3600 });
-      const classTeacher = game.entities.find((candidate) => (
-        candidate.role === 'teacher'
-        && entityRoom(candidate) === current.room
-        && candidate.knockedUntil < now
-      ));
+      const classTeacher = teacherInCurrentRoom;
       if (classTeacher) {
         classTeacher.speech = null;
         say(classTeacher, ['😏 Nice try. If that worked, I would eat the exam keys.', '🧠 Creative, but knowledge still needs actual study.', '😂 Brilliant joke. Now give me the real answer.', '📘 Funny. Write that in your comedy notebook, then answer properly.', '🪑 Stand-up career later, seat-work now.', '🎯 Good energy — aim it at the actual question.', '🧮 If jokes solved equations, you would be top set already.', '⏱️ Ten out of ten for timing, zero for accuracy so far.', '📝 Excellent imagination. I also need excellent handwriting and a real answer.', '🔍 I admire the chaos. I still need evidence and working out.', '🧑‍🏫 Gold star for confidence, now earn one for correctness.', '🎓 Keep the wit, lose the waffle. Answer the task.'][Math.floor(game.rng() * 12)], { durationMs: 3900 });
@@ -8207,12 +9043,10 @@ function updateAI(dt) {
     const teacherWatchingBully = findWitnessingTeacher(entity, 6.2);
     // Bullies are bolder with rubbish when staff are out of sight.
     if (entity.role === 'bully' && !teacherWatchingBully) {
-      const victim = game.entities.find((candidate) => (
-        candidate !== entity
-        && candidate.role !== 'teacher'
-        && candidate.knockedUntil < performance.now()
-        && distance(entity, candidate) < 4.4
-      ));
+        const victim = activeStudents.find((candidate) => (
+          candidate !== entity
+          && distance(entity, candidate) < 4.4
+        ));
       if (victim && entity.carryingTrash && game.rng() < 0.0045) {
         entity.facing = victim.x >= entity.x ? 1 : -1;
         throwRubbish(entity);
@@ -8288,8 +9122,7 @@ function updateAI(dt) {
       // Dinner ladies split lunch duty: one serves from the bar, the other patrols tables.
       if (isLunchtimePeriod(current) && entityRoom(entity) === 'Dining Hall') {
         const layout = diningHallLayout();
-        const allDinnerLadies = game.entities.filter((candidate) => candidate.role === 'dinnerLady');
-        const servingLady = allDinnerLadies[0];
+        const servingLady = activeDinnerLadies[0];
         const isServingLady = entity === servingLady;
 
         if (layout) {
@@ -8319,7 +9152,7 @@ function updateAI(dt) {
 
 
         if (layout && isServingLady && game.rng() < 0.0065) {
-          const servingStudent = game.entities.find((candidate) => (
+          const servingStudent = activeStudents.find((candidate) => (
             isStudentCharacter(candidate)
             && candidate.lunchState === 'beingServed'
             && entityRoom(candidate) === 'Dining Hall'
@@ -8330,11 +9163,9 @@ function updateAI(dt) {
           }
         }
         // Close-range intervention: drag one rowdy pupil to the Headmaster Office.
-        const rowdy = game.entities.find((candidate) => (
+        const rowdy = activeStudents.find((candidate) => (
           candidate !== entity
-          && isStudentCharacter(candidate)
           && entityRoom(candidate) === 'Dining Hall'
-          && candidate.knockedUntil < performance.now()
           && (candidate.role === 'bully' || candidate.mood === 'angry' || Math.abs(candidate.vx) + Math.abs(candidate.vy) > 0.42)
           && distance(entity, candidate) < 1.7
         ));
@@ -8417,10 +9248,11 @@ function updateAI(dt) {
     const crowdChokePoint = isNearDoorway(entity, 2.4) || isNearDoorway(routedTarget, 2.4) || nearStair || morningGateChokePoint;
     const canPhaseThroughCrowd = entity.phaseThroughUntil > performance.now() || crowdChokePoint;
     if (!(inLesson && studentInCurrentClass) && !canPhaseThroughCrowd) {
-      for (const other of game.entities) {
-        if (other === entity || other.knockedUntil > performance.now()) continue;
+      for (const other of activeEntities) {
+        if (other === entity) continue;
         const gapX = entity.x - other.x;
         const gapY = entity.y - other.y;
+        if (Math.abs(gapX) > 1.45 || Math.abs(gapY) > 1.45) continue;
         const gap = Math.hypot(gapX, gapY) || 0.001;
 
         // Teachers get deterministic pathing: they move through crowds while students
@@ -8684,9 +9516,10 @@ function updatePellets(dt) {
 
 function updateSchedule(dt) {
   const current = schedule[game.periodIndex];
+  const now = performance.now();
   const deltaMins = (dt / 1000) * game.timeScale;
-  const teacherPresent = isTeacherPresentForPeriod(current);
-  const teacherReadyForLesson = isAssignedTeacherSeatedForPeriod(current);
+  const teacherPresent = isTeacherPresentForPeriod(current, now);
+  const teacherReadyForLesson = isAssignedTeacherSeatedForPeriod(current, now);
   const periodWaiting = (isSupervisedPeriod(current))
     && (!teacherPresent || !teacherReadyForLesson);
 
@@ -8738,7 +9571,7 @@ function updateSchedule(dt) {
     const monitored = isSupervisedPeriod(current);
     const graceWindow = game.periodElapsed < 4;
     // One late penalty per period prevents feed spam and "mystery lines" stacking.
-    const teacherBackTurned = isAssignedTeacherBackTurnedForPeriod(current);
+    const teacherBackTurned = isAssignedTeacherBackTurnedForPeriod(current, now);
     if (entityRoom(player) !== current.room && monitored && teacherPresent && !teacherBackTurned && !graceWindow && !game.latePenaltyGiven) {
       addLines(10, `late for ${current.period}`);
       game.latePenaltyGiven = true;
@@ -8755,19 +9588,7 @@ function updateSchedule(dt) {
     }
   }
 
-  clockEl.textContent = `🕘 ${formatTime(game.timeMinutes)}`;
-  if (dayLabelEl) dayLabelEl.textContent = `📅 Day: ${weekdayLabelForDay()}`;
-  const waitingLabel = !periodWaiting
-    ? ''
-    : (!teacherPresent ? ' (waiting for teacher to arrive)' : ' (waiting for teacher to sit)');
-  periodEl.textContent = `🔔 Period: ${current.period}${waitingLabel}`;
-  roomTargetEl.textContent = `📍 Target: ${current.room}`;
-  if (current.period === 'Home Time' && game.choseToStayAfterSchool && game.timeMinutes < game.stayingAfterSchoolUntil) {
-    periodEl.textContent = `🔔 Period: Home Time (Free play until ${formatTime(game.stayingAfterSchoolUntil)})`;
-    roomTargetEl.textContent = '📍 Target: Computer Room (optional)';
-  }
-  updateAttendanceHud(current);
-  updateFloorStatus();
+  refreshScheduleHud(current, periodWaiting, teacherPresent, now);
 }
 
 
@@ -8889,9 +9710,13 @@ function checkSchoolExit() {
 // Rendering
 // -----------------------------------------------------------------------------
 function updateCamera() {
-  // Keep player near center while clamping camera edges to world bounds.
-  CAMERA.x = Math.max(0, Math.min(WORLD.w - CAMERA.w, player.x - CAMERA.w / 2));
-  CAMERA.y = Math.max(0, Math.min(WORLD.h - CAMERA.h, player.y - CAMERA.h / 2));
+  const view = getCameraViewSize();
+  CAMERA.w = view.w;
+  CAMERA.h = view.h;
+  clampCameraPan();
+  // Keep player near center by default, but allow touch users to pan away and browse campus.
+  CAMERA.x = Math.max(0, Math.min(WORLD.w - CAMERA.w, (player.x + game.cameraPanX) - CAMERA.w / 2));
+  CAMERA.y = Math.max(0, Math.min(WORLD.h - CAMERA.h, (player.y + game.cameraPanY) - CAMERA.h / 2));
 }
 
 function worldToScreen(x, y) {
@@ -8909,14 +9734,116 @@ function screenToWorld(screenX, screenY) {
   };
 }
 
+function drawPlayerTapGuidance(now = performance.now()) {
+  const destination = game.playerTapTarget;
+  if (!destination || game.autoMode) return;
+
+  const waypoint = routeWaypoint(player, destination);
+  const playerPos = worldToScreen(player.x, player.y);
+  const waypointPos = worldToScreen(waypoint.x, waypoint.y);
+  const destinationPos = worldToScreen(destination.x, destination.y);
+  const pulse = 0.5 + (Math.sin(now / 170) * 0.5);
+  const offscreen = (
+    destinationPos.sx < 18
+    || destinationPos.sx > canvas.width - 18
+    || destinationPos.sy < 18
+    || destinationPos.sy > canvas.height - 18
+  );
+  const markerPos = offscreen
+    ? {
+        sx: clampNumber(destinationPos.sx, 20, canvas.width - 20),
+        sy: clampNumber(destinationPos.sy, 20, canvas.height - 20),
+      }
+    : destinationPos;
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  ctx.strokeStyle = hexToRgba('#ffe29a', 0.4 + (pulse * 0.18));
+  ctx.lineWidth = 3.2;
+  ctx.setLineDash([10, 7]);
+  ctx.beginPath();
+  ctx.moveTo(playerPos.sx, playerPos.sy);
+  ctx.lineTo(waypointPos.sx, waypointPos.sy);
+  ctx.stroke();
+
+  if (distance(waypoint, destination) > 1.35) {
+    ctx.strokeStyle = hexToRgba('#9ed8ff', 0.22 + (pulse * 0.18));
+    ctx.lineWidth = 2.1;
+    ctx.setLineDash([5, 8]);
+    ctx.beginPath();
+    ctx.moveTo(waypointPos.sx, waypointPos.sy);
+    ctx.lineTo(destinationPos.sx, destinationPos.sy);
+    ctx.stroke();
+
+    ctx.setLineDash([]);
+    ctx.fillStyle = hexToRgba('#c8f0ff', 0.8);
+    ctx.beginPath();
+    ctx.arc(waypointPos.sx, waypointPos.sy, 4.2 + (pulse * 1.3), 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.setLineDash([]);
+  }
+
+  ctx.fillStyle = hexToRgba('#0d1623', 0.92);
+  ctx.strokeStyle = hexToRgba('#ffe7a6', 0.95);
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.arc(markerPos.sx, markerPos.sy, 9.5 + (pulse * 2.2), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.strokeStyle = hexToRgba('#fff7d1', 0.95);
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(markerPos.sx, markerPos.sy, 4.1, 0, Math.PI * 2);
+  ctx.moveTo(markerPos.sx - 8, markerPos.sy);
+  ctx.lineTo(markerPos.sx + 8, markerPos.sy);
+  ctx.moveTo(markerPos.sx, markerPos.sy - 8);
+  ctx.lineTo(markerPos.sx, markerPos.sy + 8);
+  ctx.stroke();
+
+  if (offscreen) {
+    const dx = destinationPos.sx - playerPos.sx;
+    const dy = destinationPos.sy - playerPos.sy;
+    const len = Math.hypot(dx, dy) || 1;
+    const tipX = markerPos.sx;
+    const tipY = markerPos.sy;
+    const baseX = tipX - ((dx / len) * 11);
+    const baseY = tipY - ((dy / len) * 11);
+    const sideX = -(dy / len) * 5.5;
+    const sideY = (dx / len) * 5.5;
+    ctx.fillStyle = hexToRgba('#ffe7a6', 0.95);
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(baseX + sideX, baseY + sideY);
+    ctx.lineTo(baseX - sideX, baseY - sideY);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  const targetRoom = roomAtPosition(destination)?.name;
+  const label = targetRoom ? `MOVE • ${targetRoom}` : 'MOVE';
+  const labelX = clampNumber(markerPos.sx + 12, 8, Math.max(8, canvas.width - 150));
+  const labelY = clampNumber(markerPos.sy - 10, 14, canvas.height - 10);
+  ctx.fillStyle = hexToRgba('#f7fbff', 0.92);
+  ctx.font = 'bold 10px monospace';
+  ctx.fillText(label, labelX, labelY);
+  ctx.restore();
+}
+
 // Draw a subtle checker dither so large surfaces feel textured, not flat.
 function fillDitherRect(x, y, w, h, colorA, colorB, step = 4) {
+  const profile = currentPerformanceProfile();
   ctx.fillStyle = colorA;
   ctx.fillRect(x, y, w, h);
+  if (!profile.dither) return;
   ctx.fillStyle = colorB;
-  for (let py = y; py < y + h; py += step) {
-    for (let px = x + ((py / step) % 2) * step; px < x + w; px += step * 2) {
-      ctx.fillRect(px, py, step, step);
+  const actualStep = Math.max(2, Math.round(step * profile.ditherStrideScale));
+  for (let py = y; py < y + h; py += actualStep) {
+    for (let px = x + ((py / actualStep) % 2) * actualStep; px < x + w; px += actualStep * 2) {
+      ctx.fillRect(px, py, actualStep, actualStep);
     }
   }
 }
@@ -9197,6 +10124,13 @@ function roomVisualStyle(room) {
 // Render inner textures for floors/walls so the school reads as built spaces.
 function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
   const style = roomVisualStyle(room);
+  const profile = currentPerformanceProfile();
+
+  if (!profile.detailedTextures) {
+    ctx.fillStyle = style.floorA;
+    ctx.fillRect(drawX, drawY, drawW, drawH);
+    return;
+  }
 
   if (room.type === 'corridor') {
     // Corridor tile stripes to suggest worn linoleum with floor-level color coding.
@@ -9233,6 +10167,7 @@ function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
 // Draw thick walls around each room; these give the campus stronger structure.
 function drawRoomWalls(drawX, drawY, drawW, drawH, room) {
   const style = roomVisualStyle(room);
+  const profile = currentPerformanceProfile();
   ctx.fillStyle = style.wall;
   ctx.fillRect(drawX - 2, drawY - 2, drawW + 4, 2);
   ctx.fillRect(drawX - 2, drawY + drawH, drawW + 4, 2);
@@ -9240,7 +10175,7 @@ function drawRoomWalls(drawX, drawY, drawW, drawH, room) {
   ctx.fillRect(drawX + drawW, drawY, 2, drawH);
 
   // 8-bit style pixel windows add visual depth to the larger school façades.
-  if (room.type !== 'outdoor' && room.type !== 'corridor') {
+  if (profile.detailedTextures && room.type !== 'outdoor' && room.type !== 'corridor') {
     ctx.fillStyle = style.windowA;
     for (let wx = drawX + 4; wx < drawX + drawW - 6; wx += 14) {
       ctx.fillRect(wx, drawY + 2, 6, 4);
@@ -9252,6 +10187,7 @@ function drawRoomWalls(drawX, drawY, drawW, drawH, room) {
 }
 
 function drawBrickTexture(drawX, drawY, drawW, drawH, brickColor = '#7b5a43') {
+  if (!currentPerformanceProfile().detailedTextures) return;
   ctx.fillStyle = brickColor;
   for (let by = drawY; by < drawY + drawH; by += 5) {
     const offset = ((by / 5) % 2) * 4;
@@ -9267,6 +10203,17 @@ function roomIntersectsCamera(room) {
     && room.x <= CAMERA.x + CAMERA.w
     && room.y + room.h >= CAMERA.y
     && room.y <= CAMERA.y + CAMERA.h;
+}
+
+function rectIntersectsCamera(x, y, w = 0, h = 0, margin = 0) {
+  return x + w >= CAMERA.x - margin
+    && x <= CAMERA.x + CAMERA.w + margin
+    && y + h >= CAMERA.y - margin
+    && y <= CAMERA.y + CAMERA.h + margin;
+}
+
+function pointIntersectsCamera(point, margin = 1.4) {
+  return point && rectIntersectsCamera(point.x, point.y, 0, 0, margin);
 }
 
 function pushSceneParticle(kind, x, y, options = {}) {
@@ -9307,6 +10254,10 @@ function spawnBellBurst() {
 }
 
 function updateSceneFx(dt, now = performance.now()) {
+  if (!currentPerformanceProfile().sceneParticles) {
+    if (game.sceneFx.length) game.sceneFx.length = 0;
+    return;
+  }
   const dtSeconds = dt / 1000;
   const visibleIndoorRooms = rooms.filter((room) => roomIntersectsCamera(room) && room.type !== 'outdoor');
 
@@ -9368,6 +10319,7 @@ function updateSceneFx(dt, now = performance.now()) {
 }
 
 function drawSceneLighting(now = performance.now()) {
+  if (!currentPerformanceProfile().sceneLighting) return;
   const sx = canvas.width / CAMERA.w;
   const sy = canvas.height / CAMERA.h;
 
@@ -9442,6 +10394,7 @@ function drawSceneLighting(now = performance.now()) {
 }
 
 function drawSceneParticles(now = performance.now()) {
+  if (!currentPerformanceProfile().sceneParticles || !game.sceneFx.length) return;
   const sx = canvas.width / CAMERA.w;
   const sy = canvas.height / CAMERA.h;
 
@@ -9517,8 +10470,10 @@ function drawSceneFadeOverlay(now = performance.now()) {
 }
 
 function updateWeatherFx(dt) {
+  const profile = currentPerformanceProfile();
   // Keep weather particles bounded so rendering stays lightweight.
-  const spawnCount = game.weather === 'rain' ? 3 : game.weather === 'snow' ? 2 : game.weather === 'windy' ? 1 : 0;
+  const baseSpawnCount = game.weather === 'rain' ? 3 : game.weather === 'snow' ? 2 : game.weather === 'windy' ? 1 : 0;
+  const spawnCount = Math.max(0, Math.round(baseSpawnCount * profile.weatherSpawnMultiplier));
   for (let i = 0; i < spawnCount; i += 1) {
     game.weatherFx.push({ x: game.rng() * WORLD.w, y: CAMERA.y - 2 + game.rng() * 3, life: 6000 + game.rng() * 3000 });
   }
@@ -9531,11 +10486,16 @@ function updateWeatherFx(dt) {
     particle.life -= dt;
   }
   game.weatherFx = game.weatherFx.filter((particle) => particle.life > 0 && particle.y < WORLD.h + 3);
+  const maxWeatherFx = Math.max(18, Math.round(90 * profile.weatherSpawnMultiplier));
+  if (game.weatherFx.length > maxWeatherFx) {
+    game.weatherFx.splice(0, game.weatherFx.length - maxWeatherFx);
+  }
 }
 
 function drawTrees(sx, sy) {
   const windSway = game.weather === 'windy' ? Math.sin(performance.now() / 120) * 2.8 : 0;
   for (const tree of trees) {
+    if (!pointIntersectsCamera(tree, 2.8)) continue;
     const p = worldToScreen(tree.x, tree.y);
     ctx.fillStyle = '#4c3629';
     ctx.fillRect(p.sx - 2, p.sy - 3, 4, 10);
@@ -9591,6 +10551,8 @@ function drawWeatherOverlay() {
 function drawWorld() {
   const sx = canvas.width / CAMERA.w;
   const sy = canvas.height / CAMERA.h;
+  const profile = currentPerformanceProfile();
+  const now = performance.now();
 
   // Layered sky gradient keeps the scene colorful while remaining lightweight.
   const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
@@ -9601,8 +10563,10 @@ function drawWorld() {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   // Subtle scanlines maintain retro feel without reducing readability.
-  ctx.fillStyle = 'rgba(15, 20, 38, 0.12)';
-  for (let y = 0; y < canvas.height; y += 5) ctx.fillRect(0, y, canvas.width, 1);
+  if (profile.scanlines) {
+    ctx.fillStyle = 'rgba(15, 20, 38, 0.12)';
+    for (let y = 0; y < canvas.height; y += 5) ctx.fillRect(0, y, canvas.width, 1);
+  }
 
   // Restore floor separators so every level boundary is visible in the game window.
   const floorBreaks = [15, 50, 76, 110];
@@ -9615,6 +10579,7 @@ function drawWorld() {
   }
 
   for (const room of rooms) {
+    if (!roomIntersectsCamera(room)) continue;
     const drawX = Math.floor((room.x - CAMERA.x) * sx);
     const drawY = Math.floor((room.y - CAMERA.y) * sy);
     const drawW = Math.ceil(room.w * sx);
@@ -9759,6 +10724,7 @@ function drawWorld() {
   for (const stair of stairs) {
     const points = [stair.fromY, stair.toY];
     for (const y of points) {
+      if (!rectIntersectsCamera(stair.x, y, 0, 0, 2.2)) continue;
       const pos = worldToScreen(stair.x, y);
       const towardArrow = y === stair.fromY
         ? (stair.toY > stair.fromY ? '↓' : '↑')
@@ -9845,6 +10811,7 @@ function drawWorld() {
 
   // Vending machines and bins are rendered as interactable landmarks.
   for (const vm of vendingMachines) {
+    if (!pointIntersectsCamera(vm, 1.8)) continue;
     const p = worldToScreen(vm.x, vm.y);
     fillDitherRect(p.sx - 10, p.sy - 14, 20, 28, '#2b4e7c', '#3f6aa0', 3);
     ctx.fillStyle = '#9ff3ff';
@@ -9855,6 +10822,7 @@ function drawWorld() {
   }
 
   for (const bin of trashCans) {
+    if (!pointIntersectsCamera(bin, 1.6)) continue;
     const p = worldToScreen(bin.x, bin.y);
     fillDitherRect(p.sx - 7, p.sy - 9, 14, 16, '#4b5a66', '#6a7a88', 2);
     ctx.fillStyle = '#d3dee8';
@@ -9865,6 +10833,7 @@ function drawWorld() {
 
   // Locker banks provide visual wayfinding on each floor corridor.
   for (const locker of lockers) {
+    if (!pointIntersectsCamera(locker, 1.6)) continue;
     const p = worldToScreen(locker.x, locker.y);
     fillDitherRect(p.sx - 6, p.sy - 8, 12, 16, '#8b99a8', '#6f7f8e', 2);
     ctx.fillStyle = '#d8e1e8';
@@ -9876,6 +10845,7 @@ function drawWorld() {
   }
 
   for (const fountain of waterFountains) {
+    if (!pointIntersectsCamera(fountain, 1.6)) continue;
     const p = worldToScreen(fountain.x, fountain.y);
     fillDitherRect(p.sx - 8, p.sy - 11, 16, 20, '#4ea8de', '#72c6f5', 3);
     ctx.fillStyle = '#dff6ff';
@@ -9888,6 +10858,7 @@ function drawWorld() {
   }
 
   for (const urinal of urinals) {
+    if (!pointIntersectsCamera(urinal, 1.4)) continue;
     const p = worldToScreen(urinal.x, urinal.y);
     fillDitherRect(p.sx - 6, p.sy - 9, 12, 14, '#d6deea', '#b8c2d2', 2);
     ctx.fillStyle = '#52647a';
@@ -9896,6 +10867,7 @@ function drawWorld() {
   }
 
   for (const shower of showers) {
+    if (!pointIntersectsCamera(shower, 1.4)) continue;
     const p = worldToScreen(shower.x, shower.y);
     fillDitherRect(p.sx - 8, p.sy - 10, 16, 18, '#8ecae6', '#5da9d6', 3);
     ctx.fillStyle = '#e3f6ff';
@@ -9906,12 +10878,14 @@ function drawWorld() {
   }
 
   for (const waste of game.litter) {
+    if (!pointIntersectsCamera(waste, 1.3)) continue;
     const p = worldToScreen(waste.x, waste.y);
     ctx.fillStyle = waste.kind === 'sick' ? '#8ac926' : '#f4a261';
     ctx.fillRect(p.sx - 3, p.sy - 2, 6, 4);
   }
 
   for (const board of blackboards) {
+    if (!pointIntersectsCamera(board, 2.2)) continue;
     const p = worldToScreen(board.x, board.y);
     const bx = p.sx - (BOARD_DRAW.width / 2);
     const by = p.sy - (BOARD_DRAW.height / 2);
@@ -9931,6 +10905,7 @@ function drawWorld() {
 
   // Computer room terminals display live student activity (work vs skiving).
   for (const station of computerStations) {
+    if (!pointIntersectsCamera(station, 1.8)) continue;
     const p = worldToScreen(station.x, station.y);
     const meta = computerUseMeta[station.use] || computerUseMeta.word;
     ctx.fillStyle = '#6c757d';
@@ -9952,7 +10927,7 @@ function drawWorld() {
 
   // Themed classroom props visually communicate each room's speciality.
   for (const prop of classroomProps) {
-    if (performance.now() < prop.hiddenUntil) continue;
+    if (now < prop.hiddenUntil || !pointIntersectsCamera(prop, 1.8 + (prop.size || 1))) continue;
     const p = worldToScreen(prop.x, prop.y);
     const scale = Math.max(1, prop.size || 1);
     const w = 8 + (scale * 4);
@@ -9968,6 +10943,7 @@ function drawWorld() {
 
   // Timed collectible loot rotates in/out around the school for trading routes.
   for (const item of game.collectables) {
+    if (!pointIntersectsCamera(item, 1.5)) continue;
     const p = worldToScreen(item.x, item.y);
     fillDitherRect(p.sx - 6, p.sy - 6, 12, 12, item.tint || '#ffe066', '#ffffff66', 2);
     ctx.fillStyle = '#1a1a1a';
@@ -9978,6 +10954,7 @@ function drawWorld() {
   // Shield pickups now use a richer gem-like sprite with highlight.
   for (const shield of shields) {
     if (shield.found) continue;
+    if (!pointIntersectsCamera(shield, 1.5)) continue;
     const p = worldToScreen(shield.x, shield.y);
     ctx.fillStyle = '#ffd166';
     ctx.fillRect(p.sx - 4, p.sy - 7, 8, 14);
@@ -9995,11 +10972,13 @@ function drawWorld() {
 function drawEntities() {
   const sx = canvas.width / CAMERA.w;
   const sy = canvas.height / CAMERA.h;
+  const profile = currentPerformanceProfile();
+  const now = performance.now();
 
   const current = schedule[game.periodIndex];
   for (const entity of game.entities) {
     if (!hasArrivedForCurrentPeriod(entity, current)) continue;
-    const now = performance.now();
+    if (!rectIntersectsCamera(entity.x, entity.y, 0, 0, 5.5)) continue;
     const knocked = entity.knockedUntil > now;
     const isPunching = entity.punchUntil > now;
     const isWriting = entity.writingUntil > now;
@@ -10576,7 +11555,7 @@ function drawEntities() {
       ctx.fillText(`${moodGlyph}${postureGlyph}`, px - 4, py - 26);
     }
 
-    const nowBubble = performance.now();
+    const nowBubble = now;
     if (entity.speech && entity.speech.until > nowBubble) {
       const bubbleOffset = bubbleStackOffset(entity, nowBubble);
       const lines = wrapBubbleText(entity.speech.text, 180);
@@ -10627,21 +11606,23 @@ function drawEntities() {
     }
 
     // Each person gets mini vitals bars (energy + bladder) like Eric.
-    const barW = 18;
-    const barX = px - barW / 2;
-    ctx.fillStyle = '#1c2439';
-    ctx.fillRect(barX, py - 39, barW, 2);
-    ctx.fillRect(barX, py - 35, barW, 2);
-    ctx.fillRect(barX, py - 31, barW, 2);
-    ctx.fillStyle = '#f6bd60';
-    ctx.fillRect(barX, py - 39, (barW * entity.energy) / 100, 2);
-    ctx.fillStyle = '#4cc9f0';
-    ctx.fillRect(barX, py - 35, (barW * entity.bladder) / 100, 2);
-    // Relationship bar uses strongest known bond so social dynamics are visible at a glance.
-    const strongestBond = strongestBondForEntity(entity);
-    const relationNorm = strongestBond ? (clampScore(strongestBond.score, -100, 100) + 100) / 200 : 0.5;
-    ctx.fillStyle = strongestBond && strongestBond.score >= 0 ? '#80ed99' : '#ff7096';
-    ctx.fillRect(barX, py - 31, barW * relationNorm, 2);
+    if (profile.drawNpcVitals) {
+      const barW = 18;
+      const barX = px - barW / 2;
+      ctx.fillStyle = '#1c2439';
+      ctx.fillRect(barX, py - 39, barW, 2);
+      ctx.fillRect(barX, py - 35, barW, 2);
+      ctx.fillRect(barX, py - 31, barW, 2);
+      ctx.fillStyle = '#f6bd60';
+      ctx.fillRect(barX, py - 39, (barW * entity.energy) / 100, 2);
+      ctx.fillStyle = '#4cc9f0';
+      ctx.fillRect(barX, py - 35, (barW * entity.bladder) / 100, 2);
+      // Relationship bar uses strongest known bond so social dynamics are visible at a glance.
+      const strongestBond = strongestBondForEntity(entity);
+      const relationNorm = strongestBond ? (clampScore(strongestBond.score, -100, 100) + 100) / 200 : 0.5;
+      ctx.fillStyle = strongestBond && strongestBond.score >= 0 ? '#80ed99' : '#ff7096';
+      ctx.fillRect(barX, py - 31, barW * relationNorm, 2);
+    }
 
     const shouldDrawName = entity.role === 'player' || game.showNpcNames;
     if (shouldDrawName) {
@@ -10652,12 +11633,14 @@ function drawEntities() {
   }
 
   for (const pellet of game.pellets) {
+    if (!pointIntersectsCamera(pellet, 1.2)) continue;
     ctx.fillStyle = pellet.kind === 'item' ? (pellet.itemColor || '#f28482') : '#f8f9fa';
     ctx.fillRect((pellet.x - CAMERA.x - 0.08) * sx, (pellet.y - CAMERA.y - 0.08) * sy, 3, 3);
   }
 }
 
 function drawClassroomChairOverlays() {
+  if (!currentPerformanceProfile().showChairOverlays) return;
   const sx = canvas.width / CAMERA.w;
   const sy = canvas.height / CAMERA.h;
   const current = schedule[game.periodIndex];
@@ -10671,6 +11654,7 @@ function drawClassroomChairOverlays() {
 
     const seat = getSeatPosition(entity.seatedRoom, entity.seatIndex, entity);
     if (!seat) continue;
+    if (!pointIntersectsCamera(seat, 1.5)) continue;
     // Only overlay when the student is visually above their chair to sell depth.
     const isAboveChair = entity.y <= seat.y + 0.5;
     if (!isAboveChair) continue;
@@ -10686,7 +11670,7 @@ function drawClassroomChairOverlays() {
 
 function refreshMiniMapNpcSnapshot() {
   const now = performance.now();
-  if (now - game.miniMapLastRefreshAt < 350) return;
+  if (now - game.miniMapLastRefreshAt < currentPerformanceProfile().miniMapRefreshMs) return;
 
   // Snapshotting reduces mini-map draw cost while still showing movement frequently.
   game.miniMapNpcSnapshot = game.entities
@@ -10700,6 +11684,38 @@ function refreshMiniMapNpcSnapshot() {
   game.miniMapLastRefreshAt = now;
 }
 
+function ensureMiniMapBase(mapW, mapH) {
+  const cacheKey = `${mapW}x${mapH}`;
+  if (miniMapBaseCacheKey === cacheKey && miniMapBaseCanvas.width === mapW && miniMapBaseCanvas.height === mapH) return;
+
+  miniMapBaseCanvas.width = mapW;
+  miniMapBaseCanvas.height = mapH;
+  miniMapBaseCacheKey = cacheKey;
+  const mapCtx = miniMapBaseCanvas.getContext('2d');
+  if (!mapCtx) return;
+
+  const scaleX = mapW / WORLD.w;
+  const scaleY = mapH / WORLD.h;
+  mapCtx.clearRect(0, 0, mapW, mapH);
+  mapCtx.fillStyle = 'rgba(8,12,20,0.86)';
+  mapCtx.fillRect(0, 0, mapW, mapH);
+  mapCtx.strokeStyle = '#89b2d9';
+  mapCtx.strokeRect(0, 0, mapW, mapH);
+
+  for (const room of rooms) {
+    const rx = room.x * scaleX;
+    const ry = room.y * scaleY;
+    const rw = Math.max(1, room.w * scaleX);
+    const rh = Math.max(1, room.h * scaleY);
+    mapCtx.fillStyle = room.type === 'outdoor'
+      ? 'rgba(88,173,102,0.65)'
+      : room.type === 'corridor'
+        ? 'rgba(116,151,210,0.65)'
+        : 'rgba(219,200,168,0.65)';
+    mapCtx.fillRect(rx, ry, rw, rh);
+  }
+}
+
 function drawMiniMap() {
   // Compact mini-map with objective locators for fast orientation.
   const mapW = 220;
@@ -10710,20 +11726,8 @@ function drawMiniMap() {
   const scaleX = mapW / WORLD.w;
   const scaleY = mapH / WORLD.h;
 
-  ctx.fillStyle = 'rgba(8,12,20,0.86)';
-  ctx.fillRect(mapX, mapY, mapW, mapH);
-  ctx.strokeStyle = '#89b2d9';
-  ctx.strokeRect(mapX, mapY, mapW, mapH);
-
-  // Render room blocks lightly so floors and spaces remain distinguishable.
-  for (const room of rooms) {
-    const rx = mapX + room.x * scaleX;
-    const ry = mapY + room.y * scaleY;
-    const rw = Math.max(1, room.w * scaleX);
-    const rh = Math.max(1, room.h * scaleY);
-    ctx.fillStyle = room.type === 'outdoor' ? 'rgba(88,173,102,0.65)' : room.type === 'corridor' ? 'rgba(116,151,210,0.65)' : 'rgba(219,200,168,0.65)';
-    ctx.fillRect(rx, ry, rw, rh);
-  }
+  ensureMiniMapBase(mapW, mapH);
+  ctx.drawImage(miniMapBaseCanvas, mapX, mapY);
 
   const current = schedule[game.periodIndex];
   const objectiveRoom = roomByName(current.room);
@@ -10847,18 +11851,22 @@ function getEntityScreenPosition(entity) {
   };
 }
 
-function canvasPointerToInternal(event) {
+function canvasClientToInternal(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
   // Pointer coordinates are in CSS pixels; convert them to canvas buffer pixels.
   // This keeps hover/click hitboxes accurate even when the canvas is scaled.
   const scaleX = canvas.width / rect.width;
   const scaleY = canvas.height / rect.height;
   return {
-    mouseX: (event.clientX - rect.left) * scaleX,
-    mouseY: (event.clientY - rect.top) * scaleY,
-    wrapX: event.clientX - rect.left,
-    wrapY: event.clientY - rect.top,
+    mouseX: (clientX - rect.left) * scaleX,
+    mouseY: (clientY - rect.top) * scaleY,
+    wrapX: clientX - rect.left,
+    wrapY: clientY - rect.top,
   };
+}
+
+function canvasPointerToInternal(event) {
+  return canvasClientToInternal(event.clientX, event.clientY);
 }
 
 function findHoveredEntityAtScreen(mouseX, mouseY) {
@@ -10924,39 +11932,207 @@ function findHoveredWorldTargetAtScreen(mouseX, mouseY) {
   ));
 
   const pointTargets = [];
-  const addPoints = (points, labelBuilder, hitRadius = 1.1) => {
+  const addPoints = (points, buildTarget, hitRadius = 1.1) => {
     for (const point of points) {
-      pointTargets.push({
-        x: point.x,
-        y: point.y,
-        hitRadius,
-        title: labelBuilder(point),
-      });
+      pointTargets.push(buildTarget(point, hitRadius));
     }
   };
 
   // Keep item labels short and descriptive to avoid clutter while moving the mouse.
-  addPoints(vendingMachines, (point) => `🥤 ${point.label}`);
-  addPoints(trashCans, (point) => `🗑️ ${point.label}`);
-  addPoints(lockers, (point) => {
+  addPoints(vendingMachines, (point, hitRadius) => ({
+    kind: 'vending-machine',
+    source: point,
+    x: point.x,
+    y: point.y,
+    hitRadius,
+    heading: `🥤 ${point.label}`,
+    details: `📍 ${room?.name || 'School grounds'} • Hold for snacks and drinks`,
+    interactive: true,
+  }));
+  addPoints(trashCans, (point, hitRadius) => ({
+    kind: 'trash-can',
+    source: point,
+    x: point.x,
+    y: point.y,
+    hitRadius,
+    heading: `🗑️ ${point.label}`,
+    details: `📍 ${room?.name || 'School grounds'} • Hold to bin rubbish`,
+    interactive: true,
+  }));
+  addPoints(lockers, (point, hitRadius) => {
     const lockerNum = lockerNumberFromId(point.id);
-    return `🗄️ Locker ${lockerNum}${point.assignedTo ? ` (${point.assignedTo})` : ''}`;
+    return {
+      kind: 'locker',
+      source: point,
+      x: point.x,
+      y: point.y,
+      hitRadius: 0.9,
+      heading: `🗄️ Locker ${lockerNum}${point.assignedTo ? ` (${point.assignedTo})` : ''}`,
+      details: `📍 ${room?.name || 'Corridor'} • Hold for locker options`,
+      interactive: true,
+    };
   }, 0.9);
-  addPoints(waterFountains, (point) => `⛲ ${point.label}`);
-  addPoints(urinals, (point) => `🚻 ${point.label}`, 0.95);
-  addPoints(showers, (point) => `🚿 ${point.label}`, 0.95);
-  addPoints(roomDoors, (point) => `🚪 Door to ${point.room}`);
-  addPoints(stairs, (point) => `🪜 ${point.label}`);
-  addPoints(blackboards, (point) => `🧑‍🏫 ${point.room} blackboard`);
+  addPoints(waterFountains, (point, hitRadius) => ({
+    kind: 'fountain',
+    source: point,
+    x: point.x,
+    y: point.y,
+    hitRadius,
+    heading: `⛲ ${point.label}`,
+    details: `📍 ${room?.name || 'School grounds'} • Hold to drink`,
+    interactive: true,
+  }));
+  addPoints(urinals, (point) => ({
+    kind: 'urinal',
+    source: point,
+    x: point.x,
+    y: point.y,
+    hitRadius: 0.95,
+    heading: `🚻 ${point.label}`,
+    details: `📍 Toilets • Hold to use`,
+    interactive: true,
+  }), 0.95);
+  addPoints(showers, (point) => ({
+    kind: 'shower',
+    source: point,
+    x: point.x,
+    y: point.y,
+    hitRadius: 0.95,
+    heading: `🚿 ${point.label}`,
+    details: `📍 Gym • Hold to wash up`,
+    interactive: true,
+  }), 0.95);
+  addPoints(roomDoors, (point, hitRadius) => ({
+    kind: 'door',
+    source: point,
+    x: point.x,
+    y: point.y,
+    hitRadius,
+    heading: `🚪 Door to ${point.room}`,
+    details: `📍 ${room?.name || point.room} • Hold to move through`,
+    interactive: true,
+  }));
+  addPoints(stairs, (point, hitRadius) => ({
+    kind: 'stairs',
+    source: point,
+    x: point.x,
+    y: stairPointForFloor(point, entityFloor(player))?.y ?? point.fromY,
+    hitRadius,
+    heading: `🪜 ${point.label}`,
+    details: `📍 ${room?.name || 'Stairwell'} • Hold to change floors`,
+    interactive: true,
+  }));
+  addPoints(blackboards, (point, hitRadius) => ({
+    kind: 'blackboard',
+    source: point,
+    roomName: point.room,
+    x: point.x,
+    y: point.y,
+    hitRadius,
+    heading: `🧑‍🏫 ${point.room} blackboard`,
+    details: point.text
+      ? `📍 ${point.room} • Hold to read or write`
+      : `📍 ${point.room} • Hold to write on the board`,
+    interactive: true,
+  }));
+  addPoints(computerStations, (point, hitRadius) => ({
+    kind: 'computer-station',
+    source: point,
+    roomName: point.room,
+    x: point.x,
+    y: point.y,
+    hitRadius,
+    heading: `🖥️ ${point.id.toUpperCase()}`,
+    details: `📍 ${point.room} • Hold to use computer`,
+    interactive: true,
+  }), 0.95);
+
+  const dining = diningHallLayout();
+  if (dining) {
+    pointTargets.push({
+      kind: 'plate-stand',
+      source: dining.plateStand,
+      roomName: 'Dining Hall',
+      x: dining.plateStand.x,
+      y: dining.plateStand.y,
+      hitRadius: 1.35,
+      heading: '🍽️ Lunch plates',
+      details: '📍 Dining Hall • Hold to grab lunch',
+      interactive: true,
+    });
+    pointTargets.push({
+      kind: 'serving-point',
+      source: dining.servingPoint,
+      roomName: 'Dining Hall',
+      x: dining.servingPoint.x,
+      y: dining.servingPoint.y,
+      hitRadius: 1.25,
+      heading: '🍛 Serving counter',
+      details: '📍 Dining Hall • Hold to get food',
+      interactive: true,
+    });
+    dining.seats.forEach((seat, idx) => {
+      pointTargets.push({
+        kind: 'dining-seat',
+        roomName: 'Dining Hall',
+        seatIndex: idx,
+        x: seat.x,
+        y: seat.y,
+        hitRadius: 0.95,
+        heading: `🪑 Dining seat ${idx + 1}`,
+        details: '📍 Dining Hall • Hold to sit here',
+        interactive: true,
+      });
+    });
+  }
+
+  for (const candidate of rooms) {
+    const layout = getRoomSeatLayout(candidate.name);
+    if (!layout?.seats?.length) continue;
+    layout.seats.forEach((seat, idx) => {
+      pointTargets.push({
+        kind: 'classroom-seat',
+        roomName: candidate.name,
+        seatIndex: idx,
+        x: seat.x,
+        y: seat.y,
+        hitRadius: 0.82,
+        heading: `🪑 ${candidate.name} seat ${idx + 1}`,
+        details: `📍 ${candidate.name} • Hold to sit here`,
+        interactive: true,
+      });
+    });
+  }
 
   for (const prop of classroomProps) {
-    if ((prop.hiddenUntil || 0) > game.timeMinutes) continue;
-    pointTargets.push({ x: prop.x, y: prop.y, hitRadius: 0.9, title: `${prop.icon} ${prop.kind}` });
+    if ((prop.hiddenUntil || 0) > performance.now()) continue;
+    const propSize = Math.max(0.9, 0.82 + (((prop.size || 1) - 1) * 0.32));
+    pointTargets.push({
+      kind: 'classroom-prop',
+      source: prop,
+      roomName: prop.room,
+      x: prop.x,
+      y: prop.y,
+      hitRadius: propSize,
+      heading: `${prop.icon} ${prop.kind}`,
+      details: `📍 ${prop.room} • Hold for object actions`,
+      interactive: true,
+    });
   }
 
   for (const item of game.collectables || []) {
     if (item.collected) continue;
-    pointTargets.push({ x: item.x, y: item.y, hitRadius: 0.9, title: `${item.icon || '📦'} ${item.name || item.kind || 'Collectable item'}` });
+    pointTargets.push({
+      kind: 'collectable',
+      source: item,
+      itemName: item.name,
+      x: item.x,
+      y: item.y,
+      hitRadius: 0.9,
+      heading: `${item.icon || '📦'} ${item.name || item.kind || 'Collectable item'}`,
+      details: `📍 ${room?.name || 'School grounds'} • Hold to pick up`,
+      interactive: true,
+    });
   }
 
   let closestPoint = null;
@@ -10970,16 +12146,14 @@ function findHoveredWorldTargetAtScreen(mouseX, mouseY) {
   }
 
   if (closestPoint) {
-    return {
-      heading: closestPoint.title,
-      details: room ? `📍 ${room.name}` : '📍 School grounds',
-    };
+    return closestPoint;
   }
 
   if (room) {
     return {
       heading: `🗺️ ${room.name}`,
       details: `Floor: ${room.floor} • ${room.type}`,
+      interactive: false,
     };
   }
 
@@ -11128,84 +12302,651 @@ function interactionCooldownRemainingHours(target, optionId) {
   return Math.max(0, INTERACTION_COOLDOWN_HOURS - elapsed);
 }
 
-function openInteractionPanelFor(target) {
-  if (!target || target.role === 'player') return;
+function openGenericInteractionPanel({
+  target,
+  title,
+  meta = '',
+  hint = '',
+  options = [],
+  emptyMessage = '⚠️ No interactions available right now.',
+}) {
   game.selectedInteractionTarget = target;
   interactionPanelEl.hidden = false;
-  interactionTitleEl.textContent = `Talk to ${target.name}`;
-  if ((target.refusesEricUntilDay || 0) > game.dayCount) {
-    interactionMetaEl.textContent = `${target.name} is still upset and refuses to talk until a later day.`;
-    interactionOptionsEl.innerHTML = '<p>🙅 They are ignoring Eric after past betrayal.</p>';
-    return;
-  }
-  interactionMetaEl.textContent = `Relationship: ${relationshipLabel(target.relationships?.Eric || 0)} • Reputation: ${Math.round(target.ericReputation || 0)} • Cards: ${(target.dailyCards || []).length}`;
+  interactionTitleEl.textContent = title;
+  interactionMetaEl.textContent = meta;
+  interactionMetaEl.hidden = !meta;
+  interactionHintEl.textContent = hint;
+  interactionHintEl.hidden = !hint;
   interactionOptionsEl.innerHTML = '';
 
-  const options = interactionOptionsFor(target);
   if (!options.length) {
-    interactionOptionsEl.innerHTML = '<p>⚠️ No interactions available right now.</p>';
+    interactionOptionsEl.innerHTML = `<p>${emptyMessage}</p>`;
     return;
   }
 
-  // Button list is generated from a single data table for fast UI updates.
   for (const option of options) {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.title = `Try: ${option.label}. Outcome depends on ${target.name}'s traits and your charisma.`;
-    btn.textContent = `${option.icon} ${option.label}`;
-    const remainingHours = interactionCooldownRemainingHours(target, option.id);
-    if (remainingHours > 0) {
-      btn.disabled = true;
-      btn.title = `${option.label} available again in ${remainingHours.toFixed(1)} in-game hours.`;
-      btn.textContent = `${option.icon} ${option.label} (cooldown ${remainingHours.toFixed(1)}h)`;
-    }
+    btn.title = option.title || option.label;
+    btn.textContent = `${option.icon ? `${option.icon} ` : ''}${option.label}`;
+    btn.disabled = Boolean(option.disabled);
     btn.onclick = () => {
-      const cooldownLeft = interactionCooldownRemainingHours(target, option.id);
-      if (cooldownLeft > 0) {
-        announce(`⏳ ${target.name} shrugs: "Not yet. Try again in ${cooldownLeft.toFixed(1)} in-game hours."`);
+      if (option.disabled) {
+        if (typeof option.onDisabledSelect === 'function') option.onDisabledSelect();
         return;
       }
-      const line = option.lines[Math.floor(game.rng() * option.lines.length)];
-      announce(`🗨️ Eric to ${target.name}: "${line}"`);
-      game.lastInteractionAtByTarget[target.name] = game.lastInteractionAtByTarget[target.name] || {};
-      game.lastInteractionAtByTarget[target.name][option.id] = game.timeMinutes;
-
-      if (option.action === 'trade') {
-        attemptInteractionTrade(target, { haggle: false });
-      } else if (option.action === 'haggle') {
-        attemptInteractionTrade(target, { haggle: true });
-      } else if (option.action === 'card-battle') {
-        playTrumpCardBattle(target);
-      } else if (option.action === 'mug-cards') {
-        mugCardsFromTarget(target);
-      } else {
-        const delta = calculateStudentInteractionDelta(target, option);
-        adjustEricRelationship(target, delta, `social:${option.id}`);
-        target.ericReputation = Math.max(-100, Math.min(100, (target.ericReputation || 0) + delta));
-        if (delta >= 4) announce(`🙂 ${target.name}: "Fair play, Eric."`, { source: target, range: 8, force: true });
-        else if (delta <= -4) announce(`😠 ${target.name}: "Not cool, Eric."`, { source: target, range: 8, force: true });
-        else announce(`😐 ${target.name}: "Hmm... maybe."`, { source: target, range: 8, force: true });
-      }
-
-      interactionMetaEl.textContent = `Relationship: ${relationshipLabel(target.relationships?.Eric || 0)} • Reputation: ${Math.round(target.ericReputation || 0)} • Cards: ${(target.dailyCards || []).length}`;
+      option.onSelect?.();
+      if (option.closeOnSelect !== false) closeInteractionPanel();
     };
     interactionOptionsEl.appendChild(btn);
   }
 }
 
-function onCanvasClick(event) {
-  const pointer = canvasPointerToInternal(event);
+function normalizeInteractionLabel(text) {
+  return String(text || '').replace(/^[^A-Za-z0-9]+/, '').trim() || 'that';
+}
+
+function resolveWorldInteractionTarget(target) {
+  if (!target) return null;
+  if (target.kind === 'collectable') {
+    const item = resolveCollectableTarget(target);
+    return item ? { ...target, source: item, x: item.x, y: item.y } : null;
+  }
+  if (target.kind === 'classroom-prop' && target.source) {
+    if ((target.source.hiddenUntil || 0) > performance.now()) return null;
+    return {
+      ...target,
+      x: target.source.x,
+      y: target.source.y,
+    };
+  }
+  if (target.source && Number.isFinite(target.source.x) && Number.isFinite(target.source.y)) {
+    return {
+      ...target,
+      x: target.source.x,
+      y: target.source.y,
+    };
+  }
+  return target;
+}
+
+function worldActionTargetPoint(target, fallbackGap = 1.55) {
+  if (!target) return null;
+  if (target.kind === 'classroom-seat' || target.kind === 'dining-seat') return { x: target.x, y: target.y };
+  if (target.kind === 'stairs' && target.source) return stairPointForFloor(target.source, entityFloor(player)) || { x: target.x, y: target.y };
+  if (target.kind === 'door' && target.source) return { x: target.source.x, y: player.y < target.source.interiorY ? target.source.exteriorY : target.source.interiorY };
+  return approachPointForInteractionTarget({ x: target.x, y: target.y }) || {
+    x: target.x,
+    y: target.y - fallbackGap,
+  };
+}
+
+function queueOrRunWorldInteraction(target, action) {
+  const resolved = resolveWorldInteractionTarget(target);
+  if (!resolved) {
+    announce(action.missingText || 'That interaction is no longer available.');
+    return false;
+  }
+
+  const inRange = typeof action.isInRange === 'function'
+    ? action.isInRange(resolved)
+    : distance(player, resolved) < (action.range || 1.8);
+  if (inRange) {
+    clearPlayerPendingAction();
+    clearPlayerTapTarget();
+    return action.execute(resolved);
+  }
+
+  const destination = typeof action.destination === 'function'
+    ? action.destination(resolved)
+    : worldActionTargetPoint(resolved);
+  if (!destination) {
+    announce(action.missingText || 'Could not find a clear route to that interaction.');
+    return false;
+  }
+
+  game.playerPendingAction = {
+    label: action.pendingLabel || action.label,
+    missingText: action.missingText,
+    resolveTarget: () => resolveWorldInteractionTarget(target),
+    isInRange: action.isInRange || ((candidate) => distance(player, candidate) < (action.range || 1.8)),
+    destination: action.destination || ((candidate) => worldActionTargetPoint(candidate)),
+    execute: action.execute,
+  };
+  setPlayerTapTarget(destination);
+  announce(`🚶 ${player.name} is moving into position to ${normalizeInteractionLabel(action.pendingLabel || action.label).toLowerCase()}.`);
+  return true;
+}
+
+function updatePlayerPendingWorldAction() {
+  const pending = game.playerPendingAction;
+  if (!pending) return false;
+  const target = pending.resolveTarget?.();
+  if (!target) {
+    clearPlayerPendingAction();
+    clearPlayerTapTarget();
+    announce(pending.missingText || 'That interaction is no longer available.');
+    return false;
+  }
+  if (pending.isInRange(target)) {
+    clearPlayerPendingAction();
+    clearPlayerTapTarget();
+    return pending.execute(target);
+  }
+  if (!game.playerTapTarget) {
+    const destination = pending.destination?.(target);
+    if (!destination) {
+      clearPlayerPendingAction();
+      announce(pending.missingText || 'Could not reach that interaction.');
+      return false;
+    }
+    setPlayerTapTarget(destination);
+  }
+  return false;
+}
+
+function openInteractionPanelFor(target) {
+  if (!target || target.role === 'player') return;
+  if ((target.refusesEricUntilDay || 0) > game.dayCount) {
+    openGenericInteractionPanel({
+      target,
+      title: `Talk to ${target.name}`,
+      meta: `${target.name} is still upset and refuses to talk until a later day.`,
+      hint: '💡 Try again on another school day after things cool down.',
+      options: [],
+      emptyMessage: '🙅 They are ignoring Alex after past betrayal.',
+    });
+    return;
+  }
+
+  const options = interactionOptionsFor(target).map((option) => {
+    const remainingHours = interactionCooldownRemainingHours(target, option.id);
+    return {
+      icon: option.icon,
+      label: remainingHours > 0
+        ? `${option.label} (cooldown ${remainingHours.toFixed(1)}h)`
+        : option.label,
+      title: remainingHours > 0
+        ? `${option.label} available again in ${remainingHours.toFixed(1)} in-game hours.`
+        : `Try: ${option.label}. Outcome depends on ${target.name}'s traits and your charisma.`,
+      disabled: remainingHours > 0,
+      closeOnSelect: false,
+      onSelect: () => {
+        const cooldownLeft = interactionCooldownRemainingHours(target, option.id);
+        if (cooldownLeft > 0) {
+          announce(`⏳ ${target.name} shrugs: "Not yet. Try again in ${cooldownLeft.toFixed(1)} in-game hours."`);
+          return;
+        }
+        const line = option.lines[Math.floor(game.rng() * option.lines.length)];
+        announce(`🗨️ ${player.name} to ${target.name}: "${line}"`);
+        game.lastInteractionAtByTarget[target.name] = game.lastInteractionAtByTarget[target.name] || {};
+        game.lastInteractionAtByTarget[target.name][option.id] = game.timeMinutes;
+
+        if (option.action === 'trade') {
+          attemptInteractionTrade(target, { haggle: false });
+        } else if (option.action === 'haggle') {
+          attemptInteractionTrade(target, { haggle: true });
+        } else if (option.action === 'card-battle') {
+          playTrumpCardBattle(target);
+        } else if (option.action === 'mug-cards') {
+          mugCardsFromTarget(target);
+        } else {
+          const delta = calculateStudentInteractionDelta(target, option);
+          adjustEricRelationship(target, delta, `social:${option.id}`);
+          target.ericReputation = Math.max(-100, Math.min(100, (target.ericReputation || 0) + delta));
+          if (delta >= 4) announce(`🙂 ${target.name}: "Fair play, ${player.name}."`, { source: target, range: 8, force: true });
+          else if (delta <= -4) announce(`😠 ${target.name}: "Not cool, ${player.name}."`, { source: target, range: 8, force: true });
+          else announce(`😐 ${target.name}: "Hmm... maybe."`, { source: target, range: 8, force: true });
+        }
+
+        openInteractionPanelFor(target);
+      },
+    };
+  });
+
+  openGenericInteractionPanel({
+    target,
+    title: `Talk to ${target.name}`,
+    meta: `Relationship: ${relationshipLabel(target.relationships?.Eric || 0)} • Reputation: ${Math.round(target.ericReputation || 0)} • Cards: ${(target.dailyCards || []).length}`,
+    hint: '💡 Tap an option to talk, trade, joke, ask for help, or stir drama.',
+    options,
+  });
+}
+
+function worldInteractionOptionsFor(target) {
+  if (!target?.interactive) return [];
+  const seatLabel = player.isSeated && player.seatedRoom === target.roomName && distance(player, target) < 0.3
+    ? 'Stand up'
+    : 'Sit here';
+  switch (target.kind) {
+    case 'vending-machine':
+      return [{
+        icon: '🥤',
+        label: 'Buy snack or drink',
+        pendingLabel: 'buy from the vending machine',
+        isInRange: (candidate) => distance(player, candidate.source || candidate) < 2.1,
+        execute: (candidate) => playerUseVendingMachine(candidate.source || candidate),
+      }];
+    case 'plate-stand':
+    case 'serving-point':
+      return [{
+        icon: '🍽️',
+        label: 'Get lunch',
+        pendingLabel: 'get lunch',
+        isInRange: (candidate) => distance(player, candidate.source || candidate) < 2.1,
+        execute: (candidate) => playerTakeLunchAtService(candidate),
+      }];
+    case 'trash-can':
+      return [{
+        icon: '🗑️',
+        label: 'Bin rubbish',
+        pendingLabel: 'bin rubbish',
+        isInRange: (candidate) => distance(player, candidate.source || candidate) < 2.1,
+        execute: (candidate) => playerUseTrashCan(candidate.source || candidate),
+      }];
+    case 'locker':
+      return [{
+        icon: '🗄️',
+        label: 'Open locker',
+        pendingLabel: 'open the locker',
+        isInRange: (candidate) => distance(player, candidate.source || candidate) < 1.3,
+        execute: (candidate) => playerUseLocker(candidate.source || candidate),
+      }];
+    case 'fountain':
+      return [{
+        icon: '⛲',
+        label: 'Drink water',
+        pendingLabel: 'drink from the fountain',
+        isInRange: (candidate) => distance(player, candidate.source || candidate) < 2.1,
+        execute: (candidate) => playerDrinkFromFountain(candidate.source || candidate),
+      }];
+    case 'urinal':
+      return [{
+        icon: '🚻',
+        label: 'Use urinal',
+        pendingLabel: 'use the urinal',
+        isInRange: (candidate) => distance(player, candidate.source || candidate) < 1.7,
+        execute: (candidate) => playerUseUrinal(candidate.source || candidate),
+      }];
+    case 'shower':
+      return [{
+        icon: '🚿',
+        label: 'Use shower',
+        pendingLabel: 'use the shower',
+        isInRange: (candidate) => distance(player, candidate.source || candidate) < 1.9,
+        execute: (candidate) => playerUseShower(candidate.source || candidate),
+      }];
+    case 'door':
+      return [{
+        icon: '🚪',
+        label: 'Go through door',
+        pendingLabel: 'go through the door',
+        isInRange: (candidate) => distance(player, candidate.source || candidate) < 2,
+        destination: (candidate) => candidate.source ? { x: candidate.source.x, y: candidate.source.exteriorY } : worldActionTargetPoint(candidate),
+        execute: (candidate) => playerUseDoorAction(candidate.source || candidate),
+      }];
+    case 'stairs':
+      return [{
+        icon: '🪜',
+        label: 'Use stairs',
+        pendingLabel: 'use the stairs',
+        isInRange: (candidate) => {
+          const step = stairPointForFloor(candidate.source, entityFloor(player));
+          return step ? distance(player, step) < STAIR_INTERACT_RADIUS : false;
+        },
+        destination: (candidate) => stairPointForFloor(candidate.source, entityFloor(player)) || worldActionTargetPoint(candidate),
+        execute: (candidate) => playerUseStairAction(candidate.source || candidate),
+      }];
+    case 'blackboard':
+      return [
+        {
+          icon: '📋',
+          label: 'Read board',
+          pendingLabel: 'read the board',
+          isInRange: (candidate) => distance(player, candidate.source || candidate) < 2.2,
+          execute: (candidate) => playerReadBlackboard(candidate.source || candidate),
+        },
+        {
+          icon: '📝',
+          label: 'Write on board',
+          pendingLabel: 'write on the board',
+          isInRange: (candidate) => distance(player, candidate.source || candidate) < 2.2,
+          execute: (candidate) => playerWriteBlackboard(candidate.source || candidate),
+        },
+      ];
+    case 'computer-station':
+      return [{
+        icon: '🖥️',
+        label: 'Use computer',
+        pendingLabel: 'use the computer',
+        isInRange: (candidate) => distance(player, candidate.source || candidate) < 1.7,
+        execute: (candidate) => playerUseComputerStation(candidate.source || candidate),
+      }];
+    case 'classroom-seat':
+    case 'dining-seat':
+      return [{
+        icon: '🪑',
+        label: seatLabel,
+        pendingLabel: seatLabel === 'Stand up' ? 'stand up' : 'sit down',
+        isInRange: (candidate) => distance(player, candidate) < 2.25,
+        destination: (candidate) => ({ x: candidate.x, y: candidate.y }),
+        execute: (candidate) => playerSitAtSeatTarget(candidate),
+      }];
+    case 'collectable':
+      return [{
+        icon: target.heading.split(' ')[0] || '📦',
+        label: 'Pick up item',
+        pendingLabel: 'pick up the item',
+        isInRange: (candidate) => distance(player, candidate.source || candidate) < 1.3,
+        execute: (candidate) => playerPickUpCollectable(candidate),
+      }];
+    case 'classroom-prop': {
+      const prop = target.source;
+      const options = [];
+      if (prop?.kind === 'serving counter') {
+        options.push({
+          icon: '🍽️',
+          label: 'Get lunch',
+          pendingLabel: 'get lunch',
+          isInRange: (candidate) => distance(player, candidate.source || candidate) < 2.1,
+          execute: (candidate) => playerTakeLunchAtService(candidate),
+        });
+      }
+      if (prop?.kind === 'dining bench') {
+        options.push({
+          icon: '🪑',
+          label: 'Sit nearby',
+          pendingLabel: 'sit down',
+          destination: () => {
+            const layout = diningHallLayout();
+            const nearbySeat = layout?.seats?.find((seat) => distance(seat, prop) < 1.8) || null;
+            return nearbySeat ? { x: nearbySeat.x, y: nearbySeat.y } : worldActionTargetPoint(target);
+          },
+          execute: () => {
+            const layout = diningHallLayout();
+            const seat = layout?.seats
+              ?.map((entry, idx) => ({ ...entry, kind: 'dining-seat', roomName: 'Dining Hall', seatIndex: idx }))
+              .sort((a, b) => distance(a, prop) - distance(b, prop))
+              .find((entry) => !diningSeatOccupiedByAnyone(layout, entry.seatIndex, player));
+            if (!seat) {
+              announce('🪑 No free dining seats beside that bench.');
+              return false;
+            }
+            return playerSitAtSeatTarget(seat);
+          },
+        });
+      }
+      if (prop?.throwable) {
+        options.push({
+          icon: '🧰',
+          label: 'Pick up',
+          pendingLabel: `pick up the ${prop.kind}`,
+          isInRange: (candidate) => distance(player, candidate.source || candidate) < 1.8,
+          execute: (candidate) => playerPickUpProp(candidate.source || candidate),
+        });
+      }
+      options.push({
+        icon: prop?.icon || '🧰',
+        label: 'Inspect',
+        isInRange: () => true,
+        execute: (candidate) => playerInspectProp(candidate.source || candidate),
+      });
+      return options;
+    }
+    default:
+      return [];
+  }
+}
+
+function openWorldInteractionPanel(target) {
+  const options = worldInteractionOptionsFor(target).map((option) => ({
+    ...option,
+    onSelect: () => queueOrRunWorldInteraction(target, option),
+  }));
+  openGenericInteractionPanel({
+    target,
+    title: target.heading || 'Object interaction',
+    meta: target.details || '',
+    hint: '💡 Hold on world objects to open actions. Tap empty ground to move.',
+    options,
+    emptyMessage: '⚠️ No actions available for this object right now.',
+  });
+}
+
+function handleCanvasActivation(pointer, options = {}) {
+  const { touchIntent = false } = options;
   const clicked = findHoveredEntityAtScreen(pointer.mouseX, pointer.mouseY);
   if (!clicked) {
-    interactionPanelEl.hidden = true;
-    game.selectedInteractionTarget = null;
+    clearPlayerPendingAction();
+    closeInteractionPanel();
+    if (touchIntent) setPlayerTapTarget(screenToWorld(pointer.mouseX, pointer.mouseY));
     return;
   }
   if (distance(player, clicked) > 5.5) {
-    announce('💬 Move closer to chat with that person.');
+    if (touchIntent) {
+      clearPlayerPendingAction();
+      setPlayerTapTarget(approachPointForInteractionTarget(clicked));
+      return;
+    }
+    announce('ðŸ’¬ Move closer to chat with that person.');
     return;
   }
+  clearPlayerPendingAction();
   openInteractionPanelFor(clicked);
+}
+
+function shouldRecenterFromTouchTap(point, pointer) {
+  const now = performance.now();
+  const tappedEntity = findHoveredEntityAtScreen(pointer.mouseX, pointer.mouseY);
+  const withinWindow = (now - canvasGestureState.lastTapAt) <= 360;
+  const withinRadius = Math.hypot(
+    point.clientX - canvasGestureState.lastTapClientX,
+    point.clientY - canvasGestureState.lastTapClientY,
+  ) <= 28;
+  canvasGestureState.lastTapAt = now;
+  canvasGestureState.lastTapClientX = point.clientX;
+  canvasGestureState.lastTapClientY = point.clientY;
+  if (!tappedEntity && withinWindow && withinRadius) {
+    canvasGestureState.lastTapAt = -Infinity;
+    recenterCameraOnPlayer();
+    return true;
+  }
+  return false;
+}
+
+function shouldHandleCanvasTouchGesture(event) {
+  return event.pointerType === 'touch' && touchNavigationActive();
+}
+
+function getCanvasGesturePointers() {
+  return Array.from(canvasGestureState.pointers.values());
+}
+
+function pointerDistance(a, b) {
+  return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+}
+
+function pointerMidpoint(a, b) {
+  return {
+    clientX: (a.clientX + b.clientX) / 2,
+    clientY: (a.clientY + b.clientY) / 2,
+  };
+}
+
+function clearCanvasLongPressCandidate(options = {}) {
+  const { keepTriggered = false } = options;
+  if (canvasGestureState.longPressTimerId) {
+    clearTimeout(canvasGestureState.longPressTimerId);
+  }
+  canvasGestureState.longPressTimerId = 0;
+  canvasGestureState.longPressPointerId = null;
+  canvasGestureState.longPressTarget = null;
+  if (!keepTriggered) canvasGestureState.longPressTriggered = false;
+}
+
+function worldInteractionTargetAtClient(clientX, clientY) {
+  const pointer = canvasClientToInternal(clientX, clientY);
+  if (findHoveredEntityAtScreen(pointer.mouseX, pointer.mouseY)) return null;
+  const target = findHoveredWorldTargetAtScreen(pointer.mouseX, pointer.mouseY);
+  return target?.interactive ? target : null;
+}
+
+function beginCanvasLongPressCandidate(pointerId, clientX, clientY) {
+  clearCanvasLongPressCandidate();
+  const target = worldInteractionTargetAtClient(clientX, clientY);
+  if (!target) return;
+  canvasGestureState.longPressPointerId = pointerId;
+  canvasGestureState.longPressTarget = target;
+  canvasGestureState.longPressTimerId = window.setTimeout(() => {
+    const activePointer = canvasGestureState.pointers.get(pointerId);
+    if (!activePointer || activePointer.moved || getCanvasGesturePointers().length !== 1) return;
+    canvasGestureState.longPressTimerId = 0;
+    canvasGestureState.longPressTriggered = true;
+    canvasGestureState.suppressTapUntilPointersClear = true;
+    canvasGestureState.lastTapAt = -Infinity;
+    canvasGestureState.lastTouchHandledAt = performance.now();
+    openWorldInteractionPanel(resolveWorldInteractionTarget(target) || target);
+  }, TOUCH_WORLD_ACTION_LONG_PRESS_MS);
+}
+
+function onCanvasPointerDown(event) {
+  if (!shouldHandleCanvasTouchGesture(event)) return;
+  event.preventDefault();
+  canvas.setPointerCapture(event.pointerId);
+  canvasGestureState.pointers.set(event.pointerId, {
+    pointerId: event.pointerId,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    lastClientX: event.clientX,
+    lastClientY: event.clientY,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    moved: false,
+  });
+  const pointers = getCanvasGesturePointers();
+  if (pointers.length === 2) {
+    canvasGestureState.lastTapAt = -Infinity;
+    canvasGestureState.suppressTapUntilPointersClear = true;
+    canvasGestureState.pinchStartDistance = Math.max(1, pointerDistance(pointers[0], pointers[1]));
+    canvasGestureState.pinchStartZoom = game.cameraZoom;
+    canvasGestureState.lastPinchMidpoint = pointerMidpoint(pointers[0], pointers[1]);
+    clearCanvasLongPressCandidate({ keepTriggered: true });
+  } else if (pointers.length === 1) {
+    canvasGestureState.lastPinchMidpoint = null;
+    beginCanvasLongPressCandidate(event.pointerId, event.clientX, event.clientY);
+  }
+}
+
+function onCanvasPointerMove(event) {
+  if (!shouldHandleCanvasTouchGesture(event)) return;
+  event.preventDefault();
+  const point = canvasGestureState.pointers.get(event.pointerId);
+  if (!point) return;
+
+  const prevClientX = point.clientX;
+  const prevClientY = point.clientY;
+  point.lastClientX = prevClientX;
+  point.lastClientY = prevClientY;
+  point.clientX = event.clientX;
+  point.clientY = event.clientY;
+  point.moved = point.moved || Math.hypot(point.clientX - point.startClientX, point.clientY - point.startClientY) > 12;
+  if (point.moved) {
+    canvasGestureState.lastTapAt = -Infinity;
+    clearCanvasLongPressCandidate({ keepTriggered: true });
+  }
+
+  const pointers = getCanvasGesturePointers();
+  if (pointers.length >= 2) {
+    canvasGestureState.suppressTapUntilPointersClear = true;
+    clearCanvasLongPressCandidate({ keepTriggered: true });
+    const [a, b] = pointers;
+    const previousMidpoint = canvasGestureState.lastPinchMidpoint || pointerMidpoint(
+      { clientX: a.lastClientX, clientY: a.lastClientY },
+      { clientX: b.lastClientX, clientY: b.lastClientY },
+    );
+    const currentMidpoint = pointerMidpoint(a, b);
+    const previousInternal = canvasClientToInternal(previousMidpoint.clientX, previousMidpoint.clientY);
+    const currentInternal = canvasClientToInternal(currentMidpoint.clientX, currentMidpoint.clientY);
+    const anchoredWorld = screenToWorld(previousInternal.mouseX, previousInternal.mouseY);
+    const scale = pointerDistance(a, b) / Math.max(1, canvasGestureState.pinchStartDistance);
+    setCameraZoom(canvasGestureState.pinchStartZoom * scale, currentInternal, anchoredWorld);
+    canvasGestureState.lastPinchMidpoint = currentMidpoint;
+    canvasGestureState.lastTouchHandledAt = performance.now();
+    return;
+  }
+
+  if (!point.moved) return;
+  const rect = canvas.getBoundingClientRect();
+  nudgeCameraPan(
+    -((point.clientX - prevClientX) / rect.width) * CAMERA.w,
+    -((point.clientY - prevClientY) / rect.height) * CAMERA.h,
+  );
+  canvasGestureState.lastTouchHandledAt = performance.now();
+}
+
+function finishCanvasPointer(event) {
+  const point = canvasGestureState.pointers.get(event.pointerId);
+  const longPressTriggered = canvasGestureState.longPressTriggered && canvasGestureState.longPressPointerId === event.pointerId;
+  clearCanvasLongPressCandidate();
+  if (point && !point.moved && !longPressTriggered && canvasGestureState.pointers.size === 1 && !canvasGestureState.suppressTapUntilPointersClear) {
+    const pointer = canvasClientToInternal(point.clientX, point.clientY);
+    if (!shouldRecenterFromTouchTap(point, pointer)) {
+      handleCanvasActivation(pointer, { touchIntent: true });
+    }
+  }
+  canvasGestureState.pointers.delete(event.pointerId);
+  const pointers = getCanvasGesturePointers();
+  if (pointers.length === 1) {
+    const survivor = pointers[0];
+    survivor.startClientX = survivor.clientX;
+    survivor.startClientY = survivor.clientY;
+    survivor.moved = false;
+  } else if (pointers.length < 2) {
+    canvasGestureState.lastPinchMidpoint = null;
+    canvasGestureState.pinchStartDistance = 0;
+    canvasGestureState.pinchStartZoom = game.cameraZoom;
+  }
+  if (pointers.length === 0) {
+    canvasGestureState.suppressTapUntilPointersClear = false;
+  }
+  canvasGestureState.lastTouchHandledAt = performance.now();
+}
+
+function onCanvasPointerUp(event) {
+  if (!shouldHandleCanvasTouchGesture(event)) return;
+  event.preventDefault();
+  finishCanvasPointer(event);
+  if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+}
+
+function onCanvasPointerCancel(event) {
+  if (!shouldHandleCanvasTouchGesture(event)) return;
+  finishCanvasPointer(event);
+  if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+}
+
+function onCanvasClick(event) {
+  const pointer = canvasPointerToInternal(event);
+  if (touchNavigationActive()) {
+    if ((performance.now() - canvasGestureState.lastTouchHandledAt) < 280) return;
+    const now = performance.now();
+    const repeatedTap = (now - canvasGestureState.lastClickAt) <= 420
+      && Math.hypot(
+        event.clientX - canvasGestureState.lastClickClientX,
+        event.clientY - canvasGestureState.lastClickClientY,
+      ) <= 28;
+    canvasGestureState.lastClickAt = now;
+    canvasGestureState.lastClickClientX = event.clientX;
+    canvasGestureState.lastClickClientY = event.clientY;
+    if (repeatedTap && !findHoveredEntityAtScreen(pointer.mouseX, pointer.mouseY)) {
+      canvasGestureState.lastClickAt = -Infinity;
+      recenterCameraOnPlayer();
+      return;
+    }
+    handleCanvasActivation(pointer, { touchIntent: true });
+    return;
+  }
+  handleCanvasActivation(pointer);
 }
 
 // -----------------------------------------------------------------------------
@@ -11213,7 +12954,49 @@ function onCanvasClick(event) {
 // -----------------------------------------------------------------------------
 let last = performance.now();
 let frameRequestId = 0;
+let frameTimeoutId = 0;
+let frameScheduleToken = 0;
 let manualStepMode = false;
+
+function waitForRenderOpportunity(timeoutMs = 48) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let rafId = 0;
+    const finish = (now = performance.now()) => {
+      if (settled) return;
+      settled = true;
+      if (rafId) cancelAnimationFrame(rafId);
+      clearTimeout(timerId);
+      resolve(now);
+    };
+    const timerId = setTimeout(() => finish(performance.now()), Math.max(16, timeoutMs));
+    if (typeof requestAnimationFrame === 'function') {
+      rafId = requestAnimationFrame((now) => finish(now));
+    }
+  });
+}
+
+function cancelScheduledLoopTick() {
+  frameScheduleToken += 1;
+  if (frameRequestId) cancelAnimationFrame(frameRequestId);
+  if (frameTimeoutId) clearTimeout(frameTimeoutId);
+  frameRequestId = 0;
+  frameTimeoutId = 0;
+}
+
+function scheduleNextLoopTick() {
+  const token = ++frameScheduleToken;
+  const fire = (now = performance.now()) => {
+    if (token !== frameScheduleToken) return;
+    frameRequestId = 0;
+    frameTimeoutId = 0;
+    loop(now);
+  };
+  if (typeof requestAnimationFrame === 'function') {
+    frameRequestId = requestAnimationFrame((now) => fire(now));
+  }
+  frameTimeoutId = setTimeout(() => fire(performance.now()), 20);
+}
 
 function updateFrame(now, dt) {
   if (game.endDaySequenceActive && now >= game.transitionUntil) {
@@ -11229,6 +13012,8 @@ function updateFrame(now, dt) {
     if (!game.autoMode) game.idleMs += dt;
     if (!game.autoMode && game.idleMs > 8000) {
       game.autoMode = true;
+      clearPlayerPendingAction();
+      clearPlayerTapTarget();
       updateAutoStatus();
       announce('🤖 Auto mode enabled (idle detected).');
       updateTodo();
@@ -11282,6 +13067,7 @@ function renderFrame(now) {
 
   drawWorld();
   drawSceneLighting(now);
+  drawPlayerTapGuidance(now);
   drawEntities();
   drawSceneParticles(now);
   drawClassroomChairOverlays();
@@ -11292,6 +13078,7 @@ function renderFrame(now) {
 }
 
 function runFrame(now, dt) {
+  maybeAutoAdjustPerformance(dt, now);
   updateFrame(now, dt);
   renderFrame(now);
 }
@@ -11302,23 +13089,23 @@ function loop(now) {
   runFrame(now, dt);
 
   if (!manualStepMode) {
-    frameRequestId = requestAnimationFrame(loop);
+    scheduleNextLoopTick();
   } else {
-    frameRequestId = 0;
+    cancelScheduledLoopTick();
   }
 }
 
 function startMainLoop() {
   manualStepMode = false;
-  if (frameRequestId) cancelAnimationFrame(frameRequestId);
-  frameRequestId = 0;
+  cancelScheduledLoopTick();
+  syncCanvasResolution();
   last = performance.now();
-  frameRequestId = requestAnimationFrame(loop);
+  runFrame(last, 0);
+  scheduleNextLoopTick();
 }
 
 function stopMainLoop() {
-  if (frameRequestId) cancelAnimationFrame(frameRequestId);
-  frameRequestId = 0;
+  cancelScheduledLoopTick();
 }
 
 function togglePause() {
@@ -11328,6 +13115,10 @@ function togglePause() {
 
 function toggleAutoMode(source = 'key') {
   game.autoMode = !game.autoMode;
+  if (game.autoMode) {
+    clearPlayerPendingAction();
+    clearPlayerTapTarget();
+  }
   game.idleMs = 0;
   updateAutoStatus();
   announce(`🤖 Auto mode ${game.autoMode ? 'enabled' : 'disabled'} by ${source}.`);
@@ -11362,13 +13153,35 @@ function pulseVirtualKey(key, durationMs = 110) {
   touchControlReleaseTimers.set(key, nextTimer);
 }
 
+function getEffectiveViewportSize() {
+  const viewport = window.visualViewport;
+  const width = Number.isFinite(viewport?.width)
+    ? viewport.width
+    : window.innerWidth || document.documentElement.clientWidth || 0;
+  const height = Number.isFinite(viewport?.height)
+    ? viewport.height
+    : window.innerHeight || document.documentElement.clientHeight || 0;
+  return { width, height };
+}
+
+function shouldUseCompactMobileLayout() {
+  const { width, height } = getEffectiveViewportSize();
+  const coarsePointer = window.matchMedia('(pointer: coarse)').matches;
+  return (coarsePointer && (width <= 1200 || height <= 720))
+    || width <= 900
+    || height <= 520;
+}
+
 function updateTouchControlsVisibility() {
   if (!touchControlsEl) return;
   const shouldShow = window.matchMedia(TOUCH_CONTROL_MEDIA_QUERY).matches;
+  const compactLayout = shouldShow && shouldUseCompactMobileLayout();
   touchControlsEl.hidden = !shouldShow;
-  if (touchHintEl) touchHintEl.hidden = !shouldShow;
+  if (touchHintEl) touchHintEl.hidden = !shouldShow || compactLayout;
   document.body.classList.toggle('touch-controls-active', shouldShow);
+  document.body.classList.toggle('compact-mobile', compactLayout);
   if (!shouldShow) releaseAllTouchControls();
+  updateTouchCameraHud();
 }
 
 async function toggleFullscreen() {
@@ -11417,6 +13230,12 @@ function bindTouchControls() {
         helpDialog?.showModal();
       } else if (action === 'fullscreen') {
         toggleFullscreen();
+      } else if (action === 'zoom-in') {
+        changeCameraZoomByStep(0.2);
+      } else if (action === 'zoom-out') {
+        changeCameraZoomByStep(-0.2);
+      } else if (action === 'reset-camera') {
+        recenterCameraOnPlayer({ resetZoom: true });
       }
     };
 
@@ -11489,18 +13308,20 @@ toggleNamesBtn.onclick = () => {
 
 canvas.addEventListener('mousemove', updateEntityTooltip);
 canvas.addEventListener('mouseleave', hideEntityTooltip);
+canvas.addEventListener('pointerdown', onCanvasPointerDown);
+canvas.addEventListener('pointermove', onCanvasPointerMove);
+canvas.addEventListener('pointerup', onCanvasPointerUp);
+canvas.addEventListener('pointercancel', onCanvasPointerCancel);
 canvas.addEventListener('click', onCanvasClick);
 closeInteractionPanelBtn.onclick = () => {
-  interactionPanelEl.hidden = true;
-  game.selectedInteractionTarget = null;
+  closeInteractionPanel();
 };
 
 function closeTransientMenus() {
   // Keep floating overlays in sync with browser chrome focus changes so
   // auxiliary menus never linger after their parent bar/dialog is dismissed.
   releaseAllTouchControls();
-  if (interactionPanelEl) interactionPanelEl.hidden = true;
-  game.selectedInteractionTarget = null;
+  closeInteractionPanel();
   if (entityTooltipEl) entityTooltipEl.hidden = true;
 
   if (todoDialog?.open) todoDialog.close();
@@ -11515,6 +13336,7 @@ document.addEventListener('visibilitychange', () => {
 document.addEventListener('fullscreenchange', updateFullscreenButton);
 window.addEventListener('resize', updateTouchControlsVisibility);
 window.matchMedia(TOUCH_CONTROL_MEDIA_QUERY).addEventListener('change', updateTouchControlsVisibility);
+window.visualViewport?.addEventListener('resize', updateTouchControlsVisibility);
 
 
 if (openSplashSettingsBtn && splashSettingsDialog) {
@@ -11565,14 +13387,19 @@ function hideStartupLoadingProgress() {
   if (startupLoadingLabelEl) startupLoadingLabelEl.textContent = '⏳ Preparing school day…';
 }
 
+let splashStartInProgress = false;
+let gameStarted = false;
+
 async function startGameFromSplash() {
+  if (gameStarted || splashStartInProgress) return;
+  splashStartInProgress = true;
   if (startGameBtn) {
     startGameBtn.disabled = true;
     startGameBtn.textContent = '⏳ Starting…';
   }
   // Show feedback immediately so players see startup progress before any LLM preload work begins.
   setStartupLoadingProgress(4, '🧰 Applying startup settings…');
-  await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  await waitForRenderOpportunity();
 
   try {
     persistSplashSettings();
@@ -11592,6 +13419,7 @@ async function startGameFromSplash() {
     setStartupLoadingProgress(94, '✅ Finalising UI and bell schedule…');
     if (splashSettingsDialog?.open) splashSettingsDialog.close();
     if (startOverlayEl) startOverlayEl.hidden = true;
+    gameStarted = true;
     assignDailyDutyTeacher();
     announce('Welcome! Follow bells, survive staff, and uncover every shield letter.');
     if (llmModeEnabled()) {
@@ -11613,6 +13441,7 @@ async function startGameFromSplash() {
     setStartupLoadingProgress(100, '🚪 School day ready. Opening campus…');
     startMainLoop();
   } finally {
+    splashStartInProgress = false;
     hideStartupLoadingProgress();
     if (startGameBtn) {
       startGameBtn.disabled = false;
@@ -11906,6 +13735,24 @@ function buildDebugState() {
       bladder: Number(game.bladder.toFixed(1)),
       hygiene: Number(game.hygiene.toFixed(1)),
       autoMode: game.autoMode,
+      tapTargetX: game.playerTapTarget ? Number(game.playerTapTarget.x.toFixed(2)) : null,
+      tapTargetY: game.playerTapTarget ? Number(game.playerTapTarget.y.toFixed(2)) : null,
+    },
+    camera: {
+      x: Number(CAMERA.x.toFixed(2)),
+      y: Number(CAMERA.y.toFixed(2)),
+      w: Number(CAMERA.w.toFixed(2)),
+      h: Number(CAMERA.h.toFixed(2)),
+      zoom: Number(game.cameraZoom.toFixed(2)),
+      panX: Number(game.cameraPanX.toFixed(2)),
+      panY: Number(game.cameraPanY.toFixed(2)),
+    },
+    performance: {
+      level: game.performance.level,
+      avgFrameMs: Number((game.performance.avgFrameMs || 0).toFixed(2)),
+      renderWidth: canvas.width,
+      renderHeight: canvas.height,
+      autoAdjusted: Boolean(game.performance.autoAdjusted),
     },
     lines: game.lines,
     collectables: game.collectables.map((c) => ({ name: c.name, x: c.x, y: c.y })),
@@ -11950,8 +13797,11 @@ function buildRenderableGameState() {
       bladder: debugState.player.bladder,
       hygiene: debugState.player.hygiene,
       autoMode: debugState.player.autoMode,
+      tapTargetX: debugState.player.tapTargetX,
+      tapTargetY: debugState.player.tapTargetY,
       lines: debugState.lines,
     },
+    camera: debugState.camera,
     visibleEntities: debugState.visibleEntities,
     lunchStates: debugState.lunchStates,
     issues: debugState.issues,
@@ -11984,6 +13834,10 @@ window.__skoolDazeDebug = {
   },
   setAutoMode: (enabled) => {
     game.autoMode = Boolean(enabled);
+    if (game.autoMode) {
+      clearPlayerPendingAction();
+      clearPlayerTapTarget();
+    }
     game.idleMs = 0;
     updateAutoStatus();
   },
@@ -12009,4 +13863,30 @@ window.__skoolDazeDebug = {
       player.vy = 0;
     }
   },
+  setPlayerTapTarget: (x, y) => {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    return setPlayerTapTarget({ x, y });
+  },
+  recenterCamera: (resetZoom = false) => {
+    recenterCameraOnPlayer({ resetZoom: Boolean(resetZoom) });
+    renderFrame(performance.now());
+  },
+  setPerformanceLevel: (level) => {
+    if (!PERFORMANCE_PRESETS[level]) return false;
+    game.performance.mode = 'manual';
+    return setPerformanceLevel(level, { automatic: false });
+  },
 };
+
+// Draw a first frame immediately so Android/WebView never sits on a transparent canvas.
+syncCanvasResolution(true);
+runFrame(last, 0);
+
+function queueBootFramePaint(remainingAttempts = 12) {
+  if (gameStarted) return;
+  runFrame(performance.now(), 0);
+  if (remainingAttempts > 0) {
+    setTimeout(() => queueBootFramePaint(remainingAttempts - 1), 150);
+  }
+}
+queueBootFramePaint();

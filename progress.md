@@ -119,3 +119,200 @@ Original prompt: can you take a look, there's various bugs currently; Eric runs 
     - `jarsigner -verify -verbose -certs android/app/build/outputs/bundle/release/app-release.aab` now reports `jar verified`.
     - Signed release artifact: `android/app/build/outputs/bundle/release/app-release.aab`.
   - Current blocker is no longer packaging/signing; it is Play Console session continuity plus store-listing/app-content completion and final upload.
+- 2026-03-20 Android emulator mobile-control pass:
+  - Root cause of the black-screen startup on the Android emulator was that the WebView was not delivering `requestAnimationFrame` callbacks during splash/startup, so `startGameFromSplash()` stalled on its first `await requestAnimationFrame(...)` and the main loop never advanced.
+  - Fixed `game.js` by adding a timer-backed frame scheduler fallback for the main loop, replacing the splash startup `requestAnimationFrame` wait with `waitForRenderOpportunity()`, and queuing repeated boot-frame paints so the splash stays visible on native/WebView startup instead of collapsing to a black surface.
+  - Added startup guards so repeated splash taps do not race multiple starts.
+  - Verification:
+    - `node --check game.js` passes.
+    - `npm run android:sync` passes.
+    - `android\\gradlew.bat assembleDebug` passes.
+    - On the running AVD, a cold launch now shows the splash properly instead of blacking out.
+    - In the AVD WebView, clicking `Start school day` hides the splash and touch controls remain visible.
+    - Simulated touch on the Android on-screen right-move button changed Alex's X position from `127.94` to `130.53`, confirming touch input is wired through in the emulator.
+  - Useful artifacts:
+    - Launch screenshot: `output/playwright/android-launch-final.jpg`
+    - In-game Android screenshot: `output/playwright/android-emulator-after-fix-raw.jpg`
+  - Follow-up mobile HUD polish:
+    - Added a dedicated `Vend` touch button mapped to the `C` action so vending-machine/food purchase flow no longer depends on a hardware keyboard on Android.
+- 2026-03-20 Android layout-fit follow-up:
+  - Root cause of the "only part of the screen shows" bug was twofold:
+    - the mobile layout was still width-first, so the 1280x700 canvas could overflow the short landscape viewport and get cropped;
+    - the native Capacitor shell was still registering the web service worker, which meant rebuilt `game.js`/`styles.css` could stay stale on-device until app data was cleared.
+  - Added compact mobile layout detection in `game.js` using `visualViewport` plus coarse-pointer checks, and now toggle a `compact-mobile` body class alongside `touch-controls-active`.
+  - Added compact-phone CSS in `styles.css`:
+    - force the main area into a single-column flex layout,
+    - hide the right-hand diagnostics panel on compact mobile,
+    - let the canvas fit by both width and height (`max-width` + `max-height`) instead of only width,
+    - shrink/reposition touch controls and mobile overlays,
+    - add `min-width: 0` protections to stop the grid item from expanding to multi-thousand-pixel widths.
+  - Disabled service worker registration inside the native Capacitor shell in `app-shell.js`; on native startup the app now unregisters stale service workers and clears web caches instead of pinning old bundles.
+  - Verification:
+    - `node --check game.js` and `node --check app-shell.js` pass.
+    - `npm run android:sync` and `android\\gradlew.bat assembleDebug` pass.
+    - Fresh uninstall/reinstall of the debug APK on AVD `Medium_Phone_API_36.1` loads the new bundle.
+    - Live WebView metrics after reinstall:
+      - `bodyClass`: `touch-controls-active compact-mobile`
+      - `innerWidth`: `914`, `innerHeight`: `411`
+      - `bodyOverflow`: `hidden`
+      - `mainDisplay`: `flex`
+      - `wrapRect.w`: `899.89` instead of the previous `4091.51`
+      - `canvasRect.w`: `888.77`, `canvasRect.h`: `486.05`
+      - `panelRect`: `0 x 0` (hidden on compact mobile)
+      - `scrollWidth`: `914` instead of the previous `4107`
+    - Started the school day through the Android WebView and confirmed `startOverlay.hidden === true`, touch controls remain visible, and a right-touch press still moved Alex (`x` delta `+0.79`) after the compact-layout changes.
+  - Latest Android artifact captures:
+    - Device screencap after reinstall: `output/playwright/android-layout-check.png`
+    - Device screencap after entering gameplay: `output/playwright/android-layout-after-start.png`
+- 2026-03-20 mobile camera gesture pass:
+  - Extended the touch-navigation camera work in `game.js` so mobile users can browse the campus with direct canvas gestures:
+    - one-finger drag pans the camera around the school,
+    - two-finger pinch zooms the camera in/out,
+    - touch taps can still set a move target without requiring keyboard movement.
+  - Fixed a subtle gesture bug where ending a pinch could leave behind a synthetic tap target on finger release; tap activation is now suppressed until all pinch pointers are cleared.
+  - Updated `render_game_to_text()` to expose live `camera` state plus the player's current tap target so mobile gesture tests can assert real camera movement instead of only trusting screenshots.
+  - Verification:
+    - `node --check game.js` passes.
+    - Standard smoke run passes via `web_game_playwright_client.js` after rebuilding `dist/`.
+    - A custom mobile Playwright/CDP gesture probe at `915x412` confirmed:
+      - camera pan changed from `panX=0/panY=0` to `panX=6.06/panY=3.95`,
+      - pinch zoom increased camera zoom from `1.00` to `2.35`,
+      - pinch release did not leave a stray tap target,
+      - no browser console/page errors were raised.
+    - Synced the updated bundle into Capacitor with `npm run android:sync`.
+    - Reinstalled the Android debug build on emulator `Medium_Phone_API_36.1` via `android\\gradlew.bat installDebug`.
+    - Native emulator screencaps confirm the refreshed Bellbound build launches cleanly and reaches gameplay with the updated bundle.
+  - Useful artifacts:
+    - Browser mobile gesture screenshot: `output/playwright/mobile-pan-zoom-check.png`
+    - Native emulator splash screenshot: `output/playwright/android-touch-camera-check.png`
+    - Native emulator gameplay screenshot: `output/playwright/android-touch-camera-ingame-2.png`
+- 2026-03-20 mobile polish follow-up:
+  - Added a dedicated compact camera-control cluster to the touch HUD in `index.html`/`styles.css`:
+    - `-` zoom out,
+    - `100%` reset button that recenters on Alex and resets zoom,
+    - `+` zoom in.
+  - Camera HUD now reflects live zoom percentage and disables reset/zoom buttons when already at their limits/default state.
+  - Added quick recenter affordances in `game.js`:
+    - timing-based double-tap/double-click recenter on blank canvas,
+    - preserved pinch zoom limits and routed the HUD buttons through the same camera logic.
+  - Added tap-to-move guidance rendering in `game.js`:
+    - a pulsing move marker,
+    - a dashed route line from Alex toward the current waypoint/target,
+    - room-labelled guidance text so destinations read more clearly on mobile.
+  - Tightened touch/click compatibility:
+    - mobile click fallback now behaves like touch intent, so blank taps can still become move targets on browsers/WebViews that fall back to click semantics,
+    - shortened the duplicate-touch suppression window so recentering after a pan does not feel sticky.
+  - Reduced compact-mobile interaction panel takeover in `styles.css`:
+    - width capped to ~`15rem` instead of spanning the screen,
+    - lower max height,
+    - tighter typography/padding,
+    - mobile interaction hint hidden to save vertical space.
+  - Verification:
+    - `node --check game.js` passes after the polish pass.
+    - Standard smoke run still passes via `web_game_playwright_client.js`.
+    - Browser/mobile checks:
+      - compact interaction panel width measured `240px` on `915x412`,
+      - debug-driven move target shows `tapTargetX=107.78`, `tapTargetY=91.3`,
+      - touch pan changed camera from `panX=0/panY=0` to `panX=6.06/panY=3.95`,
+      - double-tap fallback recentered camera back to `panX=0/panY=0`,
+      - zoom HUD updated from `100%` to `120%` and reset back to `100%`,
+      - no browser console/page errors during the focused mobile checks.
+    - Android/native checks:
+      - `npm run android:sync` passes.
+      - `android\\gradlew.bat installDebug` passes and reinstalls on emulator `Medium_Phone_API_36.1`.
+      - Native emulator taps show the move-marker/path overlay appearing in the Android shell after tapping a destination on the canvas.
+  - Useful artifacts:
+    - Compact interaction panel screenshot: `output/playwright/mobile-interaction-panel-compact.png`
+    - Move-guidance screenshot: `output/playwright/mobile-tap-guidance.png`
+    - Touch control cluster screenshot: `output/playwright/mobile-touch-controls-cluster.png`
+    - Camera controls/zoom validation screenshot: `output/playwright/mobile-camera-controls.png`
+    - Native Android gameplay after reinstall: `output/playwright/android-mobile-polish-ingame.png`
+    - Native Android move-marker screenshot: `output/playwright/android-mobile-polish-tap.png`
+  - Mobile world-interaction pass:
+    - Generalized the existing interaction panel so it can present NPC social actions or world-object actions in the same compact UI.
+    - Added explicit world targets for classroom seats, dining seats, lunch plate stand, serving counter, lockers, fountains, urinals, showers, doors, stairs, computers, blackboards, props, and collectables.
+    - Added deferred player actions so mobile choices can queue a "walk there, then do it" interaction instead of failing when Alex is still out of range.
+    - Added touch long-press detection on the canvas for world objects, with cancellation on pan/pinch and object-locking so busy lunch traffic no longer cancels the held target under your finger.
+    - Added new context actions:
+      - seats: sit here / stand up,
+      - blackboards: read / write,
+      - lunch service points: get lunch,
+      - utility objects: drink / shower / locker / urinal / door / stairs / computer,
+      - throwable props + collectables: pick up.
+    - Verification:
+      - `node --check game.js` passes after the interaction changes.
+      - Standard `web_game_playwright_client.js` smoke run still passes.
+      - Focused mobile Playwright probes confirm:
+        - blackboard hold shows `Read board` + `Write on board`, and `Write on board` updates the board text,
+        - classroom seat hold shows `Sit here`, and the queued action seats Alex in `Maths`,
+        - dining-hall lunch hold shows `Get lunch`, and the queued action raises energy while setting `playerCarryingTrash = true`.
+      - `npm run android:sync` passes after the mobile interaction pass.
+    - Useful artifacts:
+      - `output/playwright/mobile-longpress-board.png`
+      - `output/playwright/mobile-longpress-seat.png`
+      - `output/playwright/mobile-longpress-seat-result.png`
+      - `output/playwright/mobile-longpress-lunch.png`
+      - `output/playwright/mobile-longpress-lunch-result.png`
+- 2026-03-20 Google Play release continuation:
+  - Re-checked the Android release path after the mobile input pass:
+    - native artifact outputs still exist at `android/app/build/outputs/bundle/release/app-release.aab` and `android/app/build/outputs/apk/debug/app-debug.apk`,
+    - the release bundle remains signed with the Bellbound Academy upload key,
+    - previous Android validation remains green (`installDebug`, `lintDebug`, `testDebugUnitTest`, `bundleRelease`).
+  - Verified the signed AAB again with `jarsigner -verify -verbose -certs`; the bundle is signed and `jar verified` succeeds, with the expected self-signed upload-certificate chain warning.
+  - Opened a persistent headed Playwright browser session for Google Play Console and confirmed the public marketing page is reachable from the automation browser.
+  - Followed the "Go to Play Console" path into Google Accounts and prefilled the owner email `dhookster@gmail.com`.
+  - Current release blocker is now human-only auth in the automation browser:
+    - the Play Console session is sitting at the Google password challenge for `dhookster@gmail.com`,
+    - after the user completes password/2FA in that browser window, resume the same `playconsole` Playwright session and continue with app/dashboard setup, AAB upload, and store metadata checks.
+- 2026-03-20 performance optimization pass for older machines:
+  - Applied the performance work directly on the current branch without disturbing the in-progress Android/Play work.
+  - Main render bottlenecks identified in `game.js`:
+    - `drawWorld()` was drawing every room every frame, including off-screen rooms and their seat/prop furniture.
+    - Many static prop loops (lockers, fountains, boards, props, collectables, shields, stairs, litter, pellets) were also drawing regardless of whether they were visible.
+    - The richer visual pass added expensive full-frame work (scanlines, dither fills, lighting gradients, scene particles) with no fallback path on weak hardware.
+    - The mini-map was redrawing its full static room background every frame.
+  - Implemented performance-focused fixes in `game.js`:
+    - Added camera-based culling helpers and now skip off-screen rooms, entities, trees, seats, props, collectables, pellets, and interactable landmarks during rendering.
+    - Added adaptive performance profiles (`high`, `balanced`, `low`) with automatic downgrade when sustained frame time gets too high.
+    - Added internal canvas render scaling per performance tier while keeping the CSS display size intact, so weaker machines can render fewer pixels without changing layout.
+    - Lower tiers now reduce/disable the heaviest rendering work:
+      - no scanlines,
+      - no scene lighting,
+      - no scene particles,
+      - lower weather spawn rates,
+      - simplified room textures / dither,
+      - hidden classroom chair overlays,
+      - optional suppression of NPC mini-vitals bars.
+    - Cached the static mini-map base layer so only dynamic markers are redrawn each frame.
+    - Exposed current performance state through `window.__skoolDazeDebug.getState().performance` and added a debug hook to force a performance level for testing.
+  - Verification:
+    - `node --check game.js` passes after the performance changes.
+    - `npm run build:web` passes.
+    - Standard `web_game_playwright_client.js` smoke run still passes and updated `output/web-game/shot-0.png`, `shot-1.png`, `shot-2.png`, and matching `state-*.json`.
+    - Throttled Playwright performance probe (Chromium with `Emulation.setCPUThrottlingRate = 6`) improved dramatically in the same `Start Day` field scene:
+      - before changes: `avgFrameMs 505.29`, `p95 750`, about `2.0 FPS`
+      - after changes: `avgFrameMs 87.05`, `p95 150`, about `11.5 FPS`
+      - internal render buffer stepped down automatically to `1050x574` in balanced mode during the stress test.
+    - Non-throttled sanity check still starts in `high` performance mode with the full `1280x700` render buffer on this machine.
+  - Useful artifacts:
+    - Pre-optimization benchmark screenshot: `output/playwright/perf-baseline.png`
+    - Post-optimization benchmark screenshot: `output/playwright/perf-after-pass-1.png`
+    - Post-threshold-tuning benchmark screenshot: `output/playwright/perf-after-pass-2.png`
+  - Notes:
+    - The smoke runner captured one local `console.error` with `The script has an unsupported MIME type ('text/plain').`, but direct header checks against the served `sw.js`, `app-shell.js`, and `game.js` all returned `application/javascript`; treat that as a local static-server/session artifact unless it reproduces in a clean browser profile.
+    - Play Console release work is still paused at the Google password challenge in the existing headed `playconsole` browser session.
+- 2026-03-20 follow-up performance cleanup from the investigation notes:
+  - Confirmed there is no separate local/remote handoff branch to merge or delete; the current branch now carries the performance work directly.
+  - Finished the remaining CPU-side optimizations in `game.js`:
+    - replaced leftover direct schedule HUD writes with cached DOM setters via `refreshScheduleHud(...)`,
+    - throttled lesson attendance HUD refreshes and todo panel rebuilds so they stop churning every frame,
+    - converted several attendance/teacher checks from repeated array filters into single-pass loops,
+    - precomputed active student/teacher/dinner-lady sets at the top of `updateAI(...)`,
+    - moved lunch queue ordering/serving-slot bookkeeping out of the per-entity loop,
+    - reduced crowd-separation and nearby-student scans to cheaper candidate sets.
+  - Verification:
+    - `node --check game.js` passes after the cleanup pass.
+    - `npm run build:web` passes.
+    - Re-ran the required `web_game_playwright_client.js` smoke successfully against the built `dist/` shell; fresh artifacts are in `output/web-game/shot-0.png`, `shot-1.png`, `shot-2.png`, and matching `state-*.json`.
+    - Terminal image sanity check on the latest smoke screenshot showed a non-black frame (`mean luminance 145.3`, `min 59`, `max 200`) rather than the earlier Android-style black-screen symptom.
+    - A fresh 6x CPU-throttled Playwright probe on the built app settled at `avgFrameMs 31.95` in `balanced` mode with the internal render buffer at `1050x574`; artifact: `output/playwright/perf-after-hud-ai-pass.png` plus `perf-after-hud-ai-pass.json`.
