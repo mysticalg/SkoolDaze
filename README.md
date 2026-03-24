@@ -1,5 +1,7 @@
 # Bellbound Academy
 
+[Play Now](https://mysticalg.github.io/skoolDaze/)
+
 Bellbound Academy is an original school-life sim with a full bell-driven day, social AI, classroom antics, and mobile-friendly controls.
 
 The repo still lives in the older `SkoolDaze` folder for continuity, but the player-facing app branding has been moved toward an original commercial release.
