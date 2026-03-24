@@ -1004,6 +1004,46 @@ const TRADABLE_ITEMS = [
   'walkman stereo', 'cassette tape', 'letter', 'toy robot', 'paper airplane', 'trading cards', 'video game cart', 'video game disk',
 ];
 
+// Prank items can be placed/used for mischief with risk/reward outcomes.
+const PRANK_ITEMS = [
+  { name: 'whoopee cushion', icon: '💨', description: 'Place on a chair for laughs', detectChance: 0.35, repReward: { classClown: 8 }, linesIfCaught: 15 },
+  { name: 'stink bomb', icon: '💣', description: 'Clear a room with a stench', detectChance: 0.5, repReward: { classClown: 12, toughKid: 5 }, linesIfCaught: 25 },
+  { name: 'fake spider', icon: '🕷️', description: 'Scare someone silly', detectChance: 0.25, repReward: { classClown: 6 }, linesIfCaught: 10 },
+  { name: 'itching powder', icon: '🧂', description: 'Sprinkle on someone\'s chair', detectChance: 0.4, repReward: { classClown: 10, toughKid: 3 }, linesIfCaught: 20 },
+  { name: 'invisible ink pen', icon: '🖊️', description: 'Write secret messages on boards', detectChance: 0.15, repReward: { classClown: 5, nerd: 3 }, linesIfCaught: 10 },
+  { name: 'joy buzzer', icon: '⚡', description: 'Shock someone during a handshake', detectChance: 0.3, repReward: { classClown: 7 }, linesIfCaught: 15 },
+  { name: 'fake sick note', icon: '📝', description: 'Skip a lesson convincingly', detectChance: 0.45, repReward: { popularKid: 5 }, linesIfCaught: 30 },
+  { name: 'chalk bomb', icon: '💥', description: 'Explodes chalk dust on the board', detectChance: 0.55, repReward: { classClown: 15, toughKid: 5 }, linesIfCaught: 20 },
+];
+
+// Secret passages connecting distant parts of the school.
+const SECRET_PASSAGES = [
+  { id: 'janitor-shortcut', name: 'Janitor\'s Shortcut', from: 'Ground Corridor', to: 'Upper Corridor', fromX: 80, fromY: 82, toX: 80, toY: 20, hint: 'Behind the cleaning supplies...' },
+  { id: 'library-tunnel', name: 'Library Tunnel', from: 'English', to: 'Computer Room', fromX: 45, fromY: 35, toX: 130, toY: 110, hint: 'The bookshelf looks loose...' },
+  { id: 'boiler-room', name: 'Boiler Room Passage', from: 'Lower Corridor', to: 'Middle Corridor', fromX: 30, fromY: 115, toX: 30, toY: 55, hint: 'A warm draft comes from the wall...' },
+  { id: 'roof-access', name: 'Roof Access', from: 'Upper Corridor', to: 'P.E. Field', fromX: 155, fromY: 20, toX: 120, toY: 95, hint: 'A rusty ladder behind the lockers...' },
+];
+
+// Rumour templates that can spread through the school.
+const RUMOUR_TEMPLATES = [
+  '{source} saw {target} cheating on a test!',
+  '{source} heard {target} has a crush on {other}!',
+  '{source} says {target} stole from the tuck shop!',
+  '{source} told everyone {target} wet themselves in Year 3!',
+  'Apparently {target} is secretly brilliant at {subject}!',
+  '{source} reckons {target} is planning something big...',
+  'Word is {target} challenged {other} to a fight after school!',
+  '{source} says the headmaster caught {target} in the staff room!',
+];
+
+// Clique definitions with perks and rivalries.
+const CLIQUES = {
+  nerds: { name: 'The Brainiacs', icon: '🤓', perk: 'Quiz answers hinted', rival: 'jocks', reqRep: 'nerd', threshold: 20 },
+  jocks: { name: 'The Athletes', icon: '💪', perk: 'Bully protection', rival: 'nerds', reqRep: 'toughKid', threshold: 20 },
+  rebels: { name: 'The Troublemakers', icon: '🔥', perk: 'Reduced line penalties', rival: 'popular', reqRep: 'classClown', threshold: 25 },
+  popular: { name: 'The Cool Kids', icon: '⭐', perk: 'Better trade deals', rival: 'rebels', reqRep: 'popularKid', threshold: 20 },
+};
+
 // Rare collectibles rotate around school and can be traded like pocket items.
 const COLLECTABLE_CATALOG = [
   { name: 'golden prefect badge', icon: '🏅', tint: '#ffd166', value: 9 },
@@ -2975,6 +3015,78 @@ const game = {
   socialGroups: [],
   socialGroupCounter: 1,
   lastSocialTickAt: 0,
+
+  // --- Reputation tiers ---
+  reputation: { classClown: 0, teachersPet: 0, toughKid: 0, popularKid: 0, nerd: 0 },
+
+  // --- Clique system ---
+  playerClique: null, // 'nerds', 'jocks', 'rebels', 'popular'
+  cliqueJoinedDay: 0,
+
+  // --- Prank system ---
+  pranksToday: 0,
+  lastPrankAt: 0,
+  activePranks: [], // { type, room, placedAt, triggeredBy?, detected }
+
+  // --- Detention mini-game ---
+  detentionMiniGame: false,
+  detentionLinesWritten: 0,
+  detentionLinesTarget: 0,
+  detentionSneakAttempts: 0,
+  detentionNotePassed: false,
+  detentionDoodleMode: false,
+
+  // --- Exam system ---
+  examDay: false,
+  examScores: {},
+  lessonsAttendedBySubject: {},
+  lastExamDay: 0,
+
+  // --- Secret passages ---
+  discoveredPassages: [],
+  explorationPoints: 0,
+  secretNotes: [],
+
+  // --- Bully protection ---
+  protectionPaidTo: {},
+  bullyExtortionCooldown: 0,
+
+  // --- Classroom disruptions ---
+  lastDisruptionAt: 0,
+  activeDisruption: null,
+
+  // --- Break activities ---
+  footballMatch: null,
+  conkerBattle: null,
+  cardTournament: null,
+
+  // --- Day-end report ---
+  dayStats: {
+    npcsTalkedTo: new Set(),
+    punchesThrown: 0,
+    pranksPlayed: 0,
+    lessonsAttended: 0,
+    linesReceived: 0,
+    cardsCollected: 0,
+    itemsTraded: 0,
+    questionsAnswered: 0,
+    questionsCorrect: 0,
+    headmasterVisits: 0,
+    foodFightsJoined: 0,
+    notesPassed: 0,
+    detentionEscapes: 0,
+    examsTaken: 0,
+  },
+
+  // --- Teacher moods ---
+  teacherMoods: {}, // teacherName -> 'lenient' | 'strict' | 'normal'
+
+  // --- Rumour mill ---
+  activeRumours: [], // { text, source, spreadTo: [], startDay, strength }
+
+  // --- Show and tell ---
+  showAndTellActive: false,
+  showAndTellItem: null,
 };
 
 // Restore last-used AI provider settings (including saved remote auth token) on load.
@@ -3990,8 +4102,886 @@ function sendPlayerToHeadmaster(reason, extraLines = 45) {
   // Ten-second lecture lock as requested; Eric cannot move while being told off.
   game.headmasterDetentionUntil = performance.now() + 10000;
   game.headmasterDismissAnnounced = false;
+  game.dayStats.headmasterVisits++;
   announce(`🏫 Mr Wacker marched Eric to the Headmaster Office for ${reason}.`);
   announce('🧑‍🏫 Headmaster: "You will stand there and think about what you have done."', { force: true });
+  // Start detention mini-game
+  startDetentionMiniGame();
+}
+
+// ============================================================
+// REPUTATION SYSTEM — Track multiple reputations from actions
+// ============================================================
+function addReputation(type, amount) {
+  if (!game.reputation[type]) game.reputation[type] = 0;
+  game.reputation[type] = Math.max(-50, Math.min(100, game.reputation[type] + amount));
+}
+
+function getTopReputation() {
+  let best = null, bestVal = 0;
+  for (const [key, val] of Object.entries(game.reputation)) {
+    if (val > bestVal) { best = key; bestVal = val; }
+  }
+  return best;
+}
+
+function reputationLabel(type) {
+  const labels = { classClown: '🤡 Class Clown', teachersPet: '📚 Teacher\'s Pet', toughKid: '💪 Tough Kid', popularKid: '⭐ Popular Kid', nerd: '🤓 Nerd' };
+  return labels[type] || type;
+}
+
+function reputationTier(value) {
+  if (value >= 80) return 'legendary';
+  if (value >= 50) return 'well-known';
+  if (value >= 25) return 'rising';
+  if (value >= 10) return 'noticed';
+  return 'unknown';
+}
+
+// ============================================================
+// CLIQUE SYSTEM — Join groups for perks, rivalries matter
+// ============================================================
+function canJoinClique(cliqueId) {
+  const clique = CLIQUES[cliqueId];
+  if (!clique) return false;
+  if (game.playerClique === cliqueId) return false;
+  return (game.reputation[clique.reqRep] || 0) >= clique.threshold;
+}
+
+function joinClique(cliqueId) {
+  const clique = CLIQUES[cliqueId];
+  if (!clique) return;
+  const old = game.playerClique;
+  game.playerClique = cliqueId;
+  game.cliqueJoinedDay = game.dayCount;
+  announce(`${clique.icon} You joined ${clique.name}! Perk: ${clique.perk}`);
+  if (old && old !== cliqueId) {
+    const oldClique = CLIQUES[old];
+    announce(`😬 ${oldClique.name} aren't happy you left...`);
+    // Lose reputation with old clique members
+    addReputation(oldClique.reqRep, -10);
+  }
+}
+
+function getCliquePerk() { return game.playerClique ? CLIQUES[game.playerClique] : null; }
+
+function cliqueLineReduction() {
+  return game.playerClique === 'rebels' ? 0.6 : 1.0; // Rebels get 40% line reduction
+}
+
+function cliqueTradeBonus() {
+  return game.playerClique === 'popular' ? 1.3 : 1.0; // Popular kids get better trades
+}
+
+function cliqueBullyProtection() {
+  return game.playerClique === 'jocks'; // Jocks are protected from bullies
+}
+
+function cliqueQuizHint() {
+  return game.playerClique === 'nerds'; // Nerds get quiz hints
+}
+
+// ============================================================
+// PRANK SYSTEM — Risk/reward mischief with detection
+// ============================================================
+function getRandomPrankItem() {
+  return PRANK_ITEMS[Math.floor(game.rng() * PRANK_ITEMS.length)];
+}
+
+function playerHasPrankItem() {
+  return player.inventory.some(item => PRANK_ITEMS.some(p => p.name === item));
+}
+
+function getPlayerPrankItems() {
+  return player.inventory.filter(item => PRANK_ITEMS.some(p => p.name === item));
+}
+
+function executePrank(prankName, targetRoom) {
+  const prank = PRANK_ITEMS.find(p => p.name === prankName);
+  if (!prank) return;
+  const now = performance.now();
+  if (now - game.lastPrankAt < 15000) {
+    announce('⏳ Too soon for another prank — wait a bit.');
+    return;
+  }
+
+  // Remove item from inventory
+  const idx = player.inventory.indexOf(prankName);
+  if (idx >= 0) player.inventory.splice(idx, 1);
+
+  game.lastPrankAt = now;
+  game.pranksToday++;
+  game.dayStats.pranksPlayed++;
+
+  // Detection check: more NPCs nearby = higher chance
+  const room = entityRoom(player);
+  const nearbyNPCs = game.entities.filter(e => e !== player && entityRoom(e) === room && distance(e, player) < 8);
+  const teacherNearby = nearbyNPCs.some(e => e.role === 'teacher');
+  let detectChance = prank.detectChance + (teacherNearby ? 0.3 : 0) + (nearbyNPCs.length * 0.03);
+  detectChance = Math.min(0.95, detectChance);
+
+  const detected = game.rng() < detectChance;
+
+  // Place the prank
+  game.activePranks.push({ type: prankName, room, placedAt: now, detected, icon: prank.icon });
+
+  if (detected) {
+    const witness = teacherNearby ? nearbyNPCs.find(e => e.role === 'teacher') : nearbyNPCs[0];
+    const witnessName = witness ? witness.name : 'Someone';
+    const lines = Math.round(prank.linesIfCaught * cliqueLineReduction());
+    addLines(lines, `${prankName} prank`);
+    announce(`${prank.icon} ${witnessName} caught you with the ${prankName}! ${lines} lines!`);
+    addReputation('toughKid', 2); // Still get some rep for trying
+  } else {
+    announce(`${prank.icon} ${prankName} prank deployed! Nobody suspects a thing...`);
+    for (const [repType, amount] of Object.entries(prank.repReward)) {
+      addReputation(repType, amount);
+    }
+    // Nearby students react positively
+    for (const npc of nearbyNPCs.filter(e => isStudentCharacter(e))) {
+      adjustRelationship(npc, 3, 'prank');
+    }
+  }
+
+  // Prank effects: stink bomb clears room, whoopee cushion triggers laugh
+  if (prankName === 'stink bomb' && !detected) {
+    announce('💨 The stink bomb goes off! Students flee the room!');
+    for (const npc of nearbyNPCs.filter(e => isStudentCharacter(e))) {
+      npc.fleeUntil = now + 8000;
+      npc.target = null;
+    }
+  } else if (prankName === 'chalk bomb' && !detected) {
+    announce('💥 POOF! Chalk dust covers the entire blackboard!');
+  }
+}
+
+// ============================================================
+// DETENTION MINI-GAME — Writing lines, sneaking, passing notes
+// ============================================================
+function startDetentionMiniGame() {
+  game.detentionMiniGame = true;
+  game.detentionLinesWritten = 0;
+  game.detentionLinesTarget = Math.max(20, game.lines);
+  game.detentionSneakAttempts = 0;
+  game.detentionNotePassed = false;
+  game.detentionDoodleMode = false;
+  announce('📝 Detention! Write your lines... or try something sneaky.');
+  announce('💡 Tip: Press keys to write. Look away from the teacher to doodle or pass notes.');
+}
+
+function updateDetentionMiniGame(dt) {
+  if (!game.detentionMiniGame) return;
+  if (game.headmasterDetentionUntil <= performance.now()) {
+    endDetentionMiniGame();
+    return;
+  }
+
+  // Auto-write lines slowly
+  game.detentionLinesWritten += dt * 0.003;
+
+  // Check if teacher is looking (based on facing/position)
+  const headmaster = game.entities.find(e => e.name === 'Mr Wacker');
+  const teacherLooking = headmaster && distance(headmaster, player) < 6 && !headmaster.isFacingAway;
+
+  if (game.detentionDoodleMode && teacherLooking) {
+    // Caught doodling!
+    game.detentionDoodleMode = false;
+    addLines(5, 'doodling in detention');
+    announce('😤 "Stop doodling and write your lines!"');
+  }
+
+  if (game.detentionLinesWritten >= game.detentionLinesTarget) {
+    announce('✅ You finished writing your lines!');
+    game.lines = Math.max(0, game.lines - Math.floor(game.detentionLinesTarget * 0.5));
+    endDetentionMiniGame();
+  }
+}
+
+function attemptDetentionSneak() {
+  if (!game.detentionMiniGame) return;
+  game.detentionSneakAttempts++;
+  const headmaster = game.entities.find(e => e.name === 'Mr Wacker');
+  const teacherDistracted = !headmaster || distance(headmaster, player) > 8;
+  const sneakChance = teacherDistracted ? 0.7 : 0.15;
+
+  if (game.rng() < sneakChance) {
+    announce('🏃 You snuck out of detention! Legend!');
+    game.detentionMiniGame = false;
+    game.headmasterDetentionUntil = 0;
+    game.dayStats.detentionEscapes++;
+    addReputation('classClown', 8);
+    addReputation('toughKid', 5);
+  } else {
+    addLines(15, 'trying to escape detention');
+    announce('🚫 Caught trying to sneak out! Extra lines!');
+    game.headmasterDetentionUntil = performance.now() + 8000; // Extended detention
+  }
+}
+
+function toggleDetentionDoodle() {
+  if (!game.detentionMiniGame) return;
+  game.detentionDoodleMode = !game.detentionDoodleMode;
+  if (game.detentionDoodleMode) {
+    announce('🎨 You start doodling in the margins...');
+    addReputation('classClown', 2);
+  } else {
+    announce('📝 Back to writing lines...');
+  }
+}
+
+function passDetentionNote() {
+  if (!game.detentionMiniGame || game.detentionNotePassed) return;
+  const nearbyStudent = game.entities.find(e =>
+    e !== player && isStudentCharacter(e) && entityRoom(e) === entityRoom(player) && distance(e, player) < 5
+  );
+  if (!nearbyStudent) {
+    announce('📝 No one close enough to pass a note to.');
+    return;
+  }
+  game.detentionNotePassed = true;
+  game.dayStats.notesPassed++;
+  const headmaster = game.entities.find(e => e.name === 'Mr Wacker');
+  const caught = headmaster && distance(headmaster, player) < 5 && game.rng() < 0.4;
+  if (caught) {
+    addLines(10, 'passing notes in detention');
+    announce(`📝 Mr Wacker intercepted your note to ${nearbyStudent.name}!`);
+  } else {
+    adjustRelationship(nearbyStudent, 5, 'note');
+    announce(`📝 You secretly passed a note to ${nearbyStudent.name}! +friendship`);
+    addReputation('popularKid', 3);
+  }
+}
+
+function endDetentionMiniGame() {
+  game.detentionMiniGame = false;
+  game.detentionDoodleMode = false;
+}
+
+// ============================================================
+// EXAM SYSTEM — Attendance-based scoring with consequences
+// ============================================================
+function isExamDay() {
+  return game.dayCount > 0 && game.dayCount % 5 === 0 && game.dayCount !== game.lastExamDay;
+}
+
+function trackLessonAttendance(room) {
+  const subject = room; // Room name maps to subject
+  if (!game.lessonsAttendedBySubject[subject]) game.lessonsAttendedBySubject[subject] = 0;
+  game.lessonsAttendedBySubject[subject]++;
+}
+
+function runExam(subject) {
+  game.lastExamDay = game.dayCount;
+  game.dayStats.examsTaken++;
+  const attended = game.lessonsAttendedBySubject[subject] || 0;
+  const baseScore = Math.min(100, attended * 18 + 10); // More attendance = better score
+  const charismaBonus = Math.floor(game.charisma * 0.1);
+  const nerdBonus = (game.reputation.nerd || 0) > 20 ? 10 : 0;
+  const randomFactor = Math.floor(game.rng() * 20) - 10;
+  const finalScore = Math.max(0, Math.min(100, baseScore + charismaBonus + nerdBonus + randomFactor));
+
+  game.examScores[subject] = finalScore;
+  game.examDay = true;
+
+  let grade, reaction;
+  if (finalScore >= 90) { grade = 'A+'; reaction = '🌟 Outstanding!'; addReputation('nerd', 10); addReputation('teachersPet', 5); }
+  else if (finalScore >= 75) { grade = 'A'; reaction = '📚 Excellent work!'; addReputation('nerd', 5); addReputation('teachersPet', 3); }
+  else if (finalScore >= 60) { grade = 'B'; reaction = '👍 Good effort.'; addReputation('nerd', 2); }
+  else if (finalScore >= 45) { grade = 'C'; reaction = '😐 Could do better.'; }
+  else if (finalScore >= 30) { grade = 'D'; reaction = '😬 Disappointing.'; addReputation('classClown', 2); }
+  else { grade = 'F'; reaction = '😱 See me after class!'; addLines(10, 'failing exam'); addReputation('classClown', 5); }
+
+  announce(`📋 Exam Result — ${subject}: ${grade} (${finalScore}%) ${reaction}`);
+  if (finalScore < 30) {
+    announce('📞 The school is calling your parents about your exam results...');
+  }
+  return finalScore;
+}
+
+// ============================================================
+// SECRET PASSAGES — Hidden shortcuts and exploration rewards
+// ============================================================
+function checkSecretPassageDiscovery() {
+  for (const passage of SECRET_PASSAGES) {
+    if (game.discoveredPassages.includes(passage.id)) continue;
+    const room = entityRoom(player);
+    if (room === passage.from && distance(player, { x: passage.fromX, y: passage.fromY }) < 2.5) {
+      // Random chance to discover when near the entrance
+      if (game.rng() < 0.08) {
+        game.discoveredPassages.push(passage.id);
+        game.explorationPoints += 25;
+        announce(`🗺️ Secret discovered: ${passage.name}! "${passage.hint}"`);
+        announce(`🏆 +25 exploration points (total: ${game.explorationPoints})`);
+        addReputation('nerd', 3);
+        addReputation('popularKid', 2);
+      }
+    }
+  }
+}
+
+function useSecretPassage(passageId) {
+  const passage = SECRET_PASSAGES.find(p => p.id === passageId);
+  if (!passage || !game.discoveredPassages.includes(passageId)) return false;
+  const room = entityRoom(player);
+  if (room !== passage.from && room !== passage.to) return false;
+
+  const goingForward = room === passage.from;
+  player.x = goingForward ? passage.toX : passage.fromX;
+  player.y = goingForward ? passage.toY : passage.fromY;
+  player.target = null;
+  announce(`🚪 You slip through the ${passage.name}...`);
+  return true;
+}
+
+function generateSecretNote() {
+  const notes = [
+    'Day 47: I think the janitor knows about the tunnel. Must be more careful.',
+    'To whoever finds this — check behind the third locker on the upper floor.',
+    'The headmaster keeps confiscated comics in his bottom drawer!',
+    'If Mr Whack catches you here, say you were looking for the toilet.',
+    'Best hiding spot: under the stairs near the assembly hall.',
+    'Someone carved initials here: J.S. + M.T. 1987',
+    'NEVER eat the Wednesday fish fingers. Trust me.',
+    'The roof has the best view of the football pitch at sunset.',
+  ];
+  const note = notes[Math.floor(game.rng() * notes.length)];
+  if (!game.secretNotes.includes(note)) {
+    game.secretNotes.push(note);
+    game.explorationPoints += 5;
+    announce(`📜 Found a secret note: "${note}"`);
+  }
+}
+
+// ============================================================
+// BULLY PROTECTION RACKET — Pay up or fight back
+// ============================================================
+function triggerBullyExtortion(bully) {
+  if (cliqueBullyProtection()) {
+    announce(`💪 ${bully.name} thinks twice about messing with a Jock.`);
+    return;
+  }
+  if (game.protectionPaidTo[bully.name] === game.dayCount) return; // Already paid today
+
+  const demandItem = player.inventory.length > 0
+    ? player.inventory[Math.floor(game.rng() * player.inventory.length)]
+    : null;
+
+  if (demandItem) {
+    announce(`😈 ${bully.name}: "Nice ${demandItem} you got there. Hand it over or else!"`);
+    // Auto-resolve based on nearby allies
+    const nearbyAllies = game.entities.filter(e =>
+      e !== player && e !== bully && isStudentCharacter(e) &&
+      distance(e, player) < 6 && (getRelationshipValue(e) > 30)
+    );
+    if (nearbyAllies.length >= 2) {
+      announce(`👥 ${nearbyAllies[0].name} and friends step in: "Leave ${player.name} alone!"`);
+      announce(`😤 ${bully.name} backs off, outnumbered.`);
+      addReputation('popularKid', 5);
+      for (const ally of nearbyAllies) adjustRelationship(ally, 3, 'stood-up');
+    } else {
+      // Player must decide — for now, auto-resist based on toughKid rep
+      if ((game.reputation.toughKid || 0) > 30 || game.rng() < 0.3) {
+        announce(`😤 You stand your ground! ${bully.name} respects that... a little.`);
+        adjustRelationship(bully, -5, 'defied');
+        addReputation('toughKid', 5);
+      } else {
+        const itemIdx = player.inventory.indexOf(demandItem);
+        if (itemIdx >= 0) player.inventory.splice(itemIdx, 1);
+        bully.inventory = bully.inventory || [];
+        bully.inventory.push(demandItem);
+        game.protectionPaidTo[bully.name] = game.dayCount;
+        announce(`😔 You hand over the ${demandItem}. ${bully.name} swaggers away.`);
+        adjustRelationship(bully, 2, 'paid');
+      }
+    }
+  }
+}
+
+function getRelationshipValue(entity) {
+  const key = `${player.name}:${entity.name}`;
+  return game.relationships?.[key] || 0;
+}
+
+function adjustRelationship(entity, delta, reason) {
+  const key = `${player.name}:${entity.name}`;
+  if (!game.relationships) game.relationships = {};
+  const old = game.relationships[key] || 0;
+  game.relationships[key] = Math.max(-100, Math.min(100, old + delta));
+}
+
+// ============================================================
+// CLASSROOM DISRUPTION EVENTS — Random events during lessons
+// ============================================================
+function maybeClassroomDisruption() {
+  const now = performance.now();
+  if (now - game.lastDisruptionAt < 45000) return; // Max one per 45 seconds
+  if (game.rng() > 0.02) return; // ~2% chance per tick
+
+  const current = schedule[game.periodIndex];
+  if (!current || current.mode !== 'lesson') return;
+
+  const room = current.room;
+  const studentsInRoom = game.entities.filter(e =>
+    e !== player && isStudentCharacter(e) && entityRoom(e) === room
+  );
+  if (studentsInRoom.length < 3) return;
+
+  const instigator = studentsInRoom[Math.floor(game.rng() * studentsInRoom.length)];
+  const disruptions = [
+    { type: 'paper-airplane', text: `✈️ ${instigator.name} launches a paper airplane across the room!`, repType: 'classClown' },
+    { type: 'phone-buzz', text: `📱 A phone buzzes loudly in ${instigator.name}'s bag!`, repType: 'popularKid' },
+    { type: 'fell-asleep', text: `😴 ${instigator.name} fell asleep and is snoring!`, repType: 'classClown' },
+    { type: 'doodle', text: `🎨 ${instigator.name} is drawing cartoons of the teacher!`, repType: 'classClown' },
+    { type: 'note-pass', text: `📝 A note is being passed around the back row...`, repType: 'popularKid' },
+    { type: 'burp', text: `🫧 ${instigator.name} lets out an enormous burp!`, repType: 'classClown' },
+    { type: 'desk-drum', text: `🥁 ${instigator.name} starts drumming on their desk!`, repType: 'classClown' },
+  ];
+
+  const disruption = disruptions[Math.floor(game.rng() * disruptions.length)];
+  game.lastDisruptionAt = now;
+  game.activeDisruption = { ...disruption, instigator: instigator.name, room, at: now, resolved: false };
+
+  announce(disruption.text);
+
+  // Teacher reaction
+  const teacher = game.entities.find(e => e.role === 'teacher' && entityRoom(e) === room);
+  if (teacher) {
+    const moodMod = game.teacherMoods[teacher.name] === 'strict' ? 1.5 : game.teacherMoods[teacher.name] === 'lenient' ? 0.3 : 1;
+    if (game.rng() < 0.6 * moodMod) {
+      setTimeout(() => {
+        announce(`😤 ${teacher.name}: "${instigator.name}! That's enough! 10 lines!"`);
+      }, 2000);
+    }
+  }
+}
+
+function playerJoinDisruption() {
+  if (!game.activeDisruption || game.activeDisruption.resolved) {
+    announce('🤷 Nothing disruptive happening right now.');
+    return;
+  }
+  game.activeDisruption.resolved = true;
+  const d = game.activeDisruption;
+
+  // Check for teacher witness
+  const room = entityRoom(player);
+  const teacher = game.entities.find(e => e.role === 'teacher' && entityRoom(e) === room);
+  const caught = teacher && game.rng() < 0.5;
+
+  if (caught) {
+    const lines = Math.round(15 * cliqueLineReduction());
+    addLines(lines, 'joining classroom disruption');
+    announce(`😬 ${teacher.name} spotted you joining in! ${lines} lines!`);
+  } else {
+    announce(`😂 You joined the chaos! The class loves it.`);
+    addReputation(d.repType, 6);
+    addReputation('popularKid', 3);
+    // Boost relationships with nearby students
+    const nearby = game.entities.filter(e => e !== player && isStudentCharacter(e) && entityRoom(e) === room);
+    for (const npc of nearby.slice(0, 5)) adjustRelationship(npc, 2, 'disruption');
+  }
+}
+
+function playerReportDisruption() {
+  if (!game.activeDisruption || game.activeDisruption.resolved) return;
+  game.activeDisruption.resolved = true;
+  const d = game.activeDisruption;
+
+  addReputation('teachersPet', 8);
+  addReputation('popularKid', -3);
+  announce(`🙋 You told the teacher about ${d.instigator}'s antics.`);
+
+  const instigatorEntity = game.entities.find(e => e.name === d.instigator);
+  if (instigatorEntity) adjustRelationship(instigatorEntity, -8, 'snitched');
+
+  // Teacher rewards
+  const room = entityRoom(player);
+  const teacher = game.entities.find(e => e.role === 'teacher' && entityRoom(e) === room);
+  if (teacher) {
+    adjustRelationship(teacher, 4, 'reported');
+    announce(`📚 ${teacher.name}: "Thank you, Eric. Good to see someone behaving."`);
+  }
+}
+
+// ============================================================
+// BREAK ACTIVITIES — Football, conker battles, card tournaments
+// ============================================================
+function startFootballMatch() {
+  if (game.footballMatch) return;
+  const field = game.entities.filter(e => isStudentCharacter(e) && entityRoom(e) === 'P.E. Field');
+  if (field.length < 4) {
+    announce('⚽ Need more players on the field for a kickabout!');
+    return;
+  }
+  const teams = [[], []];
+  field.slice(0, Math.min(10, field.length)).forEach((e, i) => teams[i % 2].push(e.name));
+  game.footballMatch = { teams, score: [0, 0], startedAt: performance.now(), duration: 30000 };
+  announce(`⚽ Kickabout! Team 1 (${teams[0].slice(0, 3).join(', ')}) vs Team 2 (${teams[1].slice(0, 3).join(', ')})`);
+  addReputation('popularKid', 3);
+}
+
+function updateFootballMatch(dt) {
+  if (!game.footballMatch) return;
+  const match = game.footballMatch;
+  const elapsed = performance.now() - match.startedAt;
+
+  // Random goal events
+  if (game.rng() < 0.001 * dt) {
+    const scoringTeam = game.rng() < 0.5 ? 0 : 1;
+    match.score[scoringTeam]++;
+    const scorer = match.teams[scoringTeam][Math.floor(game.rng() * match.teams[scoringTeam].length)];
+    announce(`⚽ GOAL! ${scorer} scores! ${match.score[0]}-${match.score[1]}`);
+  }
+
+  if (elapsed >= match.duration) {
+    const winner = match.score[0] > match.score[1] ? 'Team 1' : match.score[1] > match.score[0] ? 'Team 2' : 'Draw';
+    announce(`⚽ Full time! ${match.score[0]}-${match.score[1]}. ${winner === 'Draw' ? 'It\'s a draw!' : winner + ' wins!'}`);
+    game.footballMatch = null;
+    addReputation('popularKid', 2);
+  }
+}
+
+function startConkerBattle(opponent) {
+  if (game.conkerBattle) return;
+  if (!player.inventory.includes('conkers')) {
+    announce('🌰 You need conkers to battle!');
+    return;
+  }
+  if (!opponent.inventory || !opponent.inventory.includes('conkers')) {
+    announce(`🌰 ${opponent.name} doesn't have any conkers.`);
+    return;
+  }
+  game.conkerBattle = { opponent: opponent.name, playerHP: 3, opponentHP: 3, round: 0 };
+  announce(`🌰 Conker battle vs ${opponent.name}! Best of 3 hits!`);
+}
+
+function updateConkerBattle() {
+  if (!game.conkerBattle) return;
+  const b = game.conkerBattle;
+  b.round++;
+
+  const playerHit = game.rng() < 0.55; // Slight player advantage
+  const opponentHit = game.rng() < 0.45;
+
+  if (playerHit) {
+    b.opponentHP--;
+    announce(`🌰 CRACK! Your conker smashes ${b.opponent}'s! (${b.opponentHP} HP left)`);
+  }
+  if (opponentHit) {
+    b.playerHP--;
+    announce(`🌰 ${b.opponent}'s conker hits yours! (${b.playerHP} HP left)`);
+  }
+  if (!playerHit && !opponentHit) {
+    announce('🌰 Both conkers miss! Swing again...');
+  }
+
+  if (b.playerHP <= 0 || b.opponentHP <= 0) {
+    const won = b.opponentHP <= 0;
+    announce(won ? `🏆 Your conker is victorious! ${b.opponent}'s conker shatters!` : `💔 Your conker crumbles! ${b.opponent} wins!`);
+    if (won) addReputation('toughKid', 4);
+    game.conkerBattle = null;
+  }
+}
+
+function startCardTournament() {
+  if (game.cardTournament) return;
+  const participants = game.entities.filter(e =>
+    isStudentCharacter(e) && e !== player && e.dailyCards && e.dailyCards.length > 0
+  ).slice(0, 7);
+  if (participants.length < 3) {
+    announce('🃏 Not enough players for a tournament.');
+    return;
+  }
+  participants.unshift(player);
+  game.cardTournament = {
+    participants: participants.map(e => e.name),
+    round: 0,
+    bracket: participants.map(e => e.name),
+    results: [],
+    startedAt: performance.now(),
+  };
+  announce(`🃏 Trading Card Tournament! ${participants.length} players entered!`);
+  announce(`🃏 Bracket: ${participants.map(e => e.name).join(' vs ')}`);
+}
+
+function updateCardTournament() {
+  if (!game.cardTournament) return;
+  const t = game.cardTournament;
+  if (t.bracket.length <= 1) {
+    const winner = t.bracket[0];
+    announce(`🏆 ${winner} wins the Trading Card Tournament!`);
+    if (winner === player.name) {
+      addReputation('popularKid', 10);
+      addReputation('nerd', 5);
+      announce('🎉 You\'re the champion! Everyone wants to trade with you now.');
+    }
+    game.cardTournament = null;
+    return;
+  }
+
+  // Simulate next match
+  const p1 = t.bracket.shift();
+  const p2 = t.bracket.shift();
+  const p1Wins = game.rng() < (p1 === player.name ? 0.6 : 0.5); // Slight player advantage
+  const winner = p1Wins ? p1 : p2;
+  t.bracket.push(winner);
+  t.round++;
+  announce(`🃏 Round ${t.round}: ${p1} vs ${p2} — ${winner} advances!`);
+}
+
+// ============================================================
+// FOOD FIGHT — Chaotic dining hall event
+// ============================================================
+function startFoodFight() {
+  const room = entityRoom(player);
+  if (room !== 'Dining Hall' && room !== 'Kitchen') {
+    announce('🍕 Food fights only happen in the Dining Hall!');
+    return;
+  }
+  game.dayStats.foodFightsJoined++;
+  addReputation('classClown', 10);
+  addReputation('toughKid', 5);
+  addReputation('teachersPet', -5);
+
+  announce('🍕💥 FOOD FIGHT! Mashed potato flies across the Dining Hall!');
+
+  const diners = game.entities.filter(e => isStudentCharacter(e) && (entityRoom(e) === 'Dining Hall' || entityRoom(e) === 'Kitchen'));
+  for (const diner of diners.slice(0, 8)) {
+    adjustRelationship(diner, game.rng() < 0.5 ? 3 : -2, 'food-fight');
+  }
+
+  // Teacher response
+  const dutyTeacher = game.entities.find(e => e.role === 'teacher' && (entityRoom(e) === 'Dining Hall' || entityRoom(e) === 'Kitchen'));
+  if (dutyTeacher) {
+    const lines = Math.round(20 * cliqueLineReduction());
+    setTimeout(() => {
+      announce(`😡 ${dutyTeacher.name}: "WHO STARTED THIS?! ${lines} lines, the lot of you!"`);
+      addLines(lines, 'food fight');
+    }, 3000);
+  } else {
+    announce('🍕 No teachers around — absolute chaos! No consequences!');
+  }
+
+  game.hygiene = Math.max(0, game.hygiene - 15);
+}
+
+// ============================================================
+// TEACHER MOODS — Daily randomized strictness
+// ============================================================
+function assignTeacherMoods() {
+  const teachers = game.entities.filter(e => e.role === 'teacher');
+  for (const teacher of teachers) {
+    const roll = game.rng();
+    if (roll < 0.2) game.teacherMoods[teacher.name] = 'lenient';
+    else if (roll < 0.4) game.teacherMoods[teacher.name] = 'strict';
+    else game.teacherMoods[teacher.name] = 'normal';
+  }
+  // Announce notable moods
+  const strict = Object.entries(game.teacherMoods).filter(([,m]) => m === 'strict');
+  const lenient = Object.entries(game.teacherMoods).filter(([,m]) => m === 'lenient');
+  if (strict.length > 0) announce(`⚠️ Watch out — ${strict[0][0]} is in a bad mood today.`);
+  if (lenient.length > 0) announce(`😊 ${lenient[0][0]} seems relaxed today.`);
+}
+
+function getTeacherMoodModifier(teacherName) {
+  const mood = game.teacherMoods[teacherName];
+  if (mood === 'strict') return 1.5;
+  if (mood === 'lenient') return 0.5;
+  return 1.0;
+}
+
+// ============================================================
+// RUMOUR MILL — Gossip spreads and changes behavior
+// ============================================================
+function startRumour(sourceEntity, targetEntity) {
+  if (game.activeRumours.length >= 5) game.activeRumours.shift();
+
+  const otherStudents = game.entities.filter(e =>
+    e !== sourceEntity && e !== targetEntity && isStudentCharacter(e)
+  );
+  const other = otherStudents.length > 0 ? otherStudents[Math.floor(game.rng() * otherStudents.length)] : null;
+  const subject = schedule[game.periodIndex]?.room || 'maths';
+
+  let template = RUMOUR_TEMPLATES[Math.floor(game.rng() * RUMOUR_TEMPLATES.length)];
+  template = template.replace('{source}', sourceEntity.name);
+  template = template.replace('{target}', targetEntity.name);
+  template = template.replace('{other}', other ? other.name : 'someone');
+  template = template.replace('{subject}', subject);
+
+  game.activeRumours.push({
+    text: template,
+    source: sourceEntity.name,
+    target: targetEntity.name,
+    spreadTo: [sourceEntity.name],
+    startDay: game.dayCount,
+    strength: 5,
+  });
+
+  announce(`🗣️ Rumour started: "${template}"`);
+  addReputation('popularKid', 3);
+}
+
+function spreadRumours(dt) {
+  for (const rumour of game.activeRumours) {
+    if (rumour.strength <= 0) continue;
+    if (game.rng() > 0.0005 * dt) continue;
+
+    const potentialHearers = game.entities.filter(e =>
+      isStudentCharacter(e) && !rumour.spreadTo.includes(e.name)
+    );
+    if (potentialHearers.length === 0) continue;
+
+    const hearer = potentialHearers[Math.floor(game.rng() * potentialHearers.length)];
+    rumour.spreadTo.push(hearer.name);
+    rumour.strength--;
+
+    // Affect relationships
+    const target = game.entities.find(e => e.name === rumour.target);
+    if (target) adjustRelationship(target, -1, 'rumour');
+
+    if (rumour.spreadTo.length % 5 === 0) {
+      announce(`🗣️ The rumour about ${rumour.target} has spread to ${rumour.spreadTo.length} students...`);
+    }
+  }
+
+  // Clear old rumours
+  game.activeRumours = game.activeRumours.filter(r => r.strength > 0 && game.dayCount - r.startDay < 3);
+}
+
+// ============================================================
+// SHOW AND TELL — Use rare items for charisma boosts
+// ============================================================
+function startShowAndTell(itemName) {
+  if (!player.inventory.includes(itemName)) {
+    announce('🎤 You don\'t have that item.');
+    return;
+  }
+  const collectable = COLLECTABLE_CATALOG.find(c => c.name === itemName);
+  const isRare = collectable && collectable.value >= 7;
+  const room = entityRoom(player);
+  const audience = game.entities.filter(e => e !== player && entityRoom(e) === room);
+
+  if (audience.length < 2) {
+    announce('🎤 Not enough people around for show and tell.');
+    return;
+  }
+
+  game.showAndTellActive = true;
+  game.showAndTellItem = itemName;
+
+  const charismaGain = isRare ? 8 : 3;
+  game.charisma = Math.min(100, game.charisma + charismaGain);
+
+  announce(`🎤 You hold up your ${itemName} for everyone to see!`);
+
+  if (isRare) {
+    announce(`✨ Everyone is impressed! "${collectable.icon} Wow, where did you get that?!"`);
+    addReputation('popularKid', 8);
+    for (const npc of audience.slice(0, 6)) adjustRelationship(npc, 3, 'show-and-tell');
+  } else {
+    announce(`👀 "${itemName}? Cool, I guess..." Some people look interested.`);
+    addReputation('popularKid', 2);
+    for (const npc of audience.slice(0, 3)) adjustRelationship(npc, 1, 'show-and-tell');
+  }
+
+  game.showAndTellActive = false;
+}
+
+// ============================================================
+// NOTE PASSING SYSTEM — Pass notes during class
+// ============================================================
+function passNoteInClass(targetEntity) {
+  if (!targetEntity || !isStudentCharacter(targetEntity)) return;
+  const room = entityRoom(player);
+  if (entityRoom(targetEntity) !== room) {
+    announce('📝 They\'re not in the same room.');
+    return;
+  }
+
+  game.dayStats.notesPassed++;
+  const teacher = game.entities.find(e => e.role === 'teacher' && entityRoom(e) === room);
+  const dist = distance(player, targetEntity);
+  const interceptChance = teacher ? (0.15 + dist * 0.05) * getTeacherMoodModifier(teacher.name) : 0;
+
+  if (game.rng() < interceptChance) {
+    const lines = Math.round(10 * cliqueLineReduction());
+    addLines(lines, 'passing notes in class');
+    announce(`📝 ${teacher.name} intercepted your note! ${lines} lines!`);
+    addReputation('classClown', 2);
+  } else {
+    adjustRelationship(targetEntity, 4, 'note');
+    announce(`📝 You passed a note to ${targetEntity.name}. They smile. +friendship`);
+    addReputation('popularKid', 2);
+  }
+}
+
+// ============================================================
+// DAY-END REPORT CARD — Fun summary of the day
+// ============================================================
+function generateDayReport() {
+  const s = game.dayStats;
+  const topRep = getTopReputation();
+  const repLabel = topRep ? reputationLabel(topRep) : 'Nobody';
+  const repTier = topRep ? reputationTier(game.reputation[topRep]) : 'unknown';
+
+  const lines = [
+    `📊 DAY ${game.dayCount} REPORT CARD`,
+    '━━━━━━━━━━━━━━━━━━━━━',
+  ];
+
+  if (s.npcsTalkedTo.size > 0) lines.push(`💬 NPCs talked to: ${s.npcsTalkedTo.size}`);
+  if (s.lessonsAttended > 0) lines.push(`📚 Lessons attended: ${s.lessonsAttended}`);
+  if (s.questionsAnswered > 0) lines.push(`❓ Questions: ${s.questionsCorrect}/${s.questionsAnswered} correct`);
+  if (s.examsTaken > 0) lines.push(`📋 Exams taken: ${s.examsTaken}`);
+  if (s.punchesThrown > 0) lines.push(`👊 Punches thrown: ${s.punchesThrown}`);
+  if (s.pranksPlayed > 0) lines.push(`🎭 Pranks played: ${s.pranksPlayed}`);
+  if (s.linesReceived > 0) lines.push(`📝 Lines received: ${s.linesReceived}`);
+  if (s.headmasterVisits > 0) lines.push(`🏫 Headmaster visits: ${s.headmasterVisits}`);
+  if (s.cardsCollected > 0) lines.push(`🃏 Cards collected: ${s.cardsCollected}`);
+  if (s.itemsTraded > 0) lines.push(`🤝 Items traded: ${s.itemsTraded}`);
+  if (s.foodFightsJoined > 0) lines.push(`🍕 Food fights: ${s.foodFightsJoined}`);
+  if (s.notesPassed > 0) lines.push(`📝 Notes passed: ${s.notesPassed}`);
+  if (s.detentionEscapes > 0) lines.push(`🏃 Detention escapes: ${s.detentionEscapes}`);
+
+  lines.push('');
+  lines.push(`🏆 Reputation: ${repLabel} (${repTier})`);
+
+  if (game.playerClique) {
+    lines.push(`👥 Clique: ${CLIQUES[game.playerClique].name}`);
+  }
+
+  if (game.explorationPoints > 0) {
+    lines.push(`🗺️ Exploration: ${game.explorationPoints} pts (${game.discoveredPassages.length} secrets)`);
+  }
+
+  // Fun superlatives
+  if (s.pranksPlayed >= 3) lines.push('🎭 TITLE: Master Prankster');
+  else if (s.lessonsAttended >= 5 && s.linesReceived === 0) lines.push('📚 TITLE: Model Student');
+  else if (s.punchesThrown >= 5) lines.push('👊 TITLE: School Brawler');
+  else if (s.itemsTraded >= 3) lines.push('🤝 TITLE: Smooth Dealer');
+  else if (s.headmasterVisits >= 3) lines.push('🏫 TITLE: Frequent Flyer');
+  else if (s.foodFightsJoined > 0 && s.pranksPlayed > 0) lines.push('🔥 TITLE: Agent of Chaos');
+
+  return lines.join('\n');
+}
+
+function resetDayStats() {
+  game.dayStats = {
+    npcsTalkedTo: new Set(),
+    punchesThrown: 0,
+    pranksPlayed: 0,
+    lessonsAttended: 0,
+    linesReceived: 0,
+    cardsCollected: 0,
+    itemsTraded: 0,
+    questionsAnswered: 0,
+    questionsCorrect: 0,
+    headmasterVisits: 0,
+    foodFightsJoined: 0,
+    notesPassed: 0,
+    detentionEscapes: 0,
+    examsTaken: 0,
+  };
 }
 
 function nearestThrowableProp(entity) {
@@ -4177,8 +5167,12 @@ function approachPointForInteractionTarget(target) {
 }
 
 function updateCharismaHud() {
-  setCachedElementText('charisma', charismaEl, `🗣️ Charisma: ${Math.round(game.charisma)}`);
-  setCachedElementTitle('charisma', charismaEl, 'Higher charisma improves social outcomes when talking with students.');
+  const topRep = getTopReputation();
+  const repSuffix = topRep && game.reputation[topRep] >= 10 ? ` | ${reputationLabel(topRep)}` : '';
+  const cliqueSuffix = game.playerClique ? ` | ${CLIQUES[game.playerClique].icon}` : '';
+  setCachedElementText('charisma', charismaEl, `🗣️ Charisma: ${Math.round(game.charisma)}${repSuffix}${cliqueSuffix}`);
+  const repDetails = Object.entries(game.reputation).filter(([,v]) => v > 0).map(([k,v]) => `${reputationLabel(k)}: ${v}`).join(', ');
+  setCachedElementTitle('charisma', charismaEl, `Higher charisma improves social outcomes. ${repDetails || 'No reputation yet.'}`);
 }
 
 function updateWeatherHud() {
@@ -5156,6 +6150,31 @@ function resetToSchoolMorning() {
   player.dailyCards = pickDailyCardsForEntity(player);
   updateCardCollectionFromCards(player.dailyCards);
 
+  // --- New gameplay system resets ---
+  resetDayStats();
+  assignTeacherMoods();
+  game.pranksToday = 0;
+  game.lastPrankAt = 0;
+  game.activePranks = [];
+  game.protectionPaidTo = {};
+  game.bullyExtortionCooldown = 0;
+  game.lastDisruptionAt = 0;
+  game.activeDisruption = null;
+  game.footballMatch = null;
+  game.conkerBattle = null;
+  game.cardTournament = null;
+  game.examDay = false;
+  game.detentionMiniGame = false;
+  game.showAndTellActive = false;
+  // Give player a random prank item each day
+  const dailyPrank = getRandomPrankItem();
+  if (!player.inventory.includes(dailyPrank.name)) player.inventory.push(dailyPrank.name);
+  // Exam days
+  if (isExamDay()) {
+    game.examDay = true;
+    announce('📋 Today is EXAM DAY! Your attendance and attention will be tested.');
+  }
+
   setPeriod(0);
   updateBladderHud();
   updateHygieneHud();
@@ -6062,6 +7081,14 @@ function resolveClassQuestionAttempt(quiz, student, attemptText, forcedCorrect =
   if (student === player) {
     game.charisma = Math.max(0, Math.min(100, game.charisma + (isCorrect ? 2 : -1)));
     updateCharismaHud();
+    game.dayStats.questionsAnswered++;
+    if (isCorrect) {
+      game.dayStats.questionsCorrect++;
+      addReputation('nerd', 3);
+      addReputation('teachersPet', 2);
+    } else {
+      addReputation('classClown', 1);
+    }
   }
 
   clearClassQuestionUi();
@@ -6081,7 +7108,10 @@ function showClassQuestionUi(quiz) {
     btn.type = 'button';
     btn.className = 'class-question-choice';
     btn.title = `Answer option ${idx + 1}`;
-    btn.textContent = `${String.fromCharCode(65 + idx)}. ${choice}`;
+    // Nerds clique perk: correct answer gets a subtle hint
+    const isAnswer = normalizeAnswerText(choice) === quiz.answer;
+    const hintMark = cliqueQuizHint() && isAnswer ? ' 💡' : '';
+    btn.textContent = `${String.fromCharCode(65 + idx)}. ${choice}${hintMark}`;
     btn.onclick = () => {
       if (quiz.resolved) return;
       resolveClassQuestionAttempt(quiz, player, choice);
@@ -6247,7 +7277,9 @@ function updateTodo(force = false, now = performance.now()) {
 }
 
 function addLines(amount, reason) {
+  amount = Math.round(amount * cliqueLineReduction());
   game.lines += amount;
+  game.dayStats.linesReceived += amount;
   setCachedElementText('trouble', troubleEl, `📝 Lines: ${game.lines}`);
   announce(`📝 ${amount} lines for ${reason}`);
 }
@@ -6476,8 +7508,9 @@ function setPeriod(index) {
   }
   if (isAssemblyPeriod(current)) {
     const headmaster = game.entities.find((entity) => entity.role === 'teacher' && entity.name === 'Mr Wacker');
-    game.assemblyNextSpeechAt = performance.now() + 1400;
-    game.assemblyHymnAt = performance.now() + 10000;
+    // Give students time to walk to assembly hall and sit before starting speeches.
+    game.assemblyNextSpeechAt = performance.now() + 12000;
+    game.assemblyHymnAt = performance.now() + 28000;
     game.assemblyUsedThoughts = new Set();
     primeDailyAssemblyHymn();
     announce('🎤 Assembly begins: all students to seats, teachers behind the Headmaster.', { feedType: 'world' });
@@ -6538,7 +7571,7 @@ function handleInput(dt) {
   }
 
   const manualMovement = game.keys.ArrowLeft || game.keys.a || game.keys.ArrowRight || game.keys.d || game.keys.ArrowUp || game.keys.w || game.keys.ArrowDown || game.keys.s;
-  const manualAction = game.keys.z || game.keys.x || game.keys.e || game.keys.c || game.keys.q || game.keys.t || game.keys.v;
+  const manualAction = game.keys.z || game.keys.x || game.keys.e || game.keys.c || game.keys.q || game.keys.t || game.keys.v || game.keys.f || game.keys.g || game.keys.j || game.keys.n;
   if (manualMovement || manualAction) {
     // Manual control immediately overrides autopilot for responsiveness.
     if (game.autoMode) {
@@ -6674,13 +7707,75 @@ function handleInput(dt) {
     } else {
       const traded = tryTrade(player, partner, { isPlayerInitiated: true });
       if (!traded) announce(`🤝 ${partner.name} declined the trade for now.`);
+      else game.dayStats.itemsTraded++;
     }
     game.keys.t = false;
+  }
+
+  // --- New gameplay key actions ---
+  if (game.keys.f) {
+    // F key: Football kickabout (on the field) or food fight (in dining hall)
+    const room = entityRoom(player);
+    if (room === 'P.E. Field') {
+      startFootballMatch();
+    } else if (room === 'Dining Hall' || room === 'Kitchen') {
+      startFoodFight();
+    } else {
+      announce('⚽ Head to the P.E. Field for a kickabout, or the Dining Hall for a food fight!');
+    }
+    game.keys.f = false;
+  }
+  if (game.keys.g) {
+    // G key: Join classroom disruption, or use secret passage
+    if (game.activeDisruption && !game.activeDisruption.resolved && entityRoom(player) === game.activeDisruption.room) {
+      playerJoinDisruption();
+    } else {
+      // Check for secret passage
+      const passage = SECRET_PASSAGES.find(p =>
+        game.discoveredPassages.includes(p.id) &&
+        (entityRoom(player) === p.from || entityRoom(player) === p.to) &&
+        (distance(player, { x: p.fromX, y: p.fromY }) < 3 || distance(player, { x: p.toX, y: p.toY }) < 3)
+      );
+      if (passage) {
+        useSecretPassage(passage.id);
+      } else {
+        announce('🤷 Nothing to interact with here. G = join disruption or use secret passage.');
+      }
+    }
+    game.keys.g = false;
+  }
+  if (game.keys.j) {
+    // J key: Use prank item
+    const prankItems = getPlayerPrankItems();
+    if (prankItems.length > 0) {
+      executePrank(prankItems[0], entityRoom(player));
+    } else {
+      announce('🎭 No prank items in your inventory!');
+    }
+    game.keys.j = false;
+  }
+  if (game.keys.n) {
+    // N key: Pass a note (during class) or sneak out of detention
+    if (game.detentionMiniGame) {
+      attemptDetentionSneak();
+    } else {
+      const nearestStudent = game.entities.find(e =>
+        e !== player && isStudentCharacter(e) && entityRoom(e) === entityRoom(player) && distance(e, player) < 5
+      );
+      if (nearestStudent) passNoteInClass(nearestStudent);
+      else announce('📝 No one close enough to pass a note to.');
+    }
+    game.keys.n = false;
   }
 }
 
 function meleeAttack(attacker) {
   attacker.punchUntil = performance.now() + 220;
+  if (attacker === player) {
+    game.dayStats.punchesThrown++;
+    addReputation('toughKid', 2);
+    addReputation('teachersPet', -1);
+  }
   const strikeRange = attacker.profile.cane ? 1.95 : 1.45;
   for (const target of game.entities) {
     if (target === attacker || target.knockedUntil > performance.now()) continue;
@@ -8169,12 +9264,89 @@ function chooseTarget(entity, currentPeriod) {
     return roomCenter(currentPeriod.room);
   }
 
-  if (entity.role === 'bully' && game.rng() < 0.45) {
-    return roomCenter('P.E. Field');
-  }
-
   if (entity.role === 'weird' && game.rng() < 0.45) {
     return roomCenter(game.rng() < 0.5 ? 'Staff Room' : 'English');
+  }
+
+  // During breaks, students spread across activity zones on the P.E. Field.
+  // They form friend groups based on social bonds, role, and sex, and
+  // gravitate to specific zones: football pitch, tennis courts, chatting area, benches.
+  if (currentPeriod.mode === 'break') {
+    const field = roomByName('P.E. Field');
+    if (field) {
+      const seed = styleSeedFromName(entity.name) + game.dayCount;
+      const margin = 3;
+
+      // Activity zones spread across the field
+      const zones = [
+        { name: 'football-pitch', x: field.x + 4, y: field.y + 4, w: 22, h: 20, activity: 'playing football' },
+        { name: 'tennis-courts', x: field.x + 30, y: field.y + 3, w: 16, h: 12, activity: 'playing tennis' },
+        { name: 'chat-circle', x: field.x + 50, y: field.y + 4, w: 14, h: 10, activity: 'chatting' },
+        { name: 'walking-track', x: field.x + 5, y: field.y + 22, w: 55, h: 4, activity: 'walking together' },
+        { name: 'benches', x: field.x + 30, y: field.y + 18, w: 12, h: 6, activity: 'sitting on benches' },
+        { name: 'far-corner', x: field.x + 52, y: field.y + 16, w: 14, h: 10, activity: 'hanging out' },
+      ];
+
+      // Assign zone based on role/personality:
+      // - Bullies/heroes prefer football pitch
+      // - Swots prefer benches or chat circle
+      // - Weird kids like far corners
+      // - Others mix between zones
+      const isFemale = (entity.sex || entity.appearance?.sex) === 'female';
+      let zonePrefs;
+      if (entity.role === 'bully') {
+        zonePrefs = isFemale ? [2, 5, 3] : [0, 5, 3]; // girls: chat/hang, boys: football/hang
+      } else if (entity.role === 'hero') {
+        zonePrefs = isFemale ? [1, 2, 3] : [0, 1, 3]; // girls: tennis/chat, boys: football/tennis
+      } else if (entity.role === 'swot') {
+        zonePrefs = isFemale ? [4, 2, 3] : [4, 2, 1]; // benches/chat, boys also tennis
+      } else if (entity.role === 'weird') {
+        zonePrefs = [5, 4, 3]; // far corner, benches, walking
+      } else {
+        // Normal students pick based on seed
+        zonePrefs = isFemale ? [2, 3, 1, 4] : [0, 1, 3, 5];
+      }
+
+      // Pick zone: use day seed so they vary day to day but stay consistent within a day
+      const zoneIdx = zonePrefs[(seed + game.dayCount) % zonePrefs.length];
+      const zone = zones[zoneIdx];
+
+      // Find best friend to cluster with
+      const allStudents = game.entities.filter(e => e !== entity && isStudentCharacter(e));
+      let bestFriend = null;
+      let bestBond = 0;
+      for (const other of allStudents) {
+        const bond = getSocialBond(entity, other);
+        if (bond > bestBond) { bestBond = bond; bestFriend = other; }
+      }
+
+      // Position within zone with personal offset + wandering
+      const wanderPhase = Math.floor(performance.now() / 12000 + seed) % 5;
+      const personalOffX = ((seed * 7 + wanderPhase * 13) % Math.max(4, zone.w - 2)) - zone.w / 3;
+      const personalOffY = ((seed * 11 + wanderPhase * 9) % Math.max(4, zone.h - 2)) - zone.h / 3;
+
+      let targetX = zone.x + zone.w / 2 + personalOffX;
+      let targetY = zone.y + zone.h / 2 + personalOffY;
+
+      // Walking track: animate position along the track
+      if (zone.name === 'walking-track') {
+        const walkProgress = ((performance.now() / 6000 + seed) % 1);
+        targetX = zone.x + walkProgress * zone.w;
+        targetY = zone.y + zone.h / 2 + personalOffY * 0.3;
+      }
+
+      // Pull toward best friend if nearby
+      if (bestFriend && bestBond > 15) {
+        targetX = targetX * 0.65 + (bestFriend.x || targetX) * 0.35;
+        targetY = targetY * 0.65 + (bestFriend.y || targetY) * 0.35;
+      }
+
+      // Clamp within field bounds
+      targetX = Math.max(field.x + margin, Math.min(field.x + field.w - margin, targetX));
+      targetY = Math.max(field.y + margin, Math.min(field.y + field.h - margin, targetY));
+
+      return { x: targetX, y: targetY };
+    }
   }
 
   return shouldAttend ? roomCenter(currentPeriod.room) : roomCenter('P.E. Field');
@@ -8597,20 +9769,35 @@ function updateAI(dt) {
   flushDeferredLlmDialogue(now);
 
   if (isAssemblyPeriod(current) && headmaster && now >= game.assemblyNextSpeechAt) {
-    let thought = randomHeadmasterAssemblyThought();
-    let safety = 0;
-    while (game.assemblyUsedThoughts.has(thought) && safety < 8) {
-      thought = randomHeadmasterAssemblyThought();
-      safety += 1;
+    // Wait until at least 50% of students are in the Assembly Hall before starting.
+    const studentsInHall = game.entities.filter(e => isStudentCharacter(e) && entityRoom(e) === 'Assembly Hall').length;
+    const totalStudents = game.entities.filter(e => isStudentCharacter(e)).length;
+    const attendanceRatio = totalStudents > 0 ? studentsInHall / totalStudents : 0;
+    if (attendanceRatio < 0.5) {
+      game.assemblyNextSpeechAt = now + 3000; // Check again in 3 seconds
+    } else {
+      let thought = randomHeadmasterAssemblyThought();
+      let safety = 0;
+      while (game.assemblyUsedThoughts.has(thought) && safety < 8) {
+        thought = randomHeadmasterAssemblyThought();
+        safety += 1;
+      }
+      game.assemblyUsedThoughts.add(thought);
+      say(headmaster, thought, { force: true, durationMs: 4200 });
+      announce(`🧑‍🏫 Headmaster thought: ${thought}`, { force: true });
+      runAssemblyCallAndResponse(now, headmaster);
     }
-    game.assemblyUsedThoughts.add(thought);
-    say(headmaster, thought, { force: true, durationMs: 4200 });
-    announce(`🧑‍🏫 Headmaster thought: ${thought}`, { force: true });
-    runAssemblyCallAndResponse(now, headmaster);
   }
 
   if (isAssemblyPeriod(current) && headmaster && now >= game.assemblyHymnAt) {
-    runAssemblyHymn(now, headmaster);
+    // Wait for students before hymn too
+    const studentsInHall = game.entities.filter(e => isStudentCharacter(e) && entityRoom(e) === 'Assembly Hall').length;
+    const totalStudents = game.entities.filter(e => isStudentCharacter(e)).length;
+    if (totalStudents > 0 && studentsInHall / totalStudents < 0.5) {
+      game.assemblyHymnAt = now + 3000;
+    } else {
+      runAssemblyHymn(now, headmaster);
+    }
   }
 
   if (supervised) {
@@ -9461,15 +10648,16 @@ function updateAI(dt) {
     const doorwayChoke = isNearDoorway(entity) || isNearDoorway(routedTarget, 2.2);
     if (farFromGoal && doorwayChoke) {
       entity.jamSeconds = moved < 0.05 ? (entity.jamSeconds + (dt / 1000)) : Math.max(0, entity.jamSeconds - (dt / 1400));
-      if (entity.jamSeconds > 0.65) resetEntityPathing(entity, entity.target);
+      if (entity.jamSeconds > 0.5) resetEntityPathing(entity, entity.target);
 
-      // If a student keeps shuddering in a doorway while trying to leave a room,
-      // snap them just outside that room's door so corridor flow does not freeze.
-      if (isStudent && entity.jamSeconds > 1.4 && moved < 0.04) {
+      // If an NPC keeps shuddering in a doorway, snap them just outside
+      // that room's door so corridor flow does not freeze.
+      // Applies to ALL NPCs (students AND teachers).
+      if (entity.jamSeconds > 0.9 && moved < 0.04) {
         teleportEntityOutsideCurrentDoor(entity, entity.target);
       }
       // Last resort: if still jammed after teleport attempt, force to destination.
-      if (entity.jamSeconds > 2.5) {
+      if (entity.jamSeconds > 1.6) {
         teleportEntityToTarget(entity, entity.target, 'door-jam');
         entity.jamSeconds = 0;
       }
@@ -9606,6 +10794,15 @@ function updateSchedule(dt) {
       // Keep home-time active until player exits via gates.
       game.periodElapsed = current.mins;
     } else {
+      // Track lesson attendance for exam scoring
+      if (current.mode === 'lesson' && entityRoom(player) === current.room) {
+        trackLessonAttendance(current.room);
+        game.dayStats.lessonsAttended++;
+      }
+      // Run exam at end of lesson on exam days
+      if (game.examDay && current.mode === 'lesson') {
+        runExam(current.room);
+      }
       // Ensure Eric always gets a fresh destination after each bell.
       let nextIndex = game.periodIndex + 1;
       while (nextIndex < schedule.length && schedule[nextIndex].room === current.room) {
@@ -9678,6 +10875,18 @@ function beginEndOfDayTransition() {
   if (game.endDaySequenceActive) return;
   game.endDaySequenceActive = true;
   game.transitionUntil = performance.now() + DAY_TRANSITION_MS;
+  // Show day report card before transition
+  const report = generateDayReport();
+  announce(report, { force: true, feedType: 'world' });
+  // Run exams if exam day
+  if (game.examDay) {
+    const current = schedule[game.periodIndex];
+    const subjects = Object.keys(game.lessonsAttendedBySubject);
+    if (subjects.length > 0) {
+      const examSubject = subjects[Math.floor(game.rng() * subjects.length)];
+      runExam(examSubject);
+    }
+  }
   announce('🌙 Night passes… books close, lights dim, and the school resets for morning.', { force: true, feedType: 'world' });
   updateDayTransitionOverlay();
 }
@@ -12503,6 +13712,12 @@ const studentInteractions = [
   { id: 'gossip', icon: '🗣️', label: 'Share spicy gossip', baseDelta: 0, lines: ['Fresh rumour drop?', 'Staff room tea update?', 'Heard who got roasted in maths?'] },
   { id: 'tease', icon: '🙃', label: 'Light teasing', baseDelta: -2, lines: ['That sprint was in slow motion.', 'Pop quiz still chasing you?', 'Stealth level: cafeteria tray.'] },
   { id: 'insult', icon: '😬', label: 'Throw an insult', baseDelta: -8, lines: ['You peak at average.', 'Your chat needs patch notes.', 'Even homework has more spark.'] },
+  { id: 'pass-note', icon: '📝', label: 'Pass a note', baseDelta: 3, lines: ['Psst, read this.', 'Secret message for you.', 'Don\'t let teacher see.'] },
+  { id: 'spread-rumour', icon: '🗣️', label: 'Start a rumour about someone', baseDelta: -1, lines: ['You\'ll never guess what I heard...', 'Keep this between us...', 'Don\'t tell anyone but...'] },
+  { id: 'show-and-tell', icon: '🎤', label: 'Show off an item', baseDelta: 2, lines: ['Check this out!', 'Look what I found!', 'Pretty cool, right?'] },
+  { id: 'conker-battle', icon: '🌰', label: 'Challenge to conker battle', baseDelta: 2, lines: ['Conker battle?', 'My conker vs yours!', 'Think your conker can beat mine?'] },
+  { id: 'join-clique', icon: '👥', label: 'Ask to join their clique', baseDelta: 0, lines: ['Can I hang with your crew?', 'Room for one more?', 'I want in.'] },
+  { id: 'use-prank', icon: '🎭', label: 'Play a prank nearby', baseDelta: 0, lines: ['Watch this...', 'This is gonna be good...', 'Don\'t look at me...'] },
 ];
 
 const staffInteractions = [
@@ -12780,6 +13995,7 @@ function openInteractionPanelFor(target) {
         announce(`🗨️ ${player.name} to ${target.name}: "${line}"`);
         game.lastInteractionAtByTarget[target.name] = game.lastInteractionAtByTarget[target.name] || {};
         game.lastInteractionAtByTarget[target.name][option.id] = game.timeMinutes;
+        game.dayStats.npcsTalkedTo.add(target.name);
 
         if (option.action === 'trade') {
           attemptInteractionTrade(target, { haggle: false });
@@ -12789,6 +14005,34 @@ function openInteractionPanelFor(target) {
           playTrumpCardBattle(target);
         } else if (option.action === 'mug-cards') {
           mugCardsFromTarget(target);
+        } else if (option.id === 'pass-note') {
+          passNoteInClass(target);
+        } else if (option.id === 'spread-rumour') {
+          startRumour(player, target);
+        } else if (option.id === 'show-and-tell') {
+          const showItem = player.inventory[0];
+          if (showItem) startShowAndTell(showItem);
+          else announce('🎤 You have nothing to show off!');
+        } else if (option.id === 'conker-battle') {
+          startConkerBattle(target);
+        } else if (option.id === 'join-clique') {
+          // Determine clique from target's role
+          const cliqueMap = { swot: 'nerds', bully: 'rebels', hero: 'jocks' };
+          const targetClique = cliqueMap[target.role] || 'popular';
+          if (canJoinClique(targetClique)) {
+            joinClique(targetClique);
+            adjustEricRelationship(target, 5, 'join-clique');
+          } else {
+            const needed = CLIQUES[targetClique];
+            announce(`👥 ${target.name}: "You need more ${reputationLabel(needed.reqRep)} rep to join us."`);
+          }
+        } else if (option.id === 'use-prank') {
+          const prankItems = getPlayerPrankItems();
+          if (prankItems.length > 0) {
+            executePrank(prankItems[0], entityRoom(player));
+          } else {
+            announce('🎭 You don\'t have any prank items!');
+          }
         } else {
           const delta = calculateStudentInteractionDelta(target, option);
           adjustEricRelationship(target, delta, `social:${option.id}`);
@@ -13358,6 +14602,28 @@ function updateFrame(now, dt) {
     }
     recoverEnergy(dt / 1000);
     updateTodo();
+
+    // --- New gameplay systems ---
+    updateDetentionMiniGame(dt);
+    maybeClassroomDisruption();
+    updateFootballMatch(dt);
+    spreadRumours(dt);
+    checkSecretPassageDiscovery();
+
+    // Bully extortion during breaks (random trigger)
+    if (game.rng() < 0.0003 * dt && !game.bullyExtortionCooldown) {
+      const current = schedule[game.periodIndex];
+      if (current && current.mode === 'break') {
+        const nearbyBully = game.entities.find(e =>
+          e !== player && e.role === 'bully' && distance(e, player) < 4 && !game.protectionPaidTo[e.name]
+        );
+        if (nearbyBully) {
+          triggerBullyExtortion(nearbyBully);
+          game.bullyExtortionCooldown = now + 60000;
+        }
+      }
+    }
+    if (game.bullyExtortionCooldown && now > game.bullyExtortionCooldown) game.bullyExtortionCooldown = 0;
   }
 }
 
