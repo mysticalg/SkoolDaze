@@ -885,7 +885,7 @@ const NPC_RUNNING_EXTRA_DRAIN_PER_SECOND = 0.105;
 const NPC_LUNCH_RECOVER_PER_SECOND = 0.26;
 // Seated students should slowly recover stamina during lessons instead of still draining.
 const NPC_SEATED_RECOVER_PER_SECOND = 0.11;
-const NPC_END_OF_DAY_ENERGY_TARGET = 38;
+const NPC_END_OF_DAY_ENERGY_TARGET = 45;
 const NPC_BLADDER_FIRST_VISIT_RATE = 0.2;
 const NPC_BLADDER_FIRST_VISIT_RUNNING_BONUS = 0.028;
 const NPC_BLADDER_AFTER_VISIT_RATE = 0.055;
@@ -9575,7 +9575,7 @@ function updateNpcVitals(entity, dt, isRunning) {
     : drainRate;
   entity.energy = entity.role === "janitor" || entity.role === "dinnerLady"
     ? 100
-    : Math.max(16, Math.min(100, entity.energy - (dtSeconds * netDrainPerSecond)));
+    : Math.max(35, Math.min(100, entity.energy - (dtSeconds * netDrainPerSecond)));
 
   // Keep end-of-day fatigue believable: students should usually finish around ~30%.
   // This softly nudges energy toward a line from 100 at the start of day to 30 at home time.
@@ -9584,7 +9584,7 @@ function updateNpcVitals(entity, dt, isRunning) {
   if (entity.role === "janitor" || entity.role === "dinnerLady") {
     entity.energy = 100;
   } else {
-    entity.energy = Math.max(16, Math.min(entity.energy, baselineEnergy));
+    entity.energy = Math.max(35, Math.min(entity.energy, baselineEnergy));
   }
 
   const emotionDrift = entity.mood === 'furious' || entity.mood === 'angry' ? -0.9 : 0.35;
