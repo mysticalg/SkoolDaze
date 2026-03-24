@@ -429,6 +429,9 @@ function diningHallLayout() {
     for (const colX of tableCols) {
       seats.push({ x: colX - 1.2, y: rowY, tableX: colX, tableY: rowY, side: 'left' });
       seats.push({ x: colX + 1.2, y: rowY, tableX: colX, tableY: rowY, side: 'right' });
+      // Extra seats at each end of the table so all students can sit
+      seats.push({ x: colX, y: rowY - 1.1, tableX: colX, tableY: rowY, side: 'top' });
+      seats.push({ x: colX, y: rowY + 1.1, tableX: colX, tableY: rowY, side: 'bottom' });
     }
   }
 
@@ -472,6 +475,7 @@ function resetLunchState(entity) {
   entity.lunchServedAt = 0;
   entity.lunchSeatIndex = -1;
   entity.lunchEatUntil = 0;
+  entity.lunchChatUntil = 0;
 }
 
 function lunchPlateSpotForEntity(layout, entity) {
@@ -3320,6 +3324,7 @@ function mkEntity(name, role, x, y, color, traits = {}) {
     lunchServedAt: 0,
     lunchSeatIndex: -1,
     lunchEatUntil: 0,
+    lunchChatUntil: 0,
   };
   applySexAppearanceTraits(entity);
   return entity;
@@ -5433,7 +5438,7 @@ function lunchHangoutTargetForEntity(layout, entity, now = performance.now()) {
   const seatedFriend = members.find((member) => (
     member !== entity
     && entityRoom(member) === 'Dining Hall'
-    && (member.lunchState === 'eating' || member.lunchState === 'toSeat')
+    && (member.lunchState === 'eating' || member.lunchState === 'toSeat' || member.lunchState === 'chatting')
   ));
 
   const baseAnchor = seatedFriend && layout?.seats?.[seatedFriend.lunchSeatIndex]
@@ -7376,7 +7381,11 @@ function recoverPlayerIfWallStuck(dt) {
   const pushingInput = Math.abs(player.vx) + Math.abs(player.vy) > 0.02;
   const insideWalkable = isWalkablePoint(player.x, player.y);
 
-  if (!insideWalkable || (pushingInput && moved < 0.01)) {
+  // In auto mode, also detect when player is trying to move but making no progress
+  // (e.g. bouncing against a wall edge that constrain() keeps nudging back from).
+  const autoStalling = game.autoMode && pushingInput && moved < 0.04;
+
+  if (!insideWalkable || (pushingInput && moved < 0.01) || autoStalling) {
     game.playerStuckMs += dt;
   } else {
     game.playerStuckMs = Math.max(0, game.playerStuckMs - (dt * 2));
@@ -7385,14 +7394,19 @@ function recoverPlayerIfWallStuck(dt) {
   game.playerLastX = player.x;
   game.playerLastY = player.y;
 
-  if (game.playerStuckMs < 800) return;
+  // Faster rescue in auto mode (500ms) since the player isn't manually controlling
+  const threshold = game.autoMode ? 500 : 800;
+  if (game.playerStuckMs < threshold) return;
 
   const current = schedule[game.periodIndex];
+  // In auto mode, prefer teleporting to the actual auto destination
+  const autoTarget = game.autoMode ? chooseAutoDestination() : null;
   const preferred = [
+    autoTarget,
     getSeatPosition(current.room, player.seatIndex, player),
     roomCenter(current.room),
     roomCenter('Ground Corridor'),
-  ];
+  ].filter(Boolean);
   const safe = nearestWalkablePoint({ x: player.x, y: player.y }, preferred);
   if (!safe) return;
 
@@ -9539,6 +9553,7 @@ function updateNpcVitals(entity, dt, isRunning) {
     && (
       inFoodZone
       || entity.lunchState === 'eating'
+      || entity.lunchState === 'chatting'
       || entity.lunchState === 'toSeat'
       || entity.hasLunchPlate
     );
@@ -9842,7 +9857,7 @@ function updateAI(dt) {
 
     if (isLunchtimePeriod(current) && isStudent) {
       const urgentToiletBreak = shouldNpcHeadToToilets(entity, current);
-      if (urgentToiletBreak && entity.lunchState !== 'eating' && entity.lunchState !== 'done') {
+      if (urgentToiletBreak && entity.lunchState !== 'eating' && entity.lunchState !== 'chatting' && entity.lunchState !== 'done') {
         if (entity.lunchState === 'queue' || entity.lunchState === 'beingServed' || entity.lunchState === 'toPlate') {
           resetLunchState(entity);
         }
@@ -9870,7 +9885,7 @@ function updateAI(dt) {
         }
 
         if (entity.lunchState === 'queue') {
-          const maxServingSlots = 2;
+          const maxServingSlots = 4;
           const serviceSlotIndex = Math.min(Math.max(entity.lunchQueueIndex, 0), maxServingSlots - 1);
           const serviceSlot = layout.queueSlots[serviceSlotIndex] || layout.queueSlots[0];
           const atFront = entity.lunchQueueIndex >= 0
@@ -9908,11 +9923,11 @@ function updateAI(dt) {
               entity.isSeated = true;
               entity.seatedRoom = 'Dining Hall';
               entity.lunchState = 'eating';
-              entity.lunchEatUntil = now + (4400 + (game.rng() * 2200));
+              entity.lunchEatUntil = now + (18000 + (game.rng() * 12000));
             }
           } else {
             entity.lunchState = 'eating';
-            entity.lunchEatUntil = now + (3600 + (game.rng() * 1800));
+            entity.lunchEatUntil = now + (14000 + (game.rng() * 8000));
             entity.target = lunchHangoutTargetForEntity(layout, entity, now);
           }
         }
@@ -9931,10 +9946,27 @@ function updateAI(dt) {
             entity.target = lunchHangoutTargetForEntity(layout, entity, now);
           }
           if (now >= (entity.lunchEatUntil || 0)) {
-            entity.lunchState = 'done';
+            entity.lunchState = 'chatting';
             entity.hasLunchPlate = false;
+            entity.lunchChatUntil = now + (10000 + (game.rng() * 8000));
+          }
+        }
+
+        if (entity.lunchState === 'chatting') {
+          // Stay seated at the table chatting with friends after eating
+          const seat = layout.seats[entity.lunchSeatIndex];
+          if (seat) {
+            entity.x = seat.x;
+            entity.y = seat.y;
+            entity.target = seat;
+            entity.isSeated = true;
+            entity.seatedRoom = 'Dining Hall';
+          }
+          if (now >= (entity.lunchChatUntil || 0)) {
+            entity.lunchState = 'done';
             entity.isSeated = false;
             entity.seatedRoom = null;
+            entity.lunchSeatIndex = -1;
             entity.target = lunchHangoutTargetForEntity(layout, entity, now);
           }
         }
@@ -10479,7 +10511,8 @@ function updateAI(dt) {
       && (isWithinSchoolGateChute(entity) || isWithinSchoolGateChute(routedTarget));
     const crowdChokePoint = isNearDoorway(entity, 2.4) || isNearDoorway(routedTarget, 2.4) || nearStair || morningGateChokePoint;
     const canPhaseThroughCrowd = entity.phaseThroughUntil > performance.now() || crowdChokePoint;
-    if (!(inLesson && studentInCurrentClass) && !canPhaseThroughCrowd) {
+    const lunchSeated = isLunchtimePeriod(current) && (entity.lunchState === 'eating' || entity.lunchState === 'chatting');
+    if (!(inLesson && studentInCurrentClass) && !canPhaseThroughCrowd && !lunchSeated) {
       for (const other of activeEntities) {
         if (other === entity) continue;
         const gapX = entity.x - other.x;
@@ -10538,10 +10571,11 @@ function updateAI(dt) {
     // During lessons all teachers should be seated in their designated classroom,
     // not just the currently assigned teacher in the active period room.
     const seatedTarget = inLesson && entityRoom(entity) === expectedRoom;
-    const lunchSeatTarget = isLunchtimePeriod(current) && isStudent && entity.lunchState === 'eating' && entityRoom(entity) === 'Dining Hall';
+    const lunchSeatTarget = isLunchtimePeriod(current) && isStudent && (entity.lunchState === 'eating' || entity.lunchState === 'chatting') && entityRoom(entity) === 'Dining Hall';
     const wasSeated = entity.isSeated && (entity.seatedRoom === expectedRoom || entity.seatedRoom === 'Dining Hall');
     // Add a small hysteresis window: sitting is easy to maintain, harder to flip off.
-    entity.isSeated = (seatedTarget || lunchSeatTarget) && (len < 0.4 || (wasSeated && len < 0.85));
+    // Lunch eating/chatting students are always seated — crowd push should not unseat them.
+    entity.isSeated = lunchSeatTarget || ((seatedTarget) && (len < 0.4 || (wasSeated && len < 0.85)));
 
     // Assembly-specific settle pass: lock teachers at their final standing/seated marker
     // to stop micro path corrections that look like hopping on the spot.
