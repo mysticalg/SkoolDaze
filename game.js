@@ -14292,20 +14292,22 @@ function openWorldInteractionPanel(target) {
 
 function handleCanvasActivation(pointer, options = {}) {
   const { touchIntent = false } = options;
+  // On desktop, clicks also act as click-to-move (same as touch tap-to-move).
+  const allowClickMove = touchIntent || !touchNavigationActive();
   const clicked = findHoveredEntityAtScreen(pointer.mouseX, pointer.mouseY);
   if (!clicked) {
     clearPlayerPendingAction();
     closeInteractionPanel();
-    if (touchIntent) setPlayerTapTarget(screenToWorld(pointer.mouseX, pointer.mouseY));
+    if (allowClickMove) setPlayerTapTarget(screenToWorld(pointer.mouseX, pointer.mouseY));
     return;
   }
   if (distance(player, clicked) > 5.5) {
-    if (touchIntent) {
+    if (allowClickMove) {
       clearPlayerPendingAction();
       setPlayerTapTarget(approachPointForInteractionTarget(clicked));
       return;
     }
-    announce('ðŸ’¬ Move closer to chat with that person.');
+    announce('💬 Move closer to chat with that person.');
     return;
   }
   clearPlayerPendingAction();
@@ -14504,23 +14506,30 @@ function onCanvasPointerCancel(event) {
 
 function onCanvasClick(event) {
   const pointer = canvasPointerToInternal(event);
+  const now = performance.now();
+  const repeatedTap = (now - canvasGestureState.lastClickAt) <= 420
+    && Math.hypot(
+      event.clientX - canvasGestureState.lastClickClientX,
+      event.clientY - canvasGestureState.lastClickClientY,
+    ) <= 28;
+  canvasGestureState.lastClickAt = now;
+  canvasGestureState.lastClickClientX = event.clientX;
+  canvasGestureState.lastClickClientY = event.clientY;
+
   if (touchNavigationActive()) {
     if ((performance.now() - canvasGestureState.lastTouchHandledAt) < 280) return;
-    const now = performance.now();
-    const repeatedTap = (now - canvasGestureState.lastClickAt) <= 420
-      && Math.hypot(
-        event.clientX - canvasGestureState.lastClickClientX,
-        event.clientY - canvasGestureState.lastClickClientY,
-      ) <= 28;
-    canvasGestureState.lastClickAt = now;
-    canvasGestureState.lastClickClientX = event.clientX;
-    canvasGestureState.lastClickClientY = event.clientY;
     if (repeatedTap && !findHoveredEntityAtScreen(pointer.mouseX, pointer.mouseY)) {
       canvasGestureState.lastClickAt = -Infinity;
       recenterCameraOnPlayer();
       return;
     }
     handleCanvasActivation(pointer, { touchIntent: true });
+    return;
+  }
+  // Desktop: double-click on empty ground recenters camera on player.
+  if (repeatedTap && !findHoveredEntityAtScreen(pointer.mouseX, pointer.mouseY)) {
+    canvasGestureState.lastClickAt = -Infinity;
+    recenterCameraOnPlayer();
     return;
   }
   handleCanvasActivation(pointer);
@@ -14913,6 +14922,61 @@ canvas.addEventListener('pointermove', onCanvasPointerMove);
 canvas.addEventListener('pointerup', onCanvasPointerUp);
 canvas.addEventListener('pointercancel', onCanvasPointerCancel);
 canvas.addEventListener('click', onCanvasClick);
+
+// ---------------------------------------------------------------------------
+// Desktop: mouse-wheel zoom, middle/right-click drag pan, minimap click
+// ---------------------------------------------------------------------------
+canvas.addEventListener('wheel', (event) => {
+  event.preventDefault();
+  const internal = canvasClientToInternal(event.clientX, event.clientY);
+  const anchoredWorld = screenToWorld(internal.mouseX, internal.mouseY);
+  const step = event.deltaY < 0 ? 0.15 : -0.15;
+  setCameraZoom((game.cameraZoom || 1) + step, internal, anchoredWorld);
+}, { passive: false });
+
+// Middle-click or right-click drag to pan the camera on desktop.
+let desktopPanState = null;
+canvas.addEventListener('pointerdown', (event) => {
+  if (event.pointerType === 'touch') return;
+  // Middle button (1) or right button (2)
+  if (event.button !== 1 && event.button !== 2) return;
+  event.preventDefault();
+  canvas.setPointerCapture(event.pointerId);
+  desktopPanState = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY };
+});
+canvas.addEventListener('pointermove', (event) => {
+  if (!desktopPanState || event.pointerId !== desktopPanState.pointerId) return;
+  event.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  nudgeCameraPan(
+    -((event.clientX - desktopPanState.lastX) / rect.width) * CAMERA.w,
+    -((event.clientY - desktopPanState.lastY) / rect.height) * CAMERA.h,
+  );
+  desktopPanState.lastX = event.clientX;
+  desktopPanState.lastY = event.clientY;
+});
+canvas.addEventListener('pointerup', (event) => {
+  if (desktopPanState && event.pointerId === desktopPanState.pointerId) {
+    if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+    desktopPanState = null;
+  }
+});
+canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+
+// Minimap click-to-navigate: click on the minimap to move the player there.
+canvas.addEventListener('click', (event) => {
+  const internal = canvasClientToInternal(event.clientX, event.clientY);
+  const mapW = 220, mapH = 132;
+  const mapX = canvas.width - mapW - 10, mapY = 10;
+  if (internal.mouseX >= mapX && internal.mouseX <= mapX + mapW &&
+      internal.mouseY >= mapY && internal.mouseY <= mapY + mapH) {
+    const worldX = ((internal.mouseX - mapX) / mapW) * WORLD.w;
+    const worldY = ((internal.mouseY - mapY) / mapH) * WORLD.h;
+    setPlayerTapTarget({ x: worldX, y: worldY });
+    event.stopImmediatePropagation();
+  }
+}, true); // useCapture so minimap click is handled before the general click handler
+
 closeInteractionPanelBtn.onclick = () => {
   closeInteractionPanel();
 };
