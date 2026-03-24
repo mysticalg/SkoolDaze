@@ -192,6 +192,12 @@ const canvasGestureState = {
 const miniMapBaseCanvas = document.createElement('canvas');
 let miniMapBaseCacheKey = '';
 
+const scanlineCanvas = document.createElement('canvas');
+let scanlineCacheKey = '';
+
+const weatherGradientCache = { key: '', gradient: null };
+const vignetteGradientCache = { key: '', gradient: null };
+
 // Full retro-inspired palette so every room/entity can have richer color identity.
 const PALETTE = {
   ink: '#0f1426',
@@ -3831,6 +3837,24 @@ function gateQueuePosition(entity) {
   };
 }
 
+// Corridor queue position: students line up outside classroom doors before lessons.
+function corridorQueueSpot(entity, roomName) {
+  const room = roomByName(roomName);
+  if (!room) return roomCenter(roomName);
+  const door = roomDoorway(room);
+  if (!door) return roomCenter(roomName);
+  const floorCorridorY = room.floor === 'upper' ? 17 : room.floor === 'middle' ? 52 : room.floor === 'ground' ? 78 : 112;
+  const queueIndex = entity.seatIndex || 0;
+  // Line up along the corridor wall next to the door, spaced out.
+  const spacing = 1.6;
+  const halfQueue = 8;
+  const offset = (queueIndex - halfQueue) * spacing;
+  const queueX = Math.max(room.x, Math.min(room.x + room.w, door.x + offset));
+  // Stand in the corridor center line.
+  const queueY = floorCorridorY + 1.2;
+  return { x: queueX, y: queueY };
+}
+
 function teacherGateLinePosition(teacherIndex) {
   const field = roomByName('P.E. Field');
   const dividerX = field.x + morningQueue.dividerInsetFromFieldLeft;
@@ -4180,14 +4204,14 @@ function pickWeeklyWeather() {
 }
 
 function updateBladderHud() {
-  bladderEl.textContent = `🚻 Bladder: ${Math.round(game.bladder)}%`;
+  setCachedElementText('bladder', bladderEl, `🚻 Bladder: ${Math.round(game.bladder)}%`);
 }
 
 function updateHygieneHud() {
-  hygieneEl.textContent = `🧼 Hygiene: ${Math.round(game.hygiene)}%`;
-  hygieneEl.title = game.hygiene < 35
+  setCachedElementText('hygiene', hygieneEl, `🧼 Hygiene: ${Math.round(game.hygiene)}%`);
+  setCachedElementTitle('hygiene', hygieneEl, game.hygiene < 35
     ? 'Low hygiene: pupils and teachers may shame Eric.'
-    : 'Keep hygiene high: avoid wetting accidents and fights.';
+    : 'Keep hygiene high: avoid wetting accidents and fights.');
 }
 
 function lowerHygiene(amount, reason) {
@@ -5847,7 +5871,7 @@ function renderEventFeed() {
 function pushFeedEvent(message, type = 'action', timeMins = game.timeMinutes) {
   const safeMessage = sanitizeLlmLine(playerFacingText(message), '…');
   game.eventLog.unshift({ message: safeMessage, type, time: formatTime(timeMins) });
-  game.eventLog = game.eventLog.slice(0, 64);
+  if (game.eventLog.length > 64) game.eventLog.length = 64;
   renderEventFeed();
 }
 
@@ -5890,7 +5914,7 @@ function announce(message, options = {}) {
   }
 
   game.announcements.unshift(`[${formatTime(game.timeMinutes)}] ${safeMessage}`);
-  game.announcements = game.announcements.slice(0, 12);
+  if (game.announcements.length > 12) game.announcements.length = 12;
   pushFeedEvent(safeMessage, resolvedFeedType);
 }
 
@@ -6329,7 +6353,7 @@ function recoverPlayerIfWallStuck(dt) {
   game.playerLastX = player.x;
   game.playerLastY = player.y;
 
-  if (game.playerStuckMs < 1100) return;
+  if (game.playerStuckMs < 800) return;
 
   const current = schedule[game.periodIndex];
   const preferred = [
@@ -6381,13 +6405,29 @@ function setPeriod(index) {
     if (orderlyAssemblyDismissal && studentIndex >= 0) {
       entity.assemblyReleaseAt = nowBell + (studentIndex * 520);
       entity.bellRushUntil = 0;
+      // After assembly dismissal, also queue for corridor if next period is a lesson.
+      if (current.mode === 'lesson' && !isAssemblyPeriod(current) && isStudentCharacter(entity)) {
+        // Each student's queue time starts after their own assembly release + travel buffer.
+        const myAssemblyRelease = nowBell + (studentIndex * 520);
+        entity.corridorQueueReleaseAt = myAssemblyRelease + 5000 + (studentIndex * 180);
+      } else {
+        entity.corridorQueueReleaseAt = 0;
+      }
     } else if (orderlyAssemblyDismissal && teacherIndex >= 0) {
       entity.assemblyReleaseAt = nowBell + ((studentsDismissOrder.length + teacherIndex) * 620);
       entity.bellRushUntil = 0;
+      entity.corridorQueueReleaseAt = 0;
     } else {
       entity.assemblyReleaseAt = 0;
-      // Bell release: students instantly stand and transition toward the next room.
+      // Bell release: students stand and head to next room.
       entity.bellRushUntil = nowBell + 4200;
+      // For lesson periods, students queue in the corridor first then enter one by one.
+      if (current.mode === 'lesson' && !isAssemblyPeriod(current) && isStudentCharacter(entity) && studentIndex >= 0) {
+        // Teacher goes in first (~3s), then students file in with staggered delays.
+        entity.corridorQueueReleaseAt = nowBell + 3500 + (studentIndex * 180);
+      } else {
+        entity.corridorQueueReleaseAt = 0;
+      }
     }
   }
 
@@ -8097,6 +8137,11 @@ function chooseTarget(entity, currentPeriod) {
       return getSeatPosition('Assembly Hall', entity.seatIndex, entity) || roomCenter('Assembly Hall');
     }
     if (entity.role === 'teacher') return teacherBoardSpot(currentPeriod.room);
+    // Orderly corridor queue: students line up outside classroom doors until
+    // their staggered entry time arrives, then file in one by one to their seats.
+    if (isStudentCharacter(entity) && entity.corridorQueueReleaseAt && performance.now() < entity.corridorQueueReleaseAt) {
+      return corridorQueueSpot(entity, currentPeriod.room);
+    }
     // Students always aim for seats during lessons so classes look orderly.
     return getSeatPosition(currentPeriod.room, entity.seatIndex, entity) || roomCenter(currentPeriod.room);
   }
@@ -9416,12 +9461,17 @@ function updateAI(dt) {
     const doorwayChoke = isNearDoorway(entity) || isNearDoorway(routedTarget, 2.2);
     if (farFromGoal && doorwayChoke) {
       entity.jamSeconds = moved < 0.05 ? (entity.jamSeconds + (dt / 1000)) : Math.max(0, entity.jamSeconds - (dt / 1400));
-      if (entity.jamSeconds > 1.15) resetEntityPathing(entity, entity.target);
+      if (entity.jamSeconds > 0.65) resetEntityPathing(entity, entity.target);
 
       // If a student keeps shuddering in a doorway while trying to leave a room,
       // snap them just outside that room's door so corridor flow does not freeze.
-      if (isStudent && entity.jamSeconds > 2.35 && moved < 0.04) {
+      if (isStudent && entity.jamSeconds > 1.4 && moved < 0.04) {
         teleportEntityOutsideCurrentDoor(entity, entity.target);
+      }
+      // Last resort: if still jammed after teleport attempt, force to destination.
+      if (entity.jamSeconds > 2.5) {
+        teleportEntityToTarget(entity, entity.target, 'door-jam');
+        entity.jamSeconds = 0;
       }
     } else {
       entity.jamSeconds = 0;
@@ -10133,34 +10183,73 @@ function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
   }
 
   if (room.type === 'corridor') {
-    // Corridor tile stripes to suggest worn linoleum with floor-level color coding.
-    fillDitherRect(drawX, drawY, drawW, drawH, style.floorA, style.floorB, 3);
-    ctx.strokeStyle = style.stripe;
-    for (let x = drawX + 8; x < drawX + drawW; x += 16) {
-      ctx.beginPath();
-      ctx.moveTo(x, drawY + 2);
-      ctx.lineTo(x, drawY + drawH - 2);
-      ctx.stroke();
+    // Smooth linoleum tile pattern with grouted grid lines.
+    ctx.fillStyle = style.floorA;
+    ctx.fillRect(drawX, drawY, drawW, drawH);
+    const tileSize = 12;
+    ctx.strokeStyle = style.floorB;
+    ctx.lineWidth = 0.5;
+    for (let x = drawX; x < drawX + drawW; x += tileSize) {
+      ctx.beginPath(); ctx.moveTo(x, drawY); ctx.lineTo(x, drawY + drawH); ctx.stroke();
     }
+    for (let y = drawY; y < drawY + drawH; y += tileSize) {
+      ctx.beginPath(); ctx.moveTo(drawX, y); ctx.lineTo(drawX + drawW, y); ctx.stroke();
+    }
+    ctx.lineWidth = 1;
+    // Subtle center stripe for wayfinding.
+    ctx.fillStyle = style.stripe;
+    ctx.globalAlpha = 0.25;
+    ctx.fillRect(drawX, drawY + Math.floor(drawH * 0.4), drawW, Math.ceil(drawH * 0.2));
+    ctx.globalAlpha = 1;
   } else if (room.type === 'outdoor') {
-    // Grass stipple with slightly brighter specks.
-    fillDitherRect(drawX, drawY, drawW, drawH, style.floorA, style.floorB, 3);
+    // Grass with varied shading and natural-looking tufts.
+    ctx.fillStyle = style.floorA;
+    ctx.fillRect(drawX, drawY, drawW, drawH);
+    // Subtle grass patches for a more natural look.
+    ctx.fillStyle = style.floorB;
+    for (let y = drawY + 1; y < drawY + drawH - 1; y += 6) {
+      for (let x = drawX + 1; x < drawX + drawW - 1; x += 8) {
+        const offX = ((y * 3 + x * 7) % 5) - 2;
+        ctx.fillRect(x + offX, y, 4, 3);
+      }
+    }
+    // Grass blade tufts.
     ctx.fillStyle = style.accentDot;
-    for (let y = drawY + 2; y < drawY + drawH; y += 10) {
-      for (let x = drawX + 2; x < drawX + drawW; x += 14) {
-        ctx.fillRect(x, y, 2, 2);
+    for (let y = drawY + 3; y < drawY + drawH; y += 9) {
+      for (let x = drawX + 3; x < drawX + drawW; x += 11) {
+        const h = 2 + ((x * 7 + y * 3) % 3);
+        ctx.fillRect(x, y - h, 1, h);
+        ctx.fillRect(x + 2, y - h + 1, 1, h - 1);
       }
     }
   } else {
-    // Classroom/hall checker flooring with per-floor tint for orientation.
-    fillDitherRect(drawX, drawY, drawW, drawH, style.floorA, style.floorB, 4);
-    ctx.strokeStyle = style.stripe;
-    for (let y = drawY + 8; y < drawY + drawH; y += 16) {
-      ctx.beginPath();
-      ctx.moveTo(drawX + 2, y);
-      ctx.lineTo(drawX + drawW - 2, y);
-      ctx.stroke();
+    // Polished tile floor with alternating shaded tiles for classrooms/halls.
+    ctx.fillStyle = style.floorA;
+    ctx.fillRect(drawX, drawY, drawW, drawH);
+    const tileW = 14;
+    const tileH = 10;
+    for (let ty = drawY; ty < drawY + drawH; ty += tileH) {
+      const rowOdd = Math.floor((ty - drawY) / tileH) % 2;
+      for (let tx = drawX + (rowOdd ? tileW / 2 : 0); tx < drawX + drawW; tx += tileW) {
+        const tileIdx = Math.floor((tx - drawX) / tileW) + Math.floor((ty - drawY) / tileH);
+        if (tileIdx % 2 === 0) {
+          ctx.fillStyle = style.floorB;
+          ctx.fillRect(tx, ty, Math.min(tileW, drawX + drawW - tx), Math.min(tileH, drawY + drawH - ty));
+        }
+      }
     }
+    // Subtle grout lines.
+    ctx.strokeStyle = style.stripe;
+    ctx.globalAlpha = 0.18;
+    ctx.lineWidth = 0.5;
+    for (let y = drawY + tileH; y < drawY + drawH; y += tileH) {
+      ctx.beginPath(); ctx.moveTo(drawX, y); ctx.lineTo(drawX + drawW, y); ctx.stroke();
+    }
+    for (let x = drawX + tileW; x < drawX + drawW; x += tileW) {
+      ctx.beginPath(); ctx.moveTo(x, drawY); ctx.lineTo(x, drawY + drawH); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 1;
   }
 }
 
@@ -10168,20 +10257,40 @@ function drawRoomTexture(drawX, drawY, drawW, drawH, room) {
 function drawRoomWalls(drawX, drawY, drawW, drawH, room) {
   const style = roomVisualStyle(room);
   const profile = currentPerformanceProfile();
-  ctx.fillStyle = style.wall;
-  ctx.fillRect(drawX - 2, drawY - 2, drawW + 4, 2);
-  ctx.fillRect(drawX - 2, drawY + drawH, drawW + 4, 2);
-  ctx.fillRect(drawX - 2, drawY, 2, drawH);
-  ctx.fillRect(drawX + drawW, drawY, 2, drawH);
 
-  // 8-bit style pixel windows add visual depth to the larger school façades.
+  // Wall thickness with 3D depth illusion.
+  const wallT = 3;
+  // Top wall with highlight edge.
+  ctx.fillStyle = style.wall;
+  ctx.fillRect(drawX - wallT, drawY - wallT, drawW + wallT * 2, wallT);
+  ctx.fillStyle = hexToRgba(style.wall, 0.5);
+  ctx.fillRect(drawX - wallT, drawY - wallT, drawW + wallT * 2, 1);
+  // Bottom wall with shadow.
+  ctx.fillStyle = style.wall;
+  ctx.fillRect(drawX - wallT, drawY + drawH, drawW + wallT * 2, wallT);
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.fillRect(drawX - wallT, drawY + drawH + wallT - 1, drawW + wallT * 2, 1);
+  // Side walls.
+  ctx.fillStyle = style.wall;
+  ctx.fillRect(drawX - wallT, drawY, wallT, drawH);
+  ctx.fillRect(drawX + drawW, drawY, wallT, drawH);
+
+  // 8-bit style pixel windows with frame, glass reflection, and sill.
   if (profile.detailedTextures && room.type !== 'outdoor' && room.type !== 'corridor') {
-    ctx.fillStyle = style.windowA;
-    for (let wx = drawX + 4; wx < drawX + drawW - 6; wx += 14) {
-      ctx.fillRect(wx, drawY + 2, 6, 4);
-      ctx.fillStyle = style.windowB;
-      ctx.fillRect(wx + 1, drawY + 3, 2, 2);
+    for (let wx = drawX + 6; wx < drawX + drawW - 8; wx += 16) {
+      // Window frame.
+      ctx.fillStyle = style.brick;
+      ctx.fillRect(wx - 1, drawY + 1, 8, 6);
+      // Glass panes.
       ctx.fillStyle = style.windowA;
+      ctx.fillRect(wx, drawY + 2, 3, 4);
+      ctx.fillRect(wx + 3, drawY + 2, 3, 4);
+      // Reflection highlight.
+      ctx.fillStyle = style.windowB;
+      ctx.fillRect(wx + 1, drawY + 2, 1, 2);
+      // Sill.
+      ctx.fillStyle = hexToRgba('#ffffff', 0.3);
+      ctx.fillRect(wx - 1, drawY + 6, 8, 1);
     }
   }
 }
@@ -10266,6 +10375,42 @@ function updateSceneFx(dt, now = performance.now()) {
     game.lastBellParticleAt = now;
   }
 
+  // Footstep dust puffs for fast-moving entities on screen.
+  if ((now - (game.lastFootstepParticleAt || 0)) > 90) {
+    for (const entity of game.entities) {
+      if (entity.isSeated) continue;
+      const speed = Math.hypot(entity.vx || 0, entity.vy || 0);
+      if (speed < 3.5) continue;
+      if (!roomIntersectsCamera({ x: entity.x - 1, y: entity.y - 1, w: 2, h: 2 })) continue;
+      pushSceneParticle('dust', entity.x + (game.rng() - 0.5) * 0.6, entity.y + 0.3, {
+        vx: (game.rng() - 0.5) * 0.3,
+        vy: -0.04 - (game.rng() * 0.06),
+        life: 500 + (game.rng() * 400),
+        size: 0.3 + (game.rng() * 0.35),
+        color: '#c8b89a',
+        sway: 0.06,
+      });
+    }
+    game.lastFootstepParticleAt = now;
+  }
+
+  // Outdoor leaf/grass particles when sunny and outdoor areas are visible.
+  const visibleOutdoorRooms = rooms.filter((room) => roomIntersectsCamera(room) && room.type === 'outdoor');
+  if (game.weather === 'sunny' && visibleOutdoorRooms.length && (now - (game.lastOutdoorParticleAt || 0)) > 200) {
+    const outdoorRoom = visibleOutdoorRooms[Math.floor(game.rng() * visibleOutdoorRooms.length)];
+    const leafColors = ['#6abf4b', '#8cd867', '#e8c94a', '#d4a843'];
+    pushSceneParticle('dust', outdoorRoom.x + 1 + (game.rng() * Math.max(2, outdoorRoom.w - 2)), outdoorRoom.y + 1 + (game.rng() * Math.max(2, outdoorRoom.h - 2)), {
+      vx: 0.15 + (game.rng() * 0.25),
+      vy: -0.03 + (game.rng() * 0.06),
+      life: 3200 + (game.rng() * 2400),
+      size: 0.4 + (game.rng() * 0.5),
+      color: leafColors[Math.floor(game.rng() * leafColors.length)],
+      sway: 0.2 + (game.rng() * 0.25),
+      spin: 1 + (game.rng() * 3),
+    });
+    game.lastOutdoorParticleAt = now;
+  }
+
   if (visibleIndoorRooms.length && (now - (game.lastAmbientParticleAt || 0)) > 120) {
     const current = schedule[game.periodIndex];
     const ambientRoom = visibleIndoorRooms[Math.floor(game.rng() * visibleIndoorRooms.length)];
@@ -10309,13 +10454,18 @@ function updateSceneFx(dt, now = performance.now()) {
     particle.life -= dt;
   }
 
-  game.sceneFx = game.sceneFx.filter((particle) => (
-    particle.life > 0
-    && particle.x >= CAMERA.x - 8
-    && particle.x <= CAMERA.x + CAMERA.w + 8
-    && particle.y >= CAMERA.y - 8
-    && particle.y <= CAMERA.y + CAMERA.h + 12
-  ));
+  let writeIdx = 0;
+  for (let i = 0; i < game.sceneFx.length; i++) {
+    const particle = game.sceneFx[i];
+    if (particle.life > 0
+      && particle.x >= CAMERA.x - 8
+      && particle.x <= CAMERA.x + CAMERA.w + 8
+      && particle.y >= CAMERA.y - 8
+      && particle.y <= CAMERA.y + CAMERA.h + 12) {
+      game.sceneFx[writeIdx++] = particle;
+    }
+  }
+  game.sceneFx.length = writeIdx;
 }
 
 function drawSceneLighting(now = performance.now()) {
@@ -10323,28 +10473,35 @@ function drawSceneLighting(now = performance.now()) {
   const sx = canvas.width / CAMERA.w;
   const sy = canvas.height / CAMERA.h;
 
-  ctx.save();
-  if (game.weather === 'sunny') {
-    const sunGlow = ctx.createRadialGradient(canvas.width * 0.82, canvas.height * 0.14, 18, canvas.width * 0.82, canvas.height * 0.14, canvas.width * 0.78);
-    sunGlow.addColorStop(0, 'rgba(255,244,196,0.34)');
-    sunGlow.addColorStop(0.35, 'rgba(255,226,145,0.18)');
-    sunGlow.addColorStop(1, 'rgba(255,220,120,0)');
-    ctx.fillStyle = sunGlow;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-  } else if (game.weather === 'rain') {
-    const rainGlow = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    rainGlow.addColorStop(0, 'rgba(184,212,255,0.12)');
-    rainGlow.addColorStop(1, 'rgba(38,52,84,0.08)');
-    ctx.fillStyle = rainGlow;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-  } else if (game.weather === 'snow') {
-    const snowGlow = ctx.createRadialGradient(canvas.width * 0.5, canvas.height * 0.12, 16, canvas.width * 0.5, canvas.height * 0.12, canvas.width * 0.84);
-    snowGlow.addColorStop(0, 'rgba(248,252,255,0.18)');
-    snowGlow.addColorStop(1, 'rgba(240,248,255,0)');
-    ctx.fillStyle = snowGlow;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const weatherKey = `${game.weather}_${canvas.width}x${canvas.height}`;
+  if (weatherGradientCache.key !== weatherKey) {
+    if (game.weather === 'sunny') {
+      const sunGlow = ctx.createRadialGradient(canvas.width * 0.82, canvas.height * 0.14, 18, canvas.width * 0.82, canvas.height * 0.14, canvas.width * 0.78);
+      sunGlow.addColorStop(0, 'rgba(255,244,196,0.34)');
+      sunGlow.addColorStop(0.35, 'rgba(255,226,145,0.18)');
+      sunGlow.addColorStop(1, 'rgba(255,220,120,0)');
+      weatherGradientCache.gradient = sunGlow;
+    } else if (game.weather === 'rain') {
+      const rainGlow = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      rainGlow.addColorStop(0, 'rgba(184,212,255,0.12)');
+      rainGlow.addColorStop(1, 'rgba(38,52,84,0.08)');
+      weatherGradientCache.gradient = rainGlow;
+    } else if (game.weather === 'snow') {
+      const snowGlow = ctx.createRadialGradient(canvas.width * 0.5, canvas.height * 0.12, 16, canvas.width * 0.5, canvas.height * 0.12, canvas.width * 0.84);
+      snowGlow.addColorStop(0, 'rgba(248,252,255,0.18)');
+      snowGlow.addColorStop(1, 'rgba(240,248,255,0)');
+      weatherGradientCache.gradient = snowGlow;
+    } else {
+      weatherGradientCache.gradient = null;
+    }
+    weatherGradientCache.key = weatherKey;
   }
-  ctx.restore();
+  if (weatherGradientCache.gradient) {
+    ctx.save();
+    ctx.fillStyle = weatherGradientCache.gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+  }
 
   for (const room of rooms) {
     if (!roomIntersectsCamera(room)) continue;
@@ -10363,15 +10520,27 @@ function drawSceneLighting(now = performance.now()) {
     ctx.fillRect(drawX, drawY, drawW, drawH);
 
     if (room.type !== 'outdoor') {
+      // Animated light shafts drift slowly to simulate moving sun/clouds.
+      const shaftDrift = Math.sin(now / 8000) * 4;
       for (let shaftX = drawX + 8; shaftX < drawX + drawW - 10; shaftX += 42) {
         ctx.fillStyle = style.shaft;
         ctx.beginPath();
-        ctx.moveTo(shaftX, drawY + 1);
-        ctx.lineTo(shaftX + 16, drawY + 1);
+        ctx.moveTo(shaftX + shaftDrift, drawY + 1);
+        ctx.lineTo(shaftX + 16 + shaftDrift, drawY + 1);
         ctx.lineTo(shaftX + 5, drawY + drawH);
         ctx.lineTo(shaftX - 9, drawY + drawH);
         ctx.closePath();
         ctx.fill();
+      }
+      // Warm pooled floor glow under windows for cosy classroom feel.
+      if (game.weather === 'sunny') {
+        for (let poolX = drawX + 14; poolX < drawX + drawW - 12; poolX += 42) {
+          const poolGlow = ctx.createRadialGradient(poolX, drawY + drawH - 4, 0, poolX, drawY + drawH - 4, 18);
+          poolGlow.addColorStop(0, 'rgba(255,232,160,0.08)');
+          poolGlow.addColorStop(1, 'rgba(255,232,160,0)');
+          ctx.fillStyle = poolGlow;
+          ctx.fillRect(poolX - 18, drawY + drawH - 22, 36, 22);
+        }
       }
     } else if (game.weather === 'sunny') {
       const grassGlow = ctx.createLinearGradient(drawX, drawY, drawX, drawY + drawH);
@@ -10379,16 +10548,30 @@ function drawSceneLighting(now = performance.now()) {
       grassGlow.addColorStop(1, 'rgba(255,255,255,0)');
       ctx.fillStyle = grassGlow;
       ctx.fillRect(drawX, drawY, drawW, drawH);
+      // Dappled sunlight patches on outdoor areas.
+      for (let dapX = drawX + 10; dapX < drawX + drawW - 8; dapX += 28 + Math.floor(Math.sin(dapX) * 6)) {
+        const dapY = drawY + drawH * 0.4 + Math.sin(dapX * 0.3) * drawH * 0.2;
+        const dapAlpha = 0.04 + 0.03 * Math.sin(now / 3000 + dapX * 0.1);
+        ctx.fillStyle = `rgba(255,248,200,${dapAlpha.toFixed(3)})`;
+        ctx.beginPath();
+        ctx.ellipse(dapX, dapY, 8 + Math.sin(dapX) * 3, 5, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
     ctx.restore();
   }
 
+  const vigKey = `${canvas.width}x${canvas.height}`;
+  if (vignetteGradientCache.key !== vigKey) {
+    const vignette = ctx.createRadialGradient(canvas.width * 0.5, canvas.height * 0.5, canvas.height * 0.2, canvas.width * 0.5, canvas.height * 0.5, canvas.width * 0.72);
+    vignette.addColorStop(0, 'rgba(0,0,0,0)');
+    vignette.addColorStop(0.7, 'rgba(8,12,24,0.05)');
+    vignette.addColorStop(1, 'rgba(6,10,18,0.22)');
+    vignetteGradientCache.gradient = vignette;
+    vignetteGradientCache.key = vigKey;
+  }
   ctx.save();
-  const vignette = ctx.createRadialGradient(canvas.width * 0.5, canvas.height * 0.5, canvas.height * 0.2, canvas.width * 0.5, canvas.height * 0.5, canvas.width * 0.72);
-  vignette.addColorStop(0, 'rgba(0,0,0,0)');
-  vignette.addColorStop(0.7, 'rgba(8,12,24,0.05)');
-  vignette.addColorStop(1, 'rgba(6,10,18,0.22)');
-  ctx.fillStyle = vignette;
+  ctx.fillStyle = vignetteGradientCache.gradient;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.restore();
 }
@@ -10485,7 +10668,13 @@ function updateWeatherFx(dt) {
     particle.x += (game.rng() - 0.45) * drift * dt;
     particle.life -= dt;
   }
-  game.weatherFx = game.weatherFx.filter((particle) => particle.life > 0 && particle.y < WORLD.h + 3);
+  let wIdx = 0;
+  for (let i = 0; i < game.weatherFx.length; i++) {
+    if (game.weatherFx[i].life > 0 && game.weatherFx[i].y < WORLD.h + 3) {
+      game.weatherFx[wIdx++] = game.weatherFx[i];
+    }
+  }
+  game.weatherFx.length = wIdx;
   const maxWeatherFx = Math.max(18, Math.round(90 * profile.weatherSpawnMultiplier));
   if (game.weatherFx.length > maxWeatherFx) {
     game.weatherFx.splice(0, game.weatherFx.length - maxWeatherFx);
@@ -10564,8 +10753,17 @@ function drawWorld() {
 
   // Subtle scanlines maintain retro feel without reducing readability.
   if (profile.scanlines) {
-    ctx.fillStyle = 'rgba(15, 20, 38, 0.12)';
-    for (let y = 0; y < canvas.height; y += 5) ctx.fillRect(0, y, canvas.width, 1);
+    const slKey = `${canvas.width}x${canvas.height}`;
+    if (scanlineCacheKey !== slKey) {
+      scanlineCanvas.width = canvas.width;
+      scanlineCanvas.height = canvas.height;
+      const slCtx = scanlineCanvas.getContext('2d');
+      slCtx.clearRect(0, 0, canvas.width, canvas.height);
+      slCtx.fillStyle = 'rgba(15, 20, 38, 0.12)';
+      for (let y = 0; y < canvas.height; y += 5) slCtx.fillRect(0, y, canvas.width, 1);
+      scanlineCacheKey = slKey;
+    }
+    ctx.drawImage(scanlineCanvas, 0, 0);
   }
 
   // Restore floor separators so every level boundary is visible in the game window.
@@ -10596,37 +10794,62 @@ function drawWorld() {
       if (layout) {
         for (const seat of layout.seats) {
           const seatPos = worldToScreen(seat.x, seat.y);
-          // Desk footprint is larger and alternates subtle trim colors for variety.
           const altDeskShade = (seat.row + seat.col) % 3;
-          ctx.fillStyle = altDeskShade === 0 ? '#8b5e3c' : altDeskShade === 1 ? '#93633f' : '#7f5539';
-          ctx.fillRect(seatPos.sx - 6, seatPos.sy - 6, 12, 5);
+          // Desk top surface with wood grain highlight.
+          const deskBase = altDeskShade === 0 ? '#8b5e3c' : altDeskShade === 1 ? '#93633f' : '#7f5539';
+          ctx.fillStyle = deskBase;
+          ctx.fillRect(seatPos.sx - 6, seatPos.sy - 7, 12, 5);
+          // Top edge highlight.
           ctx.fillStyle = '#d8b68a';
-          ctx.fillRect(seatPos.sx - 5, seatPos.sy - 5, 10, 1);
-          // Desk legs.
+          ctx.fillRect(seatPos.sx - 6, seatPos.sy - 7, 12, 1);
+          // Front edge shadow.
+          ctx.fillStyle = '#5a3b24';
+          ctx.fillRect(seatPos.sx - 6, seatPos.sy - 2, 12, 1);
+          // Desk legs with shadow.
           ctx.fillStyle = '#5f3d2a';
           ctx.fillRect(seatPos.sx - 6, seatPos.sy - 1, 2, 4);
           ctx.fillRect(seatPos.sx + 4, seatPos.sy - 1, 2, 4);
-          // Chair and backrest behind desk.
-          ctx.fillStyle = '#435b7a';
-          ctx.fillRect(seatPos.sx - 4, seatPos.sy + 3, 8, 2);
-          ctx.fillRect(seatPos.sx - 4, seatPos.sy + 1, 2, 2);
-          ctx.fillRect(seatPos.sx + 2, seatPos.sy + 1, 2, 2);
+          ctx.fillStyle = '#4a2e1e';
+          ctx.fillRect(seatPos.sx - 5, seatPos.sy + 2, 1, 1);
+          ctx.fillRect(seatPos.sx + 5, seatPos.sy + 2, 1, 1);
+          // Chair seat with rounded look.
+          ctx.fillStyle = '#4a6a90';
+          ctx.fillRect(seatPos.sx - 4, seatPos.sy + 3, 8, 3);
+          // Chair seat highlight.
+          ctx.fillStyle = '#5d83ab';
+          ctx.fillRect(seatPos.sx - 3, seatPos.sy + 3, 6, 1);
+          // Chair backrest.
+          ctx.fillStyle = '#3a5570';
+          ctx.fillRect(seatPos.sx - 4, seatPos.sy + 6, 2, 2);
+          ctx.fillRect(seatPos.sx + 2, seatPos.sy + 6, 2, 2);
         }
 
         // Teacher furniture is always present so every room can run lessons.
         const teacherDesk = worldToScreen(layout.teacherDesk.x, layout.teacherDesk.y);
         const teacherChair = worldToScreen(layout.teacherSeat.x, layout.teacherSeat.y);
-        // Wider teacher desk stands out visually from pupil desks.
+        // Wider teacher desk with polish and depth.
         ctx.fillStyle = '#7a4a2a';
-        ctx.fillRect(teacherDesk.sx - 8, teacherDesk.sy - 5, 16, 5);
+        ctx.fillRect(teacherDesk.sx - 9, teacherDesk.sy - 6, 18, 6);
+        ctx.fillStyle = '#9c6b45';
+        ctx.fillRect(teacherDesk.sx - 9, teacherDesk.sy - 6, 18, 1);
+        ctx.fillStyle = '#5a3520';
+        ctx.fillRect(teacherDesk.sx - 9, teacherDesk.sy, 18, 1);
+        // Front panel.
+        ctx.fillStyle = '#6b4025';
+        ctx.fillRect(teacherDesk.sx - 9, teacherDesk.sy - 5, 1, 5);
+        ctx.fillRect(teacherDesk.sx + 8, teacherDesk.sy - 5, 1, 5);
+        // Desk legs.
         ctx.fillStyle = '#4f2f1c';
-        ctx.fillRect(teacherDesk.sx - 8, teacherDesk.sy, 2, 3);
-        ctx.fillRect(teacherDesk.sx + 6, teacherDesk.sy, 2, 3);
-        // Teacher chair tucked behind desk for seated lesson state.
+        ctx.fillRect(teacherDesk.sx - 9, teacherDesk.sy + 1, 2, 3);
+        ctx.fillRect(teacherDesk.sx + 7, teacherDesk.sy + 1, 2, 3);
+        // Teacher chair with armrests.
         ctx.fillStyle = '#2f4868';
-        ctx.fillRect(teacherChair.sx - 4, teacherChair.sy + 1, 8, 2);
-        ctx.fillRect(teacherChair.sx - 4, teacherChair.sy - 1, 2, 2);
-        ctx.fillRect(teacherChair.sx + 2, teacherChair.sy - 1, 2, 2);
+        ctx.fillRect(teacherChair.sx - 5, teacherChair.sy + 1, 10, 3);
+        ctx.fillStyle = '#3d5e85';
+        ctx.fillRect(teacherChair.sx - 4, teacherChair.sy + 1, 8, 1);
+        ctx.fillStyle = '#243d5a';
+        ctx.fillRect(teacherChair.sx - 5, teacherChair.sy - 1, 2, 2);
+        ctx.fillRect(teacherChair.sx + 3, teacherChair.sy - 1, 2, 2);
       }
     }
 
@@ -10730,9 +10953,26 @@ function drawWorld() {
         ? (stair.toY > stair.fromY ? '↓' : '↑')
         : (stair.fromY > stair.toY ? '↓' : '↑');
       const directionalStairIcon = towardArrow === '↑' ? '🪜↑' : '🪜↓';
-      fillDitherRect(pos.sx - 19, pos.sy - 11, 38, 22, '#f4d06f', '#ffbf3c', 4);
+      // Stair platform with 3D step effect.
+      ctx.fillStyle = '#e8c860';
+      ctx.fillRect(pos.sx - 19, pos.sy - 11, 38, 22);
+      // Step treads.
+      for (let i = 0; i < 5; i++) {
+        const stepY = pos.sy - 9 + i * 4;
+        ctx.fillStyle = i % 2 === 0 ? '#d4b44e' : '#c8a63c';
+        ctx.fillRect(pos.sx - 17, stepY, 34, 3);
+        // Step edge highlight.
+        ctx.fillStyle = '#f0da78';
+        ctx.fillRect(pos.sx - 17, stepY, 34, 1);
+      }
+      // Handrails.
       ctx.fillStyle = '#8f5a00';
-      for (let i = 0; i < 6; i += 1) ctx.fillRect(pos.sx - 16 + i * 6, pos.sy - 9, 2, 18);
+      ctx.fillRect(pos.sx - 19, pos.sy - 11, 2, 22);
+      ctx.fillRect(pos.sx + 17, pos.sy - 11, 2, 22);
+      ctx.fillStyle = '#b87400';
+      ctx.fillRect(pos.sx - 19, pos.sy - 11, 2, 1);
+      ctx.fillRect(pos.sx + 17, pos.sy - 11, 2, 1);
+      // Label.
       ctx.fillStyle = PALETTE.ink;
       ctx.font = 'bold 7px monospace';
       ctx.fillText('STAIR', pos.sx - 17, pos.sy - 13);
@@ -10835,13 +11075,36 @@ function drawWorld() {
   for (const locker of lockers) {
     if (!pointIntersectsCamera(locker, 1.6)) continue;
     const p = worldToScreen(locker.x, locker.y);
-    fillDitherRect(p.sx - 6, p.sy - 8, 12, 16, '#8b99a8', '#6f7f8e', 2);
-    ctx.fillStyle = '#d8e1e8';
-    ctx.fillRect(p.sx - 4, p.sy - 4, 8, 8);
-    ctx.fillStyle = '#2a3540';
+    const lx = p.sx - 7, ly = p.sy - 10, lw = 14, lh = 20;
+    // Locker body with metallic gradient effect.
+    ctx.fillStyle = '#5c6d7e';
+    ctx.fillRect(lx, ly, lw, lh);
+    ctx.fillStyle = '#6e8194';
+    ctx.fillRect(lx + 1, ly + 1, lw - 2, lh - 2);
+    // Door panel inset.
+    ctx.fillStyle = '#7a93a8';
+    ctx.fillRect(lx + 2, ly + 2, lw - 4, lh - 4);
+    // Top highlight edge for 3D depth.
+    ctx.fillStyle = '#9eb5c8';
+    ctx.fillRect(lx + 2, ly + 2, lw - 4, 1);
+    // Bottom shadow edge.
+    ctx.fillStyle = '#4a5a6a';
+    ctx.fillRect(lx + 2, ly + lh - 3, lw - 4, 1);
+    // Vent slits at top.
+    ctx.fillStyle = '#4e6070';
+    for (let v = 0; v < 3; v++) {
+      ctx.fillRect(lx + 4, ly + 4 + v * 2, lw - 8, 1);
+    }
+    // Handle/latch on right side.
+    ctx.fillStyle = '#c0cdd8';
+    ctx.fillRect(lx + lw - 5, ly + Math.floor(lh / 2) - 2, 2, 4);
+    ctx.fillStyle = '#dce6ee';
+    ctx.fillRect(lx + lw - 5, ly + Math.floor(lh / 2) - 2, 2, 1);
+    // Locker number label.
+    ctx.fillStyle = '#1e2a35';
     ctx.font = 'bold 6px monospace';
     const lockerNum = lockerNumberFromId(locker.id);
-    ctx.fillText(String(lockerNum), p.sx - 4, p.sy + 2);
+    ctx.fillText(String(lockerNum), lx + 2, ly + lh - 5);
   }
 
   for (const fountain of waterFountains) {
@@ -11109,6 +11372,17 @@ function drawEntities() {
       const shoeColor = appearance.shoeColor || '#000000';
       const shoeW = Math.max(2, Math.min(legW, appearance.shoeWidth || Math.max(2, legW - 1)));
       const shoeH = 2;
+
+      // Subtle player highlight glow so the controllable character stands out.
+      if (entity === player) {
+        const glowPulse = 0.18 + 0.08 * Math.sin(now / 400);
+        ctx.save();
+        ctx.fillStyle = `rgba(79, 134, 247, ${glowPulse.toFixed(3)})`;
+        ctx.beginPath();
+        ctx.ellipse(px, py - 8, 12, 14, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
 
       // Subtle ground shadow helps crowded scenes read depth and motion more clearly.
       const shadowAlpha = seated ? 0.16 : Math.min(0.24, 0.12 + (moveMagnitude * 0.03));
@@ -11804,15 +12078,23 @@ function drawMiniMap() {
 }
 
 
+let lastClockMinuteAngle = -1;
+let lastClockHourAngle = -1;
 function drawAnalogClockWidget() {
   if (!clockHandHourEl || !clockHandMinuteEl) return;
   const totalMinutes = game.timeMinutes % (24 * 60);
   const minute = totalMinutes % 60;
   const hour = (Math.floor(totalMinutes / 60) % 12) + (minute / 60);
-  const minuteAngle = minute * 6;
-  const hourAngle = hour * 30;
-  clockHandMinuteEl.style.transform = `rotate(${minuteAngle}deg)`;
-  clockHandHourEl.style.transform = `rotate(${hourAngle}deg)`;
+  const minuteAngle = Math.round(minute * 6);
+  const hourAngle = Math.round(hour * 30);
+  if (minuteAngle !== lastClockMinuteAngle) {
+    clockHandMinuteEl.style.transform = `rotate(${minuteAngle}deg)`;
+    lastClockMinuteAngle = minuteAngle;
+  }
+  if (hourAngle !== lastClockHourAngle) {
+    clockHandHourEl.style.transform = `rotate(${hourAngle}deg)`;
+    lastClockHourAngle = hourAngle;
+  }
 }
 
 function updateBellRingSfx(now = performance.now()) {
@@ -11827,9 +12109,26 @@ function drawStatusOverlay() {
   if (!game.paused) return;
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const pulse = 0.85 + 0.15 * Math.sin(performance.now() / 600);
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(pulse, pulse);
+  ctx.font = 'bold 34px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(79, 134, 247, 0.6)';
+  ctx.shadowBlur = 18;
   ctx.fillStyle = '#fff';
-  ctx.font = '30px sans-serif';
-  ctx.fillText('PAUSED', canvas.width / 2 - 65, canvas.height / 2);
+  ctx.fillText('PAUSED', 0, 0);
+  ctx.shadowBlur = 0;
+  ctx.font = '14px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillText('Press P to resume', 0, 28);
+  ctx.restore();
 }
 
 
@@ -13084,7 +13383,7 @@ function runFrame(now, dt) {
 }
 
 function loop(now) {
-  const dt = Math.min(32, now - last);
+  const dt = Math.max(1, Math.min(32, now - last));
   last = now;
   runFrame(now, dt);
 
@@ -13214,6 +13513,7 @@ function bindTouchControls() {
     const press = (event) => {
       event.preventDefault();
       button.classList.add('is-pressed');
+      if (navigator.vibrate) navigator.vibrate(12);
       activePointerId = event.pointerId ?? 'touch';
       if (key) {
         if (hold) {
