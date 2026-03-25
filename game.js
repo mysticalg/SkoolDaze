@@ -6312,6 +6312,20 @@ function updateAutoPilot(dt) {
   player.vx = (dx / len) * speed;
   player.vy = (dy / len) * speed;
 
+  // Player uses doors just like NPCs — snap through when near a doorway
+  // to prevent getting stuck on door edges during auto movement.
+  const playerDoor = nearestDoor(player, 1.8);
+  if (playerDoor) {
+    const playerCurrentRoom = entityRoom(player);
+    const destRoom = roomAtPosition(destination);
+    const playerInDoorRoom = playerCurrentRoom === playerDoor.room;
+    const shouldExit = playerInDoorRoom && (!destRoom || destRoom.name !== playerDoor.room);
+    const shouldEnter = !playerInDoorRoom && destRoom?.name === playerDoor.room;
+    if (shouldExit || shouldEnter) {
+      useDoor(player, playerDoor);
+    }
+  }
+
   // Auto mode uses doors/stairs when Eric reaches them.
   if (len < 1.1) {
     const desiredFloor = roomAtPosition(destination)?.floor || entityFloor(player);
@@ -6352,6 +6366,20 @@ function updatePlayerTapNavigation(dt, speed) {
 
   player.vx = (dx / len) * speed;
   player.vy = (dy / len) * speed;
+
+  // Player uses doors when navigating by tap — snap through doorways
+  // to prevent getting stuck on door edges.
+  const tapDoor = nearestDoor(player, 1.8);
+  if (tapDoor) {
+    const tapPlayerRoom = entityRoom(player);
+    const tapDestRoom = roomAtPosition(destination);
+    const inDoorRoom = tapPlayerRoom === tapDoor.room;
+    const wantExit = inDoorRoom && (!tapDestRoom || tapDestRoom.name !== tapDoor.room);
+    const wantEnter = !inDoorRoom && tapDestRoom?.name === tapDoor.room;
+    if (wantExit || wantEnter) {
+      useDoor(player, tapDoor);
+    }
+  }
 
   if (len < 1.1) {
     const desiredFloor = roomAtPosition(destination)?.floor || entityFloor(player);
