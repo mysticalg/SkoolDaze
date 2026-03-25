@@ -8750,7 +8750,7 @@ function resolveCollectableTarget(itemTarget) {
   return game.collectables.find((item) => (
     item
     && item.name === itemTarget.itemName
-    && Math.hypot((item.x || 0) - itemTarget.x, (item.y || 0) - itemTarget.y) < 1
+    && Math.hypot((item.x || 0) - itemTarget.x, (item.y || 0) - itemTarget.y) < 2.0
   )) || null;
 }
 
@@ -8760,7 +8760,7 @@ function playerPickUpCollectable(itemTarget) {
     announce('📦 That item is gone already.');
     return false;
   }
-  if (distance(player, item) >= 1.3) {
+  if (distance(player, item) >= 1.8) {
     announce('📦 Move closer to pick that up.');
     return false;
   }
@@ -14501,7 +14501,8 @@ function worldInteractionOptionsFor(target) {
         icon: target.heading.split(' ')[0] || '📦',
         label: 'Pick up item',
         pendingLabel: 'pick up the item',
-        isInRange: (candidate) => distance(player, candidate.source || candidate) < 1.3,
+        isInRange: (candidate) => distance(player, candidate.source || candidate) < 1.8,
+        destination: (candidate) => ({ x: (candidate.source || candidate).x, y: (candidate.source || candidate).y }),
         execute: (candidate) => playerPickUpCollectable(candidate),
       }];
     case 'classroom-prop': {
