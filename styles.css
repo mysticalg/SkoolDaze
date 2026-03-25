@@ -948,6 +948,7 @@ dialog h3 {
 }
 
 /* Trade Panel */
+.trade-panel[hidden] { display: none; }
 .trade-panel {
   position: absolute;
   left: 50%;
@@ -1066,6 +1067,7 @@ dialog h3 {
   align-items: center;
   padding: 0.6rem;
 }
+.school-map-overlay[hidden] { display: none; }
 .school-map-overlay header {
   display: flex; align-items: center; justify-content: space-between;
   width: 100%; max-width: 920px; margin-bottom: 0.4rem;
