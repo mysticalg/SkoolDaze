@@ -167,6 +167,8 @@
       <span id="mission">🛡️ Mission: Discover all shield letters</span>
     </div>
     <div class="top-controls">
+      <button id="inventoryBtn" class="control" title="Open your inventory">🎒</button>
+      <button id="mapBtn" class="control" title="Toggle school map">🗺️</button>
       <button id="pauseBtn" class="control" title="Pause or resume game">⏯️</button>
       <button id="fullscreenBtn" class="control" title="Toggle fullscreen view" aria-label="Toggle fullscreen">⛶</button>
       <button id="helpBtn" class="control" title="Open controls and tips" aria-label="Help">❔</button>
@@ -247,6 +249,69 @@
             <div id="pocketSlots" class="inventory-slots"></div>
           </div>
         </div>
+      </section>
+
+      <!-- Player Inventory Panel (standalone) -->
+      <section id="inventoryPanel" class="locker-panel" hidden aria-live="polite">
+        <header>
+          <h3 id="inventoryPanelTitle">🎒 Your Inventory</h3>
+          <button id="closeInventoryPanel" type="button" title="Close inventory">✖</button>
+        </header>
+        <div class="inventory-money" id="inventoryMoney">💷 Money: £0</div>
+        <div class="locker-inventory-section">
+          <h4>Pockets</h4>
+          <div id="inventoryPanelSlots" class="inventory-slots"></div>
+        </div>
+      </section>
+
+      <!-- Trade Panel -->
+      <section id="tradePanel" class="trade-panel" hidden aria-live="polite">
+        <header>
+          <h3 id="tradePanelTitle">🤝 Trade</h3>
+          <button id="closeTradePanel" type="button" title="Cancel trade">✖</button>
+        </header>
+        <div class="trade-container">
+          <div class="trade-side">
+            <h4 id="tradeNpcName">NPC</h4>
+            <div id="tradeNpcSlots" class="inventory-slots"></div>
+          </div>
+          <div class="trade-offer-area">
+            <div class="trade-offer-section">
+              <h4>Their Offer</h4>
+              <div id="tradeNpcOfferSlot" class="trade-offer-slot empty-slot"></div>
+            </div>
+            <div class="trade-arrow">⇅</div>
+            <div class="trade-offer-section">
+              <h4>Your Offer</h4>
+              <div id="tradePlayerOfferSlot" class="trade-offer-slot empty-slot"></div>
+              <div class="trade-money-offer">
+                <label>+ £<input id="tradeMoneyInput" type="number" min="0" value="0" /></label>
+              </div>
+            </div>
+            <button id="tradeSubmitBtn" class="trade-submit-btn" disabled>Make Offer</button>
+            <p id="tradeFeedback" class="trade-feedback"></p>
+          </div>
+          <div class="trade-side">
+            <h4>Your Items</h4>
+            <div id="tradePlayerSlots" class="inventory-slots"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Fullscreen School Map -->
+      <section id="schoolMapOverlay" class="school-map-overlay" hidden>
+        <header>
+          <h3>🗺️ School Map</h3>
+          <button id="closeSchoolMap" type="button" title="Close map">✖</button>
+        </header>
+        <canvas id="schoolMapCanvas" width="900" height="520"></canvas>
+        <p class="map-legend">
+          <span class="legend-dot" style="background:#4a9eff"></span> Classroom
+          <span class="legend-dot" style="background:#5ac85a"></span> Hall
+          <span class="legend-dot" style="background:#c8a85a"></span> Corridor
+          <span class="legend-dot" style="background:#7a5ac8"></span> Outdoor
+          <span class="legend-dot" style="background:#ff5a5a"></span> You
+        </p>
       </section>
     </section>
 

@@ -44,6 +44,27 @@ const lockerStorageTitleEl = document.getElementById('lockerStorageTitle');
 const lockerSlotsEl = document.getElementById('lockerSlots');
 const pocketSlotsEl = document.getElementById('pocketSlots');
 const closeLockerPanelBtn = document.getElementById('closeLockerPanel');
+const inventoryPanelEl = document.getElementById('inventoryPanel');
+const inventoryPanelTitleEl = document.getElementById('inventoryPanelTitle');
+const inventoryPanelSlotsEl = document.getElementById('inventoryPanelSlots');
+const inventoryMoneyEl = document.getElementById('inventoryMoney');
+const closeInventoryPanelBtn = document.getElementById('closeInventoryPanel');
+const inventoryBtn = document.getElementById('inventoryBtn');
+const mapBtn = document.getElementById('mapBtn');
+const schoolMapOverlayEl = document.getElementById('schoolMapOverlay');
+const schoolMapCanvasEl = document.getElementById('schoolMapCanvas');
+const closeSchoolMapBtn = document.getElementById('closeSchoolMap');
+const tradePanelEl = document.getElementById('tradePanel');
+const tradePanelTitleEl = document.getElementById('tradePanelTitle');
+const tradeNpcNameEl = document.getElementById('tradeNpcName');
+const tradeNpcSlotsEl = document.getElementById('tradeNpcSlots');
+const tradePlayerSlotsEl = document.getElementById('tradePlayerSlots');
+const tradeNpcOfferSlotEl = document.getElementById('tradeNpcOfferSlot');
+const tradePlayerOfferSlotEl = document.getElementById('tradePlayerOfferSlot');
+const tradeMoneyInputEl = document.getElementById('tradeMoneyInput');
+const tradeSubmitBtnEl = document.getElementById('tradeSubmitBtn');
+const tradeFeedbackEl = document.getElementById('tradeFeedback');
+const closeTradePanelBtn = document.getElementById('closeTradePanel');
 const classQuestionPanelEl = document.getElementById('classQuestionPanel');
 const classQuestionTitleEl = document.getElementById('classQuestionTitle');
 const classQuestionCountdownEl = document.getElementById('classQuestionCountdown');
@@ -8825,6 +8846,368 @@ function transferItem(fromSource, fromIndex) {
   renderLockerInventory();
 }
 
+// ── Standalone Inventory Panel ──────────────────────────────────────────
+
+function openInventoryPanel() {
+  if (!inventoryPanelEl) return;
+  closeInteractionPanel();
+  closeLockerInventoryPanel();
+  closeTradePanel();
+  inventoryPanelEl.hidden = false;
+  renderInventoryPanel();
+}
+
+function closeInventoryPanel() {
+  if (inventoryPanelEl) inventoryPanelEl.hidden = true;
+}
+
+function renderInventoryPanel() {
+  if (!inventoryPanelSlotsEl) return;
+  const items = player.inventory || [];
+  inventoryMoneyEl.textContent = `💷 Money: £${player.money || 0}`;
+  const slotCount = Math.max(10, items.length + 2);
+  inventoryPanelSlotsEl.innerHTML = '';
+  for (let i = 0; i < slotCount; i++) {
+    const item = items[i] || null;
+    const slot = document.createElement('div');
+    slot.className = 'inventory-slot' + (item ? ' occupied' : ' empty-slot');
+    if (item) {
+      slot.textContent = getItemIcon(item);
+      slot.title = item;
+      const label = document.createElement('span');
+      label.className = 'slot-label';
+      label.textContent = item.length > 12 ? item.slice(0, 11) + '…' : item;
+      slot.appendChild(label);
+    }
+    inventoryPanelSlotsEl.appendChild(slot);
+  }
+}
+
+// ── School Map ──────────────────────────────────────────────────────────
+
+let schoolMapOpen = false;
+
+function toggleSchoolMap() {
+  if (schoolMapOpen) {
+    closeSchoolMap();
+  } else {
+    openSchoolMap();
+  }
+}
+
+function openSchoolMap() {
+  if (!schoolMapOverlayEl) return;
+  closeInteractionPanel();
+  closeLockerInventoryPanel();
+  closeInventoryPanel();
+  closeTradePanel();
+  schoolMapOverlayEl.hidden = false;
+  schoolMapOpen = true;
+  drawSchoolMap();
+}
+
+function closeSchoolMap() {
+  if (schoolMapOverlayEl) schoolMapOverlayEl.hidden = true;
+  schoolMapOpen = false;
+}
+
+function drawSchoolMap() {
+  const mapCanvas = schoolMapCanvasEl;
+  if (!mapCanvas) return;
+  const mctx = mapCanvas.getContext('2d');
+  const cw = mapCanvas.width;
+  const ch = mapCanvas.height;
+  mctx.clearRect(0, 0, cw, ch);
+
+  // Calculate scale to fit all rooms
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const r of rooms) {
+    minX = Math.min(minX, r.x);
+    minY = Math.min(minY, r.y);
+    maxX = Math.max(maxX, r.x + r.w);
+    maxY = Math.max(maxY, r.y + r.h);
+  }
+  const worldW = maxX - minX;
+  const worldH = maxY - minY;
+  const pad = 30;
+  const sx = (cw - pad * 2) / worldW;
+  const sy = (ch - pad * 2) / worldH;
+  const scale = Math.min(sx, sy);
+  const ox = pad + ((cw - pad * 2) - worldW * scale) / 2;
+  const oy = pad + ((ch - pad * 2) - worldH * scale) / 2;
+
+  const typeColors = {
+    classroom: '#1a3a5a', corridor: '#3a3520', hall: '#1a3a2a', outdoor: '#2a1a3a',
+  };
+  const typeBorders = {
+    classroom: '#4a9eff', corridor: '#c8a85a', hall: '#5ac85a', outdoor: '#7a5ac8',
+  };
+
+  // Draw rooms
+  for (const r of rooms) {
+    const rx = ox + (r.x - minX) * scale;
+    const ry = oy + (r.y - minY) * scale;
+    const rw = r.w * scale;
+    const rh = r.h * scale;
+
+    mctx.fillStyle = typeColors[r.type] || '#1a1a2a';
+    mctx.fillRect(rx, ry, rw, rh);
+    mctx.strokeStyle = typeBorders[r.type] || '#4a4a6a';
+    mctx.lineWidth = 1.5;
+    mctx.strokeRect(rx, ry, rw, rh);
+
+    // Room label
+    mctx.fillStyle = '#c0d8f0';
+    const fontSize = Math.max(7, Math.min(11, rw / r.name.length * 1.4));
+    mctx.font = `${fontSize}px monospace`;
+    mctx.textAlign = 'center';
+    mctx.textBaseline = 'middle';
+    mctx.fillText(r.name, rx + rw / 2, ry + rh / 2);
+  }
+
+  // Draw stairs
+  mctx.fillStyle = '#ffd16680';
+  for (const s of stairs) {
+    const sx1 = ox + (s.x - minX) * scale;
+    const sy1 = oy + (s.fromY - minY) * scale;
+    const sy2 = oy + (s.toY - minY) * scale;
+    mctx.fillRect(sx1 - 3, sy1 - 1, 6, 2);
+    mctx.fillRect(sx1 - 3, sy2 - 1, 6, 2);
+    mctx.strokeStyle = '#ffd16640';
+    mctx.lineWidth = 0.8;
+    mctx.beginPath();
+    mctx.moveTo(sx1, sy1);
+    mctx.lineTo(sx1, sy2);
+    mctx.setLineDash([3, 3]);
+    mctx.stroke();
+    mctx.setLineDash([]);
+  }
+
+  // Draw player position
+  if (player) {
+    const px = ox + (player.x - minX) * scale;
+    const py = oy + (player.y - minY) * scale;
+    mctx.fillStyle = '#ff5a5a';
+    mctx.beginPath();
+    mctx.arc(px, py, 5, 0, Math.PI * 2);
+    mctx.fill();
+    mctx.strokeStyle = '#ffffff';
+    mctx.lineWidth = 1.5;
+    mctx.stroke();
+    mctx.fillStyle = '#ffffff';
+    mctx.font = '9px monospace';
+    mctx.textAlign = 'center';
+    mctx.fillText('YOU', px, py - 9);
+  }
+
+  // Draw NPC dots
+  if (game.entities) {
+    for (const e of game.entities) {
+      if (e === player || !e.x || !e.y) continue;
+      const ex = ox + (e.x - minX) * scale;
+      const ey = oy + (e.y - minY) * scale;
+      const dotColor = e.role === 'teacher' ? '#ffa500' : e.role === 'bully' ? '#ff6666' : '#6699cc';
+      mctx.fillStyle = dotColor;
+      mctx.beginPath();
+      mctx.arc(ex, ey, 2, 0, Math.PI * 2);
+      mctx.fill();
+    }
+  }
+}
+
+// ── Trade Panel ─────────────────────────────────────────────────────────
+
+let tradeTarget = null;
+let tradePlayerOffer = null;  // item name from player inventory
+let tradeNpcOffer = null;     // item name from NPC inventory
+
+function openTradePanel(target) {
+  if (!tradePanelEl || !target) return;
+  tradeTarget = target;
+  tradePlayerOffer = null;
+  tradeNpcOffer = null;
+  closeInteractionPanel();
+  closeLockerInventoryPanel();
+  closeInventoryPanel();
+  tradePanelTitleEl.textContent = `🤝 Trade with ${target.name}`;
+  tradeNpcNameEl.textContent = `${target.name}'s Items`;
+  if (tradeMoneyInputEl) tradeMoneyInputEl.value = 0;
+  if (tradeFeedbackEl) tradeFeedbackEl.textContent = '';
+  tradePanelEl.hidden = false;
+  renderTradePanel();
+}
+
+function closeTradePanel() {
+  if (tradePanelEl) tradePanelEl.hidden = true;
+  tradeTarget = null;
+  tradePlayerOffer = null;
+  tradeNpcOffer = null;
+}
+
+function renderTradePanel() {
+  if (!tradeTarget || !tradeNpcSlotsEl || !tradePlayerSlotsEl) return;
+  const npcItems = tradeTarget.inventory || [];
+  const playerItems = player.inventory || [];
+
+  // NPC items
+  tradeNpcSlotsEl.innerHTML = '';
+  const npcSlotCount = Math.max(6, npcItems.length);
+  for (let i = 0; i < npcSlotCount; i++) {
+    const item = npcItems[i] || null;
+    const slot = document.createElement('div');
+    const isSelected = item && item === tradeNpcOffer;
+    slot.className = 'inventory-slot' + (item ? ' occupied' : ' empty-slot') + (isSelected ? ' selected-for-trade' : '');
+    if (item) {
+      slot.textContent = getItemIcon(item);
+      slot.title = item;
+      const label = document.createElement('span');
+      label.className = 'slot-label';
+      label.textContent = item.length > 12 ? item.slice(0, 11) + '…' : item;
+      slot.appendChild(label);
+      slot.addEventListener('click', () => {
+        tradeNpcOffer = (tradeNpcOffer === item) ? null : item;
+        renderTradePanel();
+        updateTradeButton();
+      });
+    }
+    tradeNpcSlotsEl.appendChild(slot);
+  }
+
+  // Player items
+  tradePlayerSlotsEl.innerHTML = '';
+  const playerSlotCount = Math.max(6, playerItems.length);
+  for (let i = 0; i < playerSlotCount; i++) {
+    const item = playerItems[i] || null;
+    const slot = document.createElement('div');
+    const isSelected = item && item === tradePlayerOffer;
+    slot.className = 'inventory-slot' + (item ? ' occupied' : ' empty-slot') + (isSelected ? ' selected-for-trade' : '');
+    if (item) {
+      slot.textContent = getItemIcon(item);
+      slot.title = item;
+      const label = document.createElement('span');
+      label.className = 'slot-label';
+      label.textContent = item.length > 12 ? item.slice(0, 11) + '…' : item;
+      slot.appendChild(label);
+      slot.addEventListener('click', () => {
+        tradePlayerOffer = (tradePlayerOffer === item) ? null : item;
+        renderTradePanel();
+        updateTradeButton();
+      });
+    }
+    tradePlayerSlotsEl.appendChild(slot);
+  }
+
+  // Offer slots
+  if (tradeNpcOfferSlotEl) {
+    tradeNpcOfferSlotEl.className = 'trade-offer-slot' + (tradeNpcOffer ? ' has-item' : ' empty-slot');
+    tradeNpcOfferSlotEl.textContent = tradeNpcOffer ? getItemIcon(tradeNpcOffer) : '';
+    tradeNpcOfferSlotEl.title = tradeNpcOffer || 'Click an NPC item';
+  }
+  if (tradePlayerOfferSlotEl) {
+    tradePlayerOfferSlotEl.className = 'trade-offer-slot' + (tradePlayerOffer ? ' has-item' : ' empty-slot');
+    tradePlayerOfferSlotEl.textContent = tradePlayerOffer ? getItemIcon(tradePlayerOffer) : '';
+    tradePlayerOfferSlotEl.title = tradePlayerOffer || 'Click one of your items';
+  }
+  updateTradeButton();
+}
+
+function updateTradeButton() {
+  if (!tradeSubmitBtnEl) return;
+  const canTrade = tradeNpcOffer && (tradePlayerOffer || (tradeMoneyInputEl && Number(tradeMoneyInputEl.value) > 0));
+  tradeSubmitBtnEl.disabled = !canTrade;
+}
+
+function executeVisualTrade() {
+  if (!tradeTarget) return;
+  const target = tradeTarget;
+  const npcItem = tradeNpcOffer;
+  const playerItem = tradePlayerOffer;
+  const moneyOffer = tradeMoneyInputEl ? Math.max(0, Math.floor(Number(tradeMoneyInputEl.value) || 0)) : 0;
+
+  if (!npcItem) {
+    if (tradeFeedbackEl) tradeFeedbackEl.textContent = 'Select an item you want from them.';
+    return;
+  }
+  if (!playerItem && moneyOffer <= 0) {
+    if (tradeFeedbackEl) tradeFeedbackEl.textContent = 'Offer an item or money.';
+    return;
+  }
+  if (moneyOffer > (player.money || 0)) {
+    if (tradeFeedbackEl) tradeFeedbackEl.textContent = `You only have £${player.money || 0}!`;
+    return;
+  }
+
+  // Calculate acceptance
+  const npcValue = itemTradeValue(npcItem);
+  const playerValue = (playerItem ? itemTradeValue(playerItem) : 0) + moneyOffer * 1.5;
+  const relation = target.relationships?.Eric || 0;
+  const friendliness = target.traits?.friendly || 50;
+  const playerBarter = player.traits?.barter || 50;
+  const fairness = playerValue / Math.max(1, npcValue);
+
+  // Fair deal = playerValue >= npcValue (ratio >= 1.0)
+  let acceptance = 0.15 + (relation / 150) + (friendliness / 250) + (playerBarter / 200);
+  // Strong bonus if fair or generous deal
+  if (fairness >= 1.0) acceptance += 0.4;
+  else if (fairness >= 0.7) acceptance += 0.15;
+  else acceptance -= 0.2;
+
+  acceptance = Math.max(0.05, Math.min(0.95, acceptance));
+  const accepted = game.rng() < acceptance;
+
+  if (!accepted) {
+    // Show player bubble
+    player.speech = { text: `How about my ${playerItem || `£${moneyOffer}`} for your ${npcItem}?`, kind: 'speech', until: performance.now() + 2800 };
+    setTimeout(() => {
+      target.speech = { text: 'No deal, that\'s not worth it.', kind: 'speech', until: performance.now() + 2500 };
+    }, 1500);
+    if (tradeFeedbackEl) tradeFeedbackEl.textContent = `${target.name} refused! Try a better offer.`;
+    adjustEricRelationship(target, -1.5, 'trade-refused');
+    announce(`🙅 ${target.name} refused the trade offer.`, { source: target, range: 8, force: true });
+    return;
+  }
+
+  // Execute the trade
+  const npcIdx = target.inventory.indexOf(npcItem);
+  if (npcIdx < 0) {
+    if (tradeFeedbackEl) tradeFeedbackEl.textContent = 'Item no longer available!';
+    return;
+  }
+  target.inventory.splice(npcIdx, 1);
+  player.inventory.push(npcItem);
+
+  if (playerItem) {
+    const playerIdx = player.inventory.indexOf(playerItem);
+    if (playerIdx >= 0) {
+      player.inventory.splice(playerIdx, 1);
+      target.inventory.push(playerItem);
+    }
+  }
+
+  if (moneyOffer > 0) {
+    player.money -= moneyOffer;
+    target.money = (target.money || 0) + moneyOffer;
+  }
+
+  // Show speech bubbles
+  player.speech = { text: `Here, ${playerItem || `£${moneyOffer}`} for your ${npcItem}?`, kind: 'speech', until: performance.now() + 2800 };
+  setTimeout(() => {
+    target.speech = { text: 'Deal! Pleasure doing business.', kind: 'speech', until: performance.now() + 2500 };
+  }, 1500);
+
+  adjustEricRelationship(target, 3, 'trade-success');
+  const priceStr = moneyOffer > 0 ? ` (+£${moneyOffer})` : '';
+  announce(`🤝 Traded ${playerItem || 'money'} for ${npcItem}${priceStr} with ${target.name}.`, { source: target, range: 8, force: true });
+  if (tradeFeedbackEl) tradeFeedbackEl.textContent = '✅ Trade accepted!';
+  playSfx('interact');
+
+  // Reset offers and re-render
+  tradePlayerOffer = null;
+  tradeNpcOffer = null;
+  if (tradeMoneyInputEl) tradeMoneyInputEl.value = 0;
+  renderTradePanel();
+}
+
 function playerUseUrinal(urinal) {
   if (!urinal) return false;
   if (distance(player, urinal) >= 1.7 || entityRoom(player) !== 'Toilets') {
@@ -14480,10 +14863,8 @@ function openInteractionPanelFor(target) {
         game.lastInteractionAtByTarget[target.name][option.id] = game.timeMinutes;
         game.dayStats.npcsTalkedTo.add(target.name);
 
-        if (option.action === 'trade') {
-          attemptInteractionTrade(target, { haggle: false });
-        } else if (option.action === 'haggle') {
-          attemptInteractionTrade(target, { haggle: true });
+        if (option.action === 'trade' || option.action === 'haggle') {
+          openTradePanel(target);
         } else if (option.action === 'card-battle') {
           playTrumpCardBattle(target);
         } else if (option.action === 'mug-cards') {
@@ -15165,6 +15546,8 @@ function renderFrame(now) {
   drawMiniMap();
   drawStatusOverlay();
   updateDayTransitionOverlay(now);
+  // Redraw school map overlay if open so player dot tracks movement.
+  if (schoolMapOpen) drawSchoolMap();
 }
 
 function runFrame(now, dt) {
@@ -15467,6 +15850,45 @@ if (closeLockerPanelBtn) {
     closeLockerInventoryPanel();
   };
 }
+if (closeInventoryPanelBtn) {
+  closeInventoryPanelBtn.onclick = () => {
+    closeInventoryPanel();
+  };
+}
+if (inventoryBtn) {
+  inventoryBtn.onclick = () => {
+    if (inventoryPanelEl && !inventoryPanelEl.hidden) {
+      closeInventoryPanel();
+    } else {
+      openInventoryPanel();
+    }
+  };
+}
+if (mapBtn) {
+  mapBtn.onclick = () => {
+    toggleSchoolMap();
+  };
+}
+if (closeSchoolMapBtn) {
+  closeSchoolMapBtn.onclick = () => {
+    closeSchoolMap();
+  };
+}
+if (closeTradePanelBtn) {
+  closeTradePanelBtn.onclick = () => {
+    closeTradePanel();
+  };
+}
+if (tradeSubmitBtnEl) {
+  tradeSubmitBtnEl.onclick = () => {
+    executeVisualTrade();
+  };
+}
+if (tradeMoneyInputEl) {
+  tradeMoneyInputEl.oninput = () => {
+    updateTradeButton();
+  };
+}
 
 function closeTransientMenus() {
   // Keep floating overlays in sync with browser chrome focus changes so
@@ -15474,6 +15896,9 @@ function closeTransientMenus() {
   releaseAllTouchControls();
   closeInteractionPanel();
   closeLockerInventoryPanel();
+  closeInventoryPanel();
+  closeTradePanel();
+  closeSchoolMap();
   if (entityTooltipEl) entityTooltipEl.hidden = true;
 
   if (todoDialog?.open) todoDialog.close();

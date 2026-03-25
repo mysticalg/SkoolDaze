@@ -931,6 +931,181 @@ dialog h3 {
 .inventory-slot.dragging {
   opacity: 0.4;
 }
+.inventory-slot.selected-for-trade {
+  border-color: #5aff5a;
+  background: rgba(90, 255, 90, 0.15);
+  box-shadow: 0 0 6px rgba(90, 255, 90, 0.3);
+}
+
+/* Inventory money display */
+.inventory-money {
+  font-size: 0.75rem;
+  color: #ffd166;
+  padding: 0.3rem 0.45rem;
+  background: rgba(255, 209, 102, 0.08);
+  border-radius: 6px;
+  margin-bottom: 0.4rem;
+}
+
+/* Trade Panel */
+.trade-panel {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 580px;
+  max-width: calc(100% - 1.2rem);
+  max-height: calc(100% - 1.6rem);
+  overflow: auto;
+  border: 2px solid #6ea7d9;
+  border-radius: 12px;
+  background: rgba(7, 14, 25, 0.97);
+  padding: 0.6rem;
+  z-index: 52;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+.trade-panel header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.4rem; margin-bottom: 0.4rem;
+}
+.trade-panel h3 { margin: 0; font-size: 0.85rem; color: #d8efff; }
+.trade-panel h4 { margin: 0 0 0.3rem; font-size: 0.7rem; color: #8ab8d8; text-transform: uppercase; }
+.trade-panel button { background: #102640; color: #d8efff; border: 1px solid #38648a; border-radius: 7px; cursor: pointer; }
+.trade-container {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+.trade-side {
+  flex: 1;
+  background: rgba(16, 38, 64, 0.6);
+  border: 1px solid #2a4a6a;
+  border-radius: 8px;
+  padding: 0.45rem;
+  min-width: 0;
+}
+.trade-side .inventory-slots {
+  grid-template-columns: repeat(3, 1fr);
+}
+.trade-offer-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 90px;
+}
+.trade-offer-section {
+  text-align: center;
+}
+.trade-offer-slot {
+  width: 52px;
+  height: 52px;
+  border: 2px dashed #38648a;
+  border-radius: 8px;
+  background: rgba(10, 22, 38, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  margin: 0 auto;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.trade-offer-slot.has-item {
+  border-style: solid;
+  border-color: #5aff5a;
+}
+.trade-arrow { color: #6ea7d9; font-size: 1.1rem; }
+.trade-money-offer {
+  margin-top: 0.25rem;
+  font-size: 0.7rem;
+  color: #ffd166;
+}
+.trade-money-offer input {
+  width: 40px;
+  background: #0a1626;
+  color: #ffd166;
+  border: 1px solid #38648a;
+  border-radius: 4px;
+  padding: 0.15rem 0.25rem;
+  font-size: 0.7rem;
+  text-align: center;
+}
+.trade-submit-btn {
+  width: 100%;
+  padding: 0.4rem;
+  font-size: 0.75rem;
+  background: #1a4a2a !important;
+  border-color: #3a8a4a !important;
+  color: #aaffaa !important;
+  font-weight: bold;
+}
+.trade-submit-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.trade-submit-btn:not(:disabled):hover {
+  background: #2a6a3a !important;
+}
+.trade-feedback {
+  font-size: 0.65rem;
+  color: #8ab8d8;
+  text-align: center;
+  margin: 0.2rem 0 0;
+  min-height: 1em;
+}
+
+/* Fullscreen School Map */
+.school-map-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 55;
+  background: rgba(5, 10, 18, 0.97);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.6rem;
+}
+.school-map-overlay header {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; max-width: 920px; margin-bottom: 0.4rem;
+}
+.school-map-overlay h3 { margin: 0; font-size: 0.9rem; color: #d8efff; }
+.school-map-overlay button { background: #102640; color: #d8efff; border: 1px solid #38648a; border-radius: 7px; cursor: pointer; padding: 0.25rem 0.5rem; }
+#schoolMapCanvas {
+  max-width: 100%;
+  max-height: calc(100% - 4rem);
+  border: 1px solid #2a4a6a;
+  border-radius: 8px;
+  background: #060a11;
+}
+.map-legend {
+  display: flex;
+  gap: 0.8rem;
+  font-size: 0.65rem;
+  color: #8ab8d8;
+  margin: 0.4rem 0 0;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-right: 2px;
+}
+
+body.compact-mobile .trade-panel {
+  width: 100%;
+}
+body.compact-mobile .trade-container {
+  flex-direction: column;
+}
+body.compact-mobile .trade-side .inventory-slots {
+  grid-template-columns: repeat(4, 1fr);
+}
 
 body.compact-mobile .locker-panel {
   width: 290px;
