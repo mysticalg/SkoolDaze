@@ -814,6 +814,131 @@ dialog h3 {
   font-size: 0.72rem;
 }
 
+/* Locker Inventory Panel */
+.locker-panel {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 340px;
+  max-width: calc(100% - 1.2rem);
+  max-height: calc(100% - 1.6rem);
+  overflow: auto;
+  border: 2px solid #6ea7d9;
+  border-radius: 12px;
+  background: rgba(7, 14, 25, 0.97);
+  padding: 0.6rem;
+  z-index: 50;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+.locker-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+.locker-panel h3 {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #d8efff;
+}
+.locker-panel h4 {
+  margin: 0 0 0.3rem;
+  font-size: 0.7rem;
+  color: #8ab8d8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.locker-panel button {
+  background: #102640;
+  color: #d8efff;
+  border: 1px solid #38648a;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.locker-inventory-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.locker-inventory-section {
+  background: rgba(16, 38, 64, 0.6);
+  border: 1px solid #2a4a6a;
+  border-radius: 8px;
+  padding: 0.45rem;
+}
+.locker-inventory-divider {
+  text-align: center;
+  font-size: 0.65rem;
+  color: #6ea7d9;
+  padding: 0.15rem 0;
+}
+.inventory-slots {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+}
+.inventory-slot {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid #2a4a6a;
+  border-radius: 6px;
+  background: rgba(10, 22, 38, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.3rem;
+  cursor: default;
+  transition: border-color 0.15s, background 0.15s;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.inventory-slot.occupied {
+  cursor: pointer;
+  border-color: #38648a;
+}
+.inventory-slot.occupied:hover {
+  border-color: #8cc8ff;
+  background: rgba(30, 60, 100, 0.7);
+}
+.inventory-slot.occupied:active {
+  background: rgba(50, 90, 140, 0.7);
+}
+.inventory-slot .slot-label {
+  position: absolute;
+  bottom: 1px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 0.42rem;
+  color: #8ab8d8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 2px;
+  line-height: 1.1;
+}
+.inventory-slot.empty-slot {
+  border-style: dashed;
+  border-color: #1e3450;
+}
+.inventory-slot.drag-over {
+  border-color: #ffd166;
+  background: rgba(255, 209, 102, 0.15);
+}
+.inventory-slot.dragging {
+  opacity: 0.4;
+}
+
+body.compact-mobile .locker-panel {
+  width: 290px;
+}
+body.compact-mobile .inventory-slots {
+  grid-template-columns: repeat(4, 1fr);
+}
+
 body.compact-mobile {
   overflow: hidden;
 }

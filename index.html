@@ -229,6 +229,25 @@
         <div id="interactionOptions" class="interaction-options"></div>
         <p id="interactionHint">💡 Click a nearby student to talk, joke, ask for help, or stir drama.</p>
       </section>
+
+      <!-- Locker Inventory Panel -->
+      <section id="lockerPanel" class="locker-panel" hidden aria-live="polite">
+        <header>
+          <h3 id="lockerPanelTitle">Locker</h3>
+          <button id="closeLockerPanel" type="button" title="Close locker">✖</button>
+        </header>
+        <div class="locker-inventory-container">
+          <div class="locker-inventory-section">
+            <h4 id="lockerStorageTitle">Locker Storage</h4>
+            <div id="lockerSlots" class="inventory-slots"></div>
+          </div>
+          <div class="locker-inventory-divider">⇅ Click items to transfer</div>
+          <div class="locker-inventory-section">
+            <h4>Your Pockets</h4>
+            <div id="pocketSlots" class="inventory-slots"></div>
+          </div>
+        </div>
+      </section>
     </section>
 
     <aside class="panel">

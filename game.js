@@ -38,6 +38,12 @@ const interactionMetaEl = document.getElementById('interactionMeta');
 const interactionOptionsEl = document.getElementById('interactionOptions');
 const interactionHintEl = document.getElementById('interactionHint');
 const closeInteractionPanelBtn = document.getElementById('closeInteractionPanel');
+const lockerPanelEl = document.getElementById('lockerPanel');
+const lockerPanelTitleEl = document.getElementById('lockerPanelTitle');
+const lockerStorageTitleEl = document.getElementById('lockerStorageTitle');
+const lockerSlotsEl = document.getElementById('lockerSlots');
+const pocketSlotsEl = document.getElementById('pocketSlots');
+const closeLockerPanelBtn = document.getElementById('closeLockerPanel');
 const classQuestionPanelEl = document.getElementById('classQuestionPanel');
 const classQuestionTitleEl = document.getElementById('classQuestionTitle');
 const classQuestionCountdownEl = document.getElementById('classQuestionCountdown');
@@ -8635,9 +8641,42 @@ function playerUseShower(shower) {
   return true;
 }
 
+// Item icon mapping for inventory display.
+const ITEM_ICONS = {
+  'chewing gum': '🍬', 'packed lunch': '🥪', 'textbook': '📘', 'sunglasses': '🕶️',
+  'cap': '🧢', 'conkers': '🌰', 'apple': '🍎', 'walkman stereo': '📻',
+  'cassette tape': '📼', 'letter': '✉️', 'toy robot': '🤖', 'paper airplane': '✈️',
+  'trading cards': '🃏', 'video game cart': '🎮', 'video game disk': '💿',
+  'basic mobile phone': '📱', 'charger': '🔌',
+  'whoopee cushion': '💨', 'stink bomb': '💣', 'fake spider': '🕷️',
+  'itching powder': '🧂', 'invisible ink pen': '🖊️', 'joy buzzer': '⚡',
+  'fake sick note': '📝', 'chalk bomb': '💥',
+  'golden prefect badge': '🏅', 'signed football card': '⚽', 'limited mixtape': '📼',
+  'science fair ribbon': '🎗', 'comic first issue': '📕', 'silver whistle': '📯',
+  'vintage keyring': '🗝', 'neon yo-yo': '🪀', 'secret map scrap': '🗺',
+  'rare sticker pack': '✨', 'chess medal': '♟', 'arcade token': '🪙',
+};
+
+function getItemIcon(itemName) {
+  if (!itemName) return '📦';
+  if (ITEM_ICONS[itemName]) return ITEM_ICONS[itemName];
+  // Check if it's a locker key
+  if (itemName.startsWith('key ')) return '🔑';
+  // Check collectable catalog
+  const collectable = COLLECTABLE_CATALOG.find((c) => c.name === itemName);
+  if (collectable) return collectable.icon;
+  // Check prank items
+  const prank = PRANK_ITEMS.find((p) => p.name === itemName);
+  if (prank) return prank.icon;
+  return '📦';
+}
+
+// Locker inventory panel state.
+let openLockerRef = null;
+
 function playerUseLocker(locker) {
   if (!locker) return false;
-  if (distance(player, locker) >= 1.3) {
+  if (distance(player, locker) >= 1.8) {
     announce('🗄️ Move closer to the locker first.');
     return false;
   }
@@ -8646,15 +8685,144 @@ function playerUseLocker(locker) {
     announce(`🔒 Locker ${lockerNumber} is locked. Need ${lockerKeyLabel(locker)}.`);
     return false;
   }
-  const moved = stashOverflowToLocker(player, INVENTORY_SOFT_CAP);
-  if (moved > 0) {
-    playSfx('interact');
-    announce(`🗄️ ${player.name} stashed ${moved} item${moved === 1 ? '' : 's'} in Locker ${lockerNumber}.`);
-  } else {
-    const lockerSize = (locker.storage || []).length;
-    announce(`🗄️ Locker ${lockerNumber} open. Stored items: ${lockerSize}.`);
-  }
+  locker.storage = locker.storage || [];
+  openLockerInventoryPanel(locker);
+  playSfx('interact');
   return true;
+}
+
+function openLockerInventoryPanel(locker) {
+  if (!lockerPanelEl) return;
+  openLockerRef = locker;
+  const lockerNumber = lockerNumberFromId(locker.id);
+  lockerPanelTitleEl.textContent = `🗄️ Locker ${lockerNumber}`;
+  lockerStorageTitleEl.textContent = `Locker ${lockerNumber} (${locker.assignedTo || 'unassigned'})`;
+  closeInteractionPanel();
+  lockerPanelEl.hidden = false;
+  renderLockerInventory();
+}
+
+function closeLockerInventoryPanel() {
+  if (!lockerPanelEl) return;
+  lockerPanelEl.hidden = true;
+  openLockerRef = null;
+}
+
+function renderLockerInventory() {
+  if (!openLockerRef || !lockerSlotsEl || !pocketSlotsEl) return;
+  const locker = openLockerRef;
+  const lockerItems = locker.storage || [];
+  const pocketItems = player.inventory || [];
+  const lockerKeyName = lockerKeyLabel(locker);
+
+  // Render locker storage slots (minimum 10 visible slots)
+  const lockerSlotCount = Math.max(10, lockerItems.length + 2);
+  lockerSlotsEl.innerHTML = '';
+  for (let i = 0; i < lockerSlotCount; i++) {
+    const item = lockerItems[i] || null;
+    const slot = createInventorySlot(item, 'locker', i);
+    lockerSlotsEl.appendChild(slot);
+  }
+
+  // Render pocket inventory slots (minimum 10 visible slots)
+  const pocketSlotCount = Math.max(10, pocketItems.length + 2);
+  pocketSlotsEl.innerHTML = '';
+  for (let i = 0; i < pocketSlotCount; i++) {
+    const item = pocketItems[i] || null;
+    const isKey = item === lockerKeyName;
+    const slot = createInventorySlot(item, 'pocket', i, isKey);
+    pocketSlotsEl.appendChild(slot);
+  }
+}
+
+function createInventorySlot(itemName, source, index, isProtected = false) {
+  const slot = document.createElement('div');
+  slot.className = 'inventory-slot' + (itemName ? ' occupied' : ' empty-slot');
+  slot.draggable = Boolean(itemName && !isProtected);
+
+  if (itemName) {
+    const icon = getItemIcon(itemName);
+    slot.textContent = icon;
+    const label = document.createElement('span');
+    label.className = 'slot-label';
+    // Truncate long names for the label
+    const shortName = itemName.length > 12 ? itemName.slice(0, 11) + '…' : itemName;
+    label.textContent = shortName;
+    slot.appendChild(label);
+    slot.title = itemName + (isProtected ? ' (key - cannot transfer)' : '');
+
+    if (isProtected) {
+      slot.style.borderColor = '#ffd166';
+      slot.style.cursor = 'not-allowed';
+      slot.draggable = false;
+    }
+
+    // Click to transfer
+    if (!isProtected) {
+      slot.addEventListener('click', () => {
+        transferItem(source, index);
+      });
+    }
+
+    // Drag start
+    slot.addEventListener('dragstart', (e) => {
+      if (isProtected) { e.preventDefault(); return; }
+      e.dataTransfer.setData('text/plain', JSON.stringify({ source, index }));
+      e.dataTransfer.effectAllowed = 'move';
+      slot.classList.add('dragging');
+    });
+    slot.addEventListener('dragend', () => {
+      slot.classList.remove('dragging');
+    });
+  }
+
+  // Drop target
+  slot.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    slot.classList.add('drag-over');
+  });
+  slot.addEventListener('dragleave', () => {
+    slot.classList.remove('drag-over');
+  });
+  slot.addEventListener('drop', (e) => {
+    e.preventDefault();
+    slot.classList.remove('drag-over');
+    try {
+      const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+      const targetSource = source;
+      // If dropping on same source, just re-render (no-op)
+      if (data.source === targetSource) { renderLockerInventory(); return; }
+      transferItem(data.source, data.index);
+    } catch (_) { /* ignore */ }
+  });
+
+  return slot;
+}
+
+function transferItem(fromSource, fromIndex) {
+  if (!openLockerRef) return;
+  const locker = openLockerRef;
+  const lockerKeyName = lockerKeyLabel(locker);
+
+  if (fromSource === 'pocket') {
+    const item = player.inventory[fromIndex];
+    if (!item) return;
+    if (item === lockerKeyName) {
+      announce('🔑 You can\'t store the key inside the locker!');
+      return;
+    }
+    player.inventory.splice(fromIndex, 1);
+    locker.storage.push(item);
+    playSfx('interact');
+  } else if (fromSource === 'locker') {
+    const item = locker.storage[fromIndex];
+    if (!item) return;
+    locker.storage.splice(fromIndex, 1);
+    player.inventory.push(item);
+    playSfx('interact');
+  }
+  renderLockerInventory();
 }
 
 function playerUseUrinal(urinal) {
@@ -14413,7 +14581,8 @@ function worldInteractionOptionsFor(target) {
         icon: '🗄️',
         label: 'Open locker',
         pendingLabel: 'open the locker',
-        isInRange: (candidate) => distance(player, candidate.source || candidate) < 1.3,
+        isInRange: (candidate) => distance(player, candidate.source || candidate) < 1.8,
+        destination: (candidate) => ({ x: (candidate.source || candidate).x, y: (candidate.source || candidate).y }),
         execute: (candidate) => playerUseLocker(candidate.source || candidate),
       }];
     case 'fountain':
@@ -14916,6 +15085,11 @@ function updateFrame(now, dt) {
     constrain(player);
     recoverPlayerIfWallStuck(dt);
 
+    // Auto-close locker panel if player walks away.
+    if (openLockerRef && distance(player, openLockerRef) >= 3.0) {
+      closeLockerInventoryPanel();
+    }
+
     // Update animation time for all entities so movement reads like retro sprites.
     for (const entity of game.entities) {
       if (!hasArrivedForCurrentPeriod(entity)) continue;
@@ -15288,12 +15462,18 @@ canvas.addEventListener('click', (event) => {
 closeInteractionPanelBtn.onclick = () => {
   closeInteractionPanel();
 };
+if (closeLockerPanelBtn) {
+  closeLockerPanelBtn.onclick = () => {
+    closeLockerInventoryPanel();
+  };
+}
 
 function closeTransientMenus() {
   // Keep floating overlays in sync with browser chrome focus changes so
   // auxiliary menus never linger after their parent bar/dialog is dismissed.
   releaseAllTouchControls();
   closeInteractionPanel();
+  closeLockerInventoryPanel();
   if (entityTooltipEl) entityTooltipEl.hidden = true;
 
   if (todoDialog?.open) todoDialog.close();
