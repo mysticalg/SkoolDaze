@@ -1,6 +1,6 @@
 # Bellbound Academy
 
-[Play Now](https://mysticalg.github.io/skoolDaze/)
+[Play Now](https://mysticalg.github.io/SkoolDaze/)
 
 Bellbound Academy is an original school-life sim with a full bell-driven day, social AI, classroom antics, and mobile-friendly controls.
 
