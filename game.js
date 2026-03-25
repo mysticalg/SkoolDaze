@@ -121,7 +121,7 @@ const touchControlHeldKeys = new Set();
 // Camera view keeps the same aspect ratio as the canvas while following Eric.
 const CAMERA = { w: 72, h: 40, x: 0, y: 0 };
 const CAMERA_BASE = { w: CAMERA.w, h: CAMERA.h };
-const CAMERA_ZOOM_LIMITS = { min: 0.85, max: 2.35 };
+const CAMERA_ZOOM_LIMITS = { min: 0.45, max: 2.35 };
 const CANVAS_NATIVE_SIZE = { w: canvas.width || 1280, h: canvas.height || 700 };
 const PERFORMANCE_PRESETS = {
   high: {
@@ -3091,6 +3091,13 @@ const game = {
   // --- Show and tell ---
   showAndTellActive: false,
   showAndTellItem: null,
+
+  // --- Truancy system ---
+  truancyTimer: 0,           // seconds player has been absent from class
+  truancyWarned: false,      // whether the initial warning was shown
+  truancyChaseActive: false, // headmaster is actively hunting player
+  truancyChaseSpeed: 1.0,    // headmaster speed multiplier (increases over time)
+  truancyHudVisible: false,  // whether the truancy countdown HUD is showing
 };
 
 // Restore last-used AI provider settings (including saved remote auth token) on load.
@@ -5136,8 +5143,22 @@ function updateTouchCameraHud() {
 
 function setPlayerTapTarget(destination) {
   if (!destination) return false;
-  const fallbackRoom = roomAtPosition(destination);
-  const safeTarget = nearestWalkablePoint(destination, [fallbackRoom ? roomCenter(fallbackRoom.name) : null]) || destination;
+  const destRoom = roomAtPosition(destination);
+  const playerRoom = roomAtPosition(player);
+
+  // When clicking from inside a classroom to outside (e.g. corridor),
+  // use the destination room center and door points as candidates so the
+  // walkable point resolves in the target area, not inside current room walls.
+  const candidates = [];
+  if (destRoom) candidates.push(roomCenter(destRoom.name));
+  if (playerRoom && destRoom && playerRoom.name !== destRoom.name) {
+    const exitDoor = roomDoors.find((d) => d.room === playerRoom.name);
+    if (exitDoor) candidates.push({ x: exitDoor.x, y: exitDoor.exteriorY });
+    const entryDoor = roomDoors.find((d) => d.room === destRoom.name);
+    if (entryDoor) candidates.push({ x: entryDoor.x, y: entryDoor.interiorY });
+  }
+
+  const safeTarget = nearestWalkablePoint(destination, candidates) || destination;
   if (!safeTarget) return false;
   game.playerTapTarget = { x: safeTarget.x, y: safeTarget.y };
   game.idleMs = 0;
@@ -6322,6 +6343,130 @@ function updateBladder(dt) {
   }
 
   updateBladderHud();
+}
+
+// ---------------------------------------------------------------------------
+// Truancy system — headmaster hunts player when skipping class
+// ---------------------------------------------------------------------------
+const TRUANCY_GRACE_SECONDS = 30;       // seconds before headmaster starts chasing
+const TRUANCY_CHASE_SPEED_BASE = 1.15;  // initial chase speed multiplier
+const TRUANCY_CHASE_SPEED_MAX = 2.8;    // maximum chase speed multiplier
+const TRUANCY_CHASE_ACCEL = 0.012;      // speed increase per second of truancy
+const TRUANCY_CATCH_DISTANCE = 1.6;     // distance at which headmaster catches player
+
+function updateTruancy(dt) {
+  const current = schedule[game.periodIndex];
+  if (!current) return;
+  const supervised = isSupervisedPeriod(current) || isRegistrationPeriod(current) || isAssemblyPeriod(current);
+  const playerInCorrectRoom = entityRoom(player) === current.room;
+  const graceWindow = game.periodElapsed < 4;
+  const inDetention = game.headmasterDetentionUntil > 0;
+  const dtSec = dt / 1000;
+
+  // Reset truancy if player is in class, it's break time, or in detention
+  if (!supervised || playerInCorrectRoom || graceWindow || inDetention || game.detentionMiniGame) {
+    if (game.truancyTimer > 0 || game.truancyChaseActive) {
+      game.truancyTimer = 0;
+      game.truancyWarned = false;
+      game.truancyChaseActive = false;
+      game.truancyChaseSpeed = 1.0;
+      if (game.truancyHudVisible) {
+        game.truancyHudVisible = false;
+        updateTruancyHud();
+      }
+    }
+    return;
+  }
+
+  // Accumulate truancy time
+  game.truancyTimer += dtSec;
+
+  // Show warning at various stages
+  if (!game.truancyWarned && game.truancyTimer >= 5) {
+    game.truancyWarned = true;
+    game.truancyHudVisible = true;
+    announce(`⚠️ ${player.name} is not in ${current.room}! Get to class before the headmaster notices!`, { force: true });
+    updateTruancyHud();
+  }
+
+  // Update HUD countdown
+  if (game.truancyHudVisible) updateTruancyHud();
+
+  // Start chase after grace period
+  if (game.truancyTimer >= TRUANCY_GRACE_SECONDS && !game.truancyChaseActive) {
+    game.truancyChaseActive = true;
+    game.truancyChaseSpeed = TRUANCY_CHASE_SPEED_BASE;
+    announce(`🚨 Mr Wacker: "Where is ${player.name}?! I will find that truant!" The headmaster is searching for you!`, { force: true });
+  }
+
+  // Chase logic
+  if (game.truancyChaseActive) {
+    // Speed increases the longer player is truant
+    game.truancyChaseSpeed = Math.min(
+      TRUANCY_CHASE_SPEED_MAX,
+      game.truancyChaseSpeed + TRUANCY_CHASE_ACCEL * dtSec
+    );
+
+    const headmaster = game.entities.find((e) => e.name === 'Mr Wacker');
+    if (headmaster) {
+      // Direct headmaster toward player
+      const dx = player.x - headmaster.x;
+      const dy = player.y - headmaster.y;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist < TRUANCY_CATCH_DISTANCE) {
+        // Caught!
+        game.truancyChaseActive = false;
+        game.truancyTimer = 0;
+        game.truancyWarned = false;
+        game.truancyHudVisible = false;
+        game.truancyChaseSpeed = 1.0;
+        updateTruancyHud();
+        const extraLines = Math.min(120, 30 + Math.floor(game.truancyTimer));
+        sendPlayerToHeadmaster('truancy — skipping class', extraLines);
+        announce(`🎓 Mr Wacker: "Thought you could skip class, did you? To my office, NOW!"`, { force: true });
+        return;
+      }
+
+      // Move headmaster toward player at chase speed
+      if (dist > 0.5) {
+        const chaseSpeed = 3.5 * game.truancyChaseSpeed;
+        const moveX = (dx / dist) * chaseSpeed * dtSec;
+        const moveY = (dy / dist) * chaseSpeed * dtSec;
+        // Route through waypoints for cross-room/floor navigation
+        const waypoint = routeWaypoint(headmaster, player);
+        const wdx = waypoint.x - headmaster.x;
+        const wdy = waypoint.y - headmaster.y;
+        const wlen = Math.hypot(wdx, wdy) || 1;
+        const finalMoveX = (wdx / wlen) * chaseSpeed * dtSec;
+        const finalMoveY = (wdy / wlen) * chaseSpeed * dtSec;
+        moveEntityWithCollision(headmaster, finalMoveX, finalMoveY);
+        headmaster.facing = wdx >= 0 ? 1 : -1;
+        // Headmaster uses stairs if needed
+        const desiredFloor = roomAtPosition(player)?.floor || entityFloor(headmaster);
+        tryUseStairs(headmaster, desiredFloor);
+      }
+    }
+  }
+}
+
+function updateTruancyHud() {
+  const el = document.getElementById('truancyHud');
+  if (!el) return;
+  if (!game.truancyHudVisible) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  const remaining = Math.max(0, Math.ceil(TRUANCY_GRACE_SECONDS - game.truancyTimer));
+  if (game.truancyChaseActive) {
+    const speedPct = Math.round(game.truancyChaseSpeed * 100);
+    el.textContent = `🚨 TRUANT! Headmaster hunting you! Speed: ${speedPct}%`;
+    el.style.color = '#ff4444';
+  } else {
+    el.textContent = `⚠️ Truant! Headmaster alert in ${remaining}s`;
+    el.style.color = remaining <= 10 ? '#ff8800' : '#ffcc00';
+  }
 }
 
 function distance(a, b) {
@@ -13840,6 +13985,140 @@ function calculateStudentInteractionDelta(target, option) {
 }
 
 
+// ---------------------------------------------------------------------------
+// Varied NPC interaction responses — replaces generic "Fair play" lines
+// ---------------------------------------------------------------------------
+const NPC_POSITIVE_RESPONSES = [
+  "Fair play, {name}.",
+  "Cheers, {name}! That means a lot.",
+  "You're alright, {name}.",
+  "Ha, nice one! Respect.",
+  "That's actually proper sound of you.",
+  "Legend. Genuinely.",
+  "We should hang out more, {name}.",
+  "You've gone up in my books.",
+  "Didn't expect that from you. Nice.",
+  "Top marks for that one!",
+  "That's class, {name}.",
+  "You just made my day, mate.",
+  "Sound! I owe you one.",
+  "Now we're talking! Brilliant.",
+  "That's the spirit, {name}!",
+  "I'm impressed, not gonna lie.",
+  "See, this is why people rate you.",
+  "Big respect for that.",
+  "You're proper good people, {name}.",
+  "Can't argue with that. Well played.",
+];
+const NPC_NEGATIVE_RESPONSES = [
+  "Not cool, {name}.",
+  "Seriously? That's low, {name}.",
+  "Watch it, {name}. I'm not having that.",
+  "You think that's funny? It's not.",
+  "Wow. Way to ruin my day.",
+  "I thought you were better than that.",
+  "Do that again and see what happens.",
+  "That's bang out of order.",
+  "You're making enemies here, {name}.",
+  "Don't talk to me like that.",
+  "Right, we're done chatting.",
+  "I'll remember that, {name}.",
+  "Wind your neck in, {name}.",
+  "What's your problem today?",
+  "Get lost, {name}. Seriously.",
+  "You've just made my list.",
+  "Not the sharpest move, was it?",
+  "Keep that up and nobody will talk to you.",
+  "That was well out of line.",
+  "Think before you open your mouth next time.",
+];
+const NPC_NEUTRAL_RESPONSES = [
+  "Hmm... maybe.",
+  "Yeah, suppose so.",
+  "If you say so, {name}.",
+  "Whatever you reckon.",
+  "Right... okay then.",
+  "Not bad, not great. Just... fine.",
+  "I've heard worse, I guess.",
+  "Meh. Could go either way.",
+  "Sure, why not.",
+  "I'll think about it.",
+  "You're a weird one, {name}.",
+  "That's... one way to put it.",
+  "Can't say I'm bothered either way.",
+  "Alright, fair enough.",
+  "Noted. Moving on.",
+  "Bit random but okay.",
+  "I mean, I've got no strong feelings.",
+  "That's the bell-ringer of mediocrity.",
+  "Not the worst thing I've heard today.",
+  "Eh, it is what it is.",
+];
+const NPC_ROLE_RESPONSES = {
+  bully: {
+    positive: ["Don't get used to it, but... yeah, cheers.", "Even I gotta admit, that was alright.", "You're tougher than you look, {name}."],
+    negative: ["You want a scrap? Keep going.", "I'll thump you next break.", "Big mistake, little fish."],
+    neutral: ["Whatever. I've got bigger problems.", "Don't push your luck.", "Hmph."],
+  },
+  swot: {
+    positive: ["That's a very astute observation!", "I appreciate someone with intellectual curiosity.", "Excellent point! You should study more."],
+    negative: ["That's rather uncivilised of you.", "I'm telling a teacher about this.", "How disappointing. I expected better."],
+    neutral: ["Interesting hypothesis, I suppose.", "I'll file that under 'miscellaneous'.", "Duly noted."],
+  },
+  hero: {
+    positive: ["Now that's what I'm talking about!", "Solid move! High five!", "You're on fire today, {name}!"],
+    negative: ["Come on, {name}. Be better than that.", "That's not the play here, mate.", "Disappointing. Really."],
+    neutral: ["Yeah, fair enough.", "I'll roll with it.", "Not your best, not your worst."],
+  },
+  weird: {
+    positive: ["The cosmic vibrations approve!", "My third eye saw this coming.", "You get it! Most people don't."],
+    negative: ["The spirits are displeased.", "Bad karma, {name}. Very bad karma.", "I sense dark energy from that comment."],
+    neutral: ["The universe shrugs.", "Interesting... the tea leaves said something similar.", "That's what the squirrels told me yesterday."],
+  },
+  teacher: {
+    positive: ["Very good, {name}. Keep it up.", "That's the attitude I like to see.", "Well done. Now back to your desk."],
+    negative: ["That will cost you lines, {name}.", "I beg your pardon?!", "One more word and it's the headmaster's office."],
+    neutral: ["Yes, yes. Run along now.", "Noted. Now pay attention.", "Hmm. We'll see about that."],
+  },
+  janitor: {
+    positive: ["Cheers, kid. Not many students bother.", "You're alright, you are.", "Nice to see some manners round here."],
+    negative: ["Oi! Show some respect.", "I clean up enough messes without your attitude.", "Don't make me report you."],
+    neutral: ["Yeah, whatever you say.", "I've got floors to mop.", "Right then."],
+  },
+  nurse: {
+    positive: ["How thoughtful! Take care of yourself too.", "That's very kind, dear.", "You're a good egg, {name}."],
+    negative: ["That's not very nice at all!", "Do you need to lie down? Your manners seem ill.", "I'll be having a word with your teacher."],
+    neutral: ["Everything alright? You look fine to me.", "Come back if you feel unwell.", "Okay then, off you go."],
+  },
+  dinnerLady: {
+    positive: ["Bless you, love!", "What a polite young thing!", "You deserve an extra portion for that."],
+    negative: ["Cheeky! No seconds for you.", "I'll tell your head of year about that.", "Manners cost nothing, young one."],
+    neutral: ["Right, what'll it be then?", "Queue up properly next time.", "Yes dear, yes."],
+  },
+};
+
+function pickNpcInteractionResponse(target, option, delta) {
+  const name = player.name || 'Alex';
+  const role = target.role || 'student';
+  let pool;
+
+  // Try role-specific responses first (30% chance)
+  if (game.rng() < 0.3 && NPC_ROLE_RESPONSES[role]) {
+    const rolePool = NPC_ROLE_RESPONSES[role];
+    if (delta >= 4) pool = rolePool.positive;
+    else if (delta <= -4) pool = rolePool.negative;
+    else pool = rolePool.neutral;
+  } else {
+    // Generic varied responses
+    if (delta >= 4) pool = NPC_POSITIVE_RESPONSES;
+    else if (delta <= -4) pool = NPC_NEGATIVE_RESPONSES;
+    else pool = NPC_NEUTRAL_RESPONSES;
+  }
+
+  const response = pool[Math.floor(game.rng() * pool.length)];
+  return response.replace(/\{name\}/g, name);
+}
+
 function interactionCooldownRemainingHours(target, optionId) {
   if (!target || !optionId) return 0;
   const targetKey = target.name || 'npc';
@@ -14026,6 +14305,8 @@ function openInteractionPanelFor(target) {
           return;
         }
         const line = option.lines[Math.floor(game.rng() * option.lines.length)];
+        // Show player speech bubble first
+        player.speech = { text: line, kind: 'speech', until: performance.now() + 2800 };
         announce(`🗨️ ${player.name} to ${target.name}: "${line}"`);
         game.lastInteractionAtByTarget[target.name] = game.lastInteractionAtByTarget[target.name] || {};
         game.lastInteractionAtByTarget[target.name][option.id] = game.timeMinutes;
@@ -14071,9 +14352,15 @@ function openInteractionPanelFor(target) {
           const delta = calculateStudentInteractionDelta(target, option);
           adjustEricRelationship(target, delta, `social:${option.id}`);
           target.ericReputation = Math.max(-100, Math.min(100, (target.ericReputation || 0) + delta));
-          if (delta >= 4) announce(`🙂 ${target.name}: "Fair play, ${player.name}."`, { source: target, range: 8, force: true });
-          else if (delta <= -4) announce(`😠 ${target.name}: "Not cool, ${player.name}."`, { source: target, range: 8, force: true });
-          else announce(`😐 ${target.name}: "Hmm... maybe."`, { source: target, range: 8, force: true });
+          // Delayed NPC response with speech bubble and variety
+          const npcResponse = pickNpcInteractionResponse(target, option, delta);
+          const npcTarget = target;
+          setTimeout(() => {
+            npcTarget.speech = { text: npcResponse, kind: 'speech', until: performance.now() + 3000 };
+            if (delta >= 4) announce(`🙂 ${npcTarget.name}: "${npcResponse}"`, { source: npcTarget, range: 8, force: true });
+            else if (delta <= -4) announce(`😠 ${npcTarget.name}: "${npcResponse}"`, { source: npcTarget, range: 8, force: true });
+            else announce(`😐 ${npcTarget.name}: "${npcResponse}"`, { source: npcTarget, range: 8, force: true });
+          }, 1500 + Math.floor(game.rng() * 1000));
         }
 
         openInteractionPanelFor(target);
@@ -14296,6 +14583,25 @@ function handleCanvasActivation(pointer, options = {}) {
   const allowClickMove = touchIntent || !touchNavigationActive();
   const clicked = findHoveredEntityAtScreen(pointer.mouseX, pointer.mouseY);
   if (!clicked) {
+    // Check for world interaction targets (lockers, vending machines, seats, collectables, etc.)
+    const worldTarget = findHoveredWorldTargetAtScreen(pointer.mouseX, pointer.mouseY);
+    if (worldTarget?.interactive) {
+      const resolved = resolveWorldInteractionTarget(worldTarget) || worldTarget;
+      const actions = worldInteractionOptionsFor(resolved);
+      if (actions.length === 1) {
+        // Single action: auto-execute (walk to it and use it)
+        clearPlayerPendingAction();
+        closeInteractionPanel();
+        queueOrRunWorldInteraction(resolved, actions[0]);
+        return;
+      }
+      if (actions.length > 1) {
+        // Multiple actions: open the interaction panel
+        clearPlayerPendingAction();
+        openWorldInteractionPanel(resolved);
+        return;
+      }
+    }
     clearPlayerPendingAction();
     closeInteractionPanel();
     if (allowClickMove) setPlayerTapTarget(screenToWorld(pointer.mouseX, pointer.mouseY));
@@ -14636,6 +14942,7 @@ function updateFrame(now, dt) {
     maybeCompleteEndDayByDespawn();
     checkSchoolExit();
     updateBladder(dt);
+    updateTruancy(dt);
     maybeShameEric(now);
     updateHygieneSocialAura(now);
     if (game.headmasterDetentionUntil > 0 && now >= game.headmasterDetentionUntil && !game.headmasterDismissAnnounced) {
