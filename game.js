@@ -360,7 +360,7 @@ function playerFacingText(text) {
 
 const rooms = [
   // Upper level classrooms + corridor.
-  { name: 'Upper Corridor', x: 4, y: 15, w: 160, h: 4, floor: 'upper', type: 'corridor' },
+  { name: 'Upper Corridor', x: 4, y: 15, w: 164, h: 4, floor: 'upper', type: 'corridor' },
   { name: 'Science Lab', x: 8, y: 4, w: 24, h: 11, floor: 'upper', type: 'classroom' },
   { name: 'Upper Common', x: 38, y: 4, w: 24, h: 11, floor: 'upper', type: 'classroom' },
   { name: 'Physics Lab', x: 68, y: 4, w: 24, h: 11, floor: 'upper', type: 'classroom' },
@@ -368,7 +368,7 @@ const rooms = [
   { name: 'Computer Room', x: 124, y: 4, w: 36, h: 11, floor: 'upper', type: 'classroom' },
 
   // Middle level corridors and rooms.
-  { name: 'Middle Corridor', x: 4, y: 50, w: 160, h: 4, floor: 'middle', type: 'corridor' },
+  { name: 'Middle Corridor', x: 4, y: 50, w: 164, h: 4, floor: 'middle', type: 'corridor' },
   { name: 'Maths', x: 8, y: 38, w: 30, h: 12, floor: 'middle', type: 'classroom' },
   { name: 'English', x: 44, y: 38, w: 24, h: 12, floor: 'middle', type: 'classroom' },
   { name: 'Staff Room', x: 74, y: 38, w: 24, h: 12, floor: 'middle', type: 'classroom' },
@@ -377,7 +377,7 @@ const rooms = [
   { name: 'Headmaster Office', x: 161, y: 38, w: 7, h: 12, floor: 'middle', type: 'classroom' },
 
   // Ground level circulation and outside area.
-  { name: 'Ground Corridor', x: 4, y: 76, w: 160, h: 4, floor: 'ground', type: 'corridor' },
+  { name: 'Ground Corridor', x: 4, y: 76, w: 164, h: 4, floor: 'ground', type: 'corridor' },
   { name: 'Reception', x: 8, y: 66, w: 24, h: 10, floor: 'ground', type: 'hall' },
   // Reception-adjacent support spaces now sit in one contiguous block for easier wayfinding.
   { name: 'Toilets', x: 34, y: 66, w: 20, h: 10, floor: 'ground', type: 'hall' },
@@ -396,7 +396,7 @@ const rooms = [
   { name: 'School Gates', x: 148, y: 80, w: 18, h: 28, floor: 'ground', type: 'outdoor' },
 
   // Lower floor (bottom floor) with reception-adjacent spaces.
-  { name: 'Lower Corridor', x: 4, y: 110, w: 160, h: 4, floor: 'lower', type: 'corridor' },
+  { name: 'Lower Corridor', x: 4, y: 110, w: 164, h: 4, floor: 'lower', type: 'corridor' },
   { name: 'Boiler Room', x: 8, y: 114, w: 24, h: 14, floor: 'lower', type: 'hall' },
   { name: 'Storage', x: 38, y: 114, w: 24, h: 14, floor: 'lower', type: 'hall' },
   { name: 'Maintenance', x: 68, y: 114, w: 24, h: 14, floor: 'lower', type: 'hall' },
@@ -5179,8 +5179,7 @@ function setPlayerTapTarget(destination) {
   const playerRoom = roomAtPosition(player);
 
   // When clicking from inside a classroom to outside (e.g. corridor),
-  // use the destination room center and door points as candidates so the
-  // walkable point resolves in the target area, not inside current room walls.
+  // route through the exit door first rather than walking at the wall.
   const candidates = [];
   if (destRoom) candidates.push(roomCenter(destRoom.name));
   if (playerRoom && destRoom && playerRoom.name !== destRoom.name) {
@@ -5188,6 +5187,17 @@ function setPlayerTapTarget(destination) {
     if (exitDoor) candidates.push({ x: exitDoor.x, y: exitDoor.exteriorY });
     const entryDoor = roomDoors.find((d) => d.room === destRoom.name);
     if (entryDoor) candidates.push({ x: entryDoor.x, y: entryDoor.interiorY });
+  }
+  // If player is in a non-corridor room clicking a corridor or different room,
+  // set the exit door as the immediate target so routeWaypoint picks it up.
+  if (playerRoom && playerRoom.type !== 'corridor' && playerRoom.type !== 'outdoor') {
+    if (!destRoom || destRoom.name !== playerRoom.name) {
+      const exitDoor = roomDoors.find((d) => d.room === playerRoom.name);
+      if (exitDoor) {
+        // Target the corridor outside the door first — routeWaypoint handles the rest.
+        candidates.unshift({ x: exitDoor.x, y: exitDoor.exteriorY });
+      }
+    }
   }
 
   const safeTarget = nearestWalkablePoint(destination, candidates) || destination;
@@ -5850,7 +5860,18 @@ function routeWaypoint(entity, destination) {
   // causes corner-sliding and apparent "stuck in wall" behaviour.
   if (currentRoom && currentRoom.type !== 'corridor' && currentRoom.type !== 'outdoor') {
     const exitDoor = roomDoorway(currentRoom);
-    if (exitDoor && distance(entity, exitDoor) > 0.95) return exitDoor;
+    if (exitDoor && distance(entity, exitDoor) > 0.7) return exitDoor;
+    // If very close to exit door, snap through to corridor side
+    if (exitDoor && distance(entity, exitDoor) <= 0.7) {
+      const floorCorridorY = corridorCenterlineY(currentRoom.floor);
+      return { x: exitDoor.x, y: floorCorridorY };
+    }
+  }
+
+  // If entity is not in any room (e.g. stuck in gap between rooms), guide toward nearest corridor
+  if (!currentRoom) {
+    const floor = entityFloor(entity);
+    return { x: entity.x, y: corridorCenterlineY(floor) };
   }
 
   const currentFloor = entityFloor(entity);
@@ -6463,8 +6484,6 @@ function updateTruancy(dt) {
       // Move headmaster toward player at chase speed
       if (dist > 0.5) {
         const chaseSpeed = 3.5 * game.truancyChaseSpeed;
-        const moveX = (dx / dist) * chaseSpeed * dtSec;
-        const moveY = (dy / dist) * chaseSpeed * dtSec;
         // Route through waypoints for cross-room/floor navigation
         const waypoint = routeWaypoint(headmaster, player);
         const wdx = waypoint.x - headmaster.x;
@@ -6474,9 +6493,45 @@ function updateTruancy(dt) {
         const finalMoveY = (wdy / wlen) * chaseSpeed * dtSec;
         moveEntityWithCollision(headmaster, finalMoveX, finalMoveY);
         headmaster.facing = wdx >= 0 ? 1 : -1;
+
+        // If headmaster isn't making progress, try using nearby doors
+        const hmDoor = nearestDoor(headmaster, 2.0);
+        if (hmDoor) {
+          const hmRoom = entityRoom(headmaster);
+          const playerRoom = entityRoom(player);
+          // If headmaster is inside a room and player is outside, exit through door
+          if (hmRoom === hmDoor.room && hmRoom !== playerRoom) {
+            useDoor(headmaster, hmDoor);
+          }
+        }
         // Headmaster uses stairs if needed
         const desiredFloor = roomAtPosition(player)?.floor || entityFloor(headmaster);
         tryUseStairs(headmaster, desiredFloor);
+
+        // Anti-stuck: if headmaster barely moved, allow phase-through or teleport
+        if (!headmaster._chaseLastX) headmaster._chaseLastX = headmaster.x;
+        if (!headmaster._chaseLastY) headmaster._chaseLastY = headmaster.y;
+        if (!headmaster._chaseStuckMs) headmaster._chaseStuckMs = 0;
+        const chaseMoved = Math.hypot(headmaster.x - headmaster._chaseLastX, headmaster.y - headmaster._chaseLastY);
+        if (chaseMoved < 0.03) {
+          headmaster._chaseStuckMs += dt;
+          if (headmaster._chaseStuckMs > 1500) {
+            // Teleport headmaster to nearest walkable point toward player
+            const exitPoint = nearestWalkablePoint(waypoint, [
+              { x: headmaster.x, y: waypoint.y },
+              { x: waypoint.x, y: headmaster.y },
+            ]);
+            if (exitPoint) {
+              headmaster.x = exitPoint.x;
+              headmaster.y = exitPoint.y;
+            }
+            headmaster._chaseStuckMs = 0;
+          }
+        } else {
+          headmaster._chaseStuckMs = 0;
+        }
+        headmaster._chaseLastX = headmaster.x;
+        headmaster._chaseLastY = headmaster.y;
       }
     }
   }
@@ -7499,7 +7554,8 @@ function isInDoorOpening(room, x, y) {
   const openingEdgeY = Math.abs(room.y - corridorY) <= Math.abs((room.y + room.h) - corridorY)
     ? room.y
     : room.y + room.h;
-  return Math.abs(x - doorway.x) <= 1.8 && Math.abs(y - openingEdgeY) <= 1.1;
+  // Wider door opening (3.2 horizontal, 1.6 vertical) prevents getting stuck at room edges.
+  return Math.abs(x - doorway.x) <= 3.2 && Math.abs(y - openingEdgeY) <= 1.6;
 }
 
 function isWalkablePoint(x, y) {
@@ -7571,8 +7627,8 @@ function recoverPlayerIfWallStuck(dt) {
   game.playerLastX = player.x;
   game.playerLastY = player.y;
 
-  // Faster rescue in auto mode (500ms) since the player isn't manually controlling
-  const threshold = game.autoMode ? 500 : 800;
+  // Faster rescue: 400ms auto, 600ms manual (was 500/800)
+  const threshold = game.autoMode ? 400 : 600;
   if (game.playerStuckMs < threshold) return;
 
   const current = schedule[game.periodIndex];
@@ -11264,7 +11320,7 @@ function updateAI(dt) {
     }
 
     // NPCs also use doorway transitions instead of clipping through room walls.
-    const npcDoor = nearestDoor(entity, 1.3);
+    const npcDoor = nearestDoor(entity, 1.8);
     if (npcDoor) {
       const targetRoom = roomAtPosition(entity.target);
       const currentlyInside = entityRoom(entity) === npcDoor.room;
@@ -11440,7 +11496,8 @@ function updateAI(dt) {
     }
 
     // If routing fails for too long, teleport straight to destination.
-    const stuckRescueThreshold = offWalkable ? 1.2 : 3.2;
+    // Shorter thresholds (0.8/2.2) reduce visible stuck time.
+    const stuckRescueThreshold = offWalkable ? 0.8 : 2.2;
     if (entity.stuckSeconds > stuckRescueThreshold) {
       const rescueTarget = entity.role === 'teacher'
         ? (getTeacherSeatPosition(expectedRoom) || entity.target)
