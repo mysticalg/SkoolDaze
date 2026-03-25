@@ -814,6 +814,60 @@ dialog h3 {
   font-size: 0.72rem;
 }
 
+/* Vending Machine Shop Panel */
+.vending-panel {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 320px;
+  max-width: calc(100% - 1.2rem);
+  max-height: calc(100% - 1.6rem);
+  overflow: auto;
+  border: 2px solid #5ac85a;
+  border-radius: 12px;
+  background: rgba(7, 14, 25, 0.97);
+  padding: 0.6rem;
+  z-index: 50;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+.vending-panel[hidden] { display: none; }
+.vending-panel header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.4rem; margin-bottom: 0.3rem;
+}
+.vending-panel h3 { margin: 0; font-size: 0.85rem; color: #d8efff; }
+.vending-panel button { background: #102640; color: #d8efff; border: 1px solid #38648a; border-radius: 7px; cursor: pointer; }
+.vending-money {
+  font-size: 0.75rem; color: #ffd166; padding: 0.25rem 0.4rem;
+  background: rgba(255, 209, 102, 0.08); border-radius: 6px; margin-bottom: 0.4rem;
+}
+.vending-items {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.vending-item {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.4rem 0.5rem; border: 1px solid #2a4a6a; border-radius: 8px;
+  background: rgba(16, 38, 64, 0.6); cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.vending-item:hover { border-color: #5ac85a; background: rgba(30, 60, 40, 0.5); }
+.vending-item:active { background: rgba(50, 90, 60, 0.5); }
+.vending-item.too-expensive { opacity: 0.4; cursor: not-allowed; }
+.vending-item .vi-icon { font-size: 1.4rem; flex-shrink: 0; width: 28px; text-align: center; }
+.vending-item .vi-info { flex: 1; min-width: 0; }
+.vending-item .vi-name { font-size: 0.75rem; font-weight: bold; color: #d8efff; }
+.vending-item .vi-desc { font-size: 0.6rem; color: #8ab8d8; }
+.vending-item .vi-price {
+  font-size: 0.75rem; font-weight: bold; color: #5ac85a;
+  flex-shrink: 0; padding: 0.2rem 0.4rem;
+  background: rgba(90, 200, 90, 0.1); border-radius: 5px;
+}
+.vending-item.too-expensive .vi-price { color: #ff6666; }
+.vending-hint { font-size: 0.6rem; color: #6a8a6a; margin: 0.4rem 0 0; text-align: center; }
+
+body.compact-mobile .vending-panel { width: 280px; }
+
 /* Locker Inventory Panel */
 .locker-panel {
   position: absolute;

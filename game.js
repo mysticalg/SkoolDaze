@@ -43,6 +43,11 @@ const lockerPanelTitleEl = document.getElementById('lockerPanelTitle');
 const lockerStorageTitleEl = document.getElementById('lockerStorageTitle');
 const lockerSlotsEl = document.getElementById('lockerSlots');
 const pocketSlotsEl = document.getElementById('pocketSlots');
+const vendingPanelEl = document.getElementById('vendingPanel');
+const vendingPanelTitleEl = document.getElementById('vendingPanelTitle');
+const vendingMoneyEl = document.getElementById('vendingMoney');
+const vendingItemsEl = document.getElementById('vendingItems');
+const closeVendingPanelBtnEl = document.getElementById('closeVendingPanelBtn');
 const closeLockerPanelBtn = document.getElementById('closeLockerPanel');
 const inventoryPanelEl = document.getElementById('inventoryPanel');
 const inventoryPanelTitleEl = document.getElementById('inventoryPanelTitle');
@@ -8537,6 +8542,24 @@ function standPlayerUp(reason = `${player.name} stands up.`) {
   return true;
 }
 
+// Vending machine product catalog.
+const VENDING_CATALOG = [
+  { name: 'Can of Cola',       icon: '🥤', price: 1, energy: 8,  bladder: 14, desc: '+8 energy, +14 bladder' },
+  { name: 'Lemonade',          icon: '🍋', price: 1, energy: 6,  bladder: 12, desc: '+6 energy, +12 bladder' },
+  { name: 'Orange Juice',      icon: '🧃', price: 2, energy: 10, bladder: 16, desc: '+10 energy, +16 bladder' },
+  { name: 'Water Bottle',      icon: '💧', price: 1, energy: 4,  bladder: 10, desc: '+4 energy, +10 bladder' },
+  { name: 'Energy Drink',      icon: '⚡', price: 3, energy: 20, bladder: 22, desc: '+20 energy, +22 bladder' },
+  { name: 'Chocolate Bar',     icon: '🍫', price: 1, energy: 12, bladder: 0,  desc: '+12 energy' },
+  { name: 'Crisps',            icon: '🥨', price: 1, energy: 10, bladder: 0,  desc: '+10 energy' },
+  { name: 'Biscuit Pack',      icon: '🍪', price: 1, energy: 8,  bladder: 0,  desc: '+8 energy' },
+  { name: 'Sandwich',          icon: '🥪', price: 3, energy: 22, bladder: 0,  desc: '+22 energy' },
+  { name: 'Fruit Pot',         icon: '🍇', price: 2, energy: 14, bladder: 2,  desc: '+14 energy, +2 bladder' },
+  { name: 'Sweets Bag',        icon: '🍬', price: 1, energy: 6,  bladder: 0,  desc: '+6 energy' },
+  { name: 'Protein Bar',       icon: '💪', price: 2, energy: 18, bladder: 0,  desc: '+18 energy' },
+];
+
+let openVendingMachineRef = null;
+
 function playerUseVendingMachine(machine) {
   if (!machine) {
     announce('🥤 Find a vending machine first (marked VM).');
@@ -8550,20 +8573,92 @@ function playerUseVendingMachine(machine) {
     announce('🧻 Eric is already carrying rubbish. Use a bin first.');
     return false;
   }
-  if (game.rng() < 0.5) {
-    game.drinksToday += 1;
-    game.energy = Math.min(100, game.energy + 9);
-    game.bladder = Math.min(100, game.bladder + 16);
-    announce('🥤 Eric bought a drink. Energy up, bladder rising.');
-  } else {
-    game.energy = Math.min(100, game.energy + 14);
-    announce('🍫 Eric bought a snack. Energy boosted.');
+  openVendingPanel(machine);
+  playSfx('interact');
+  return true;
+}
+
+function openVendingPanel(machine) {
+  if (!vendingPanelEl) return;
+  openVendingMachineRef = machine;
+  closeInteractionPanel();
+  closeLockerInventoryPanel();
+  closeInventoryPanel();
+  closeTradePanel();
+  vendingPanelTitleEl.textContent = `🥤 ${machine.label || 'Vending Machine'}`;
+  vendingPanelEl.hidden = false;
+  renderVendingPanel();
+}
+
+function closeVendingPanel() {
+  if (vendingPanelEl) vendingPanelEl.hidden = true;
+  openVendingMachineRef = null;
+}
+
+function renderVendingPanel() {
+  if (!vendingItemsEl) return;
+  const money = player.money || 0;
+  if (vendingMoneyEl) vendingMoneyEl.textContent = `💷 Your money: £${money}`;
+  vendingItemsEl.innerHTML = '';
+
+  for (const product of VENDING_CATALOG) {
+    const canAfford = money >= product.price;
+    const item = document.createElement('div');
+    item.className = 'vending-item' + (canAfford ? '' : ' too-expensive');
+    item.title = canAfford ? `Buy ${product.name} for £${product.price}` : `Not enough money (need £${product.price})`;
+
+    item.innerHTML = `
+      <span class="vi-icon">${product.icon}</span>
+      <div class="vi-info">
+        <div class="vi-name">${product.name}</div>
+        <div class="vi-desc">${product.desc}</div>
+      </div>
+      <span class="vi-price">£${product.price}</span>
+    `;
+
+    if (canAfford) {
+      item.addEventListener('click', () => {
+        buyVendingProduct(product);
+      });
+    }
+    vendingItemsEl.appendChild(item);
   }
+}
+
+function buyVendingProduct(product) {
+  if ((player.money || 0) < product.price) {
+    announce('💷 Not enough money!');
+    return;
+  }
+  if (game.playerCarryingTrash) {
+    announce('🧻 Already carrying rubbish. Use a bin first.');
+    closeVendingPanel();
+    return;
+  }
+
+  player.money -= product.price;
+  game.energy = Math.min(100, game.energy + product.energy);
+  if (product.bladder > 0) {
+    game.bladder = Math.min(100, game.bladder + product.bladder);
+  }
+  if (product.bladder > 0) {
+    game.drinksToday += 1;
+  }
+
   energyEl.textContent = `⚡ Energy: ${Math.round(game.energy)}`;
   updateBladderHud();
   game.playerCarryingTrash = true;
   playSfx('interact');
-  return true;
+
+  announce(`${product.icon} Eric bought ${product.name} for £${product.price}. ${product.desc}.`);
+
+  // Re-render to update money and affordability
+  renderVendingPanel();
+
+  // Close after purchase since carrying trash now
+  setTimeout(() => {
+    closeVendingPanel();
+  }, 600);
 }
 
 function playerTakeLunchAtService(target) {
@@ -15470,6 +15565,10 @@ function updateFrame(now, dt) {
     if (openLockerRef && distance(player, openLockerRef) >= 3.0) {
       closeLockerInventoryPanel();
     }
+    // Auto-close vending panel if player walks away.
+    if (openVendingMachineRef && distance(player, openVendingMachineRef) >= 3.5) {
+      closeVendingPanel();
+    }
 
     // Update animation time for all entities so movement reads like retro sprites.
     for (const entity of game.entities) {
@@ -15889,6 +15988,11 @@ if (tradeMoneyInputEl) {
     updateTradeButton();
   };
 }
+if (closeVendingPanelBtnEl) {
+  closeVendingPanelBtnEl.onclick = () => {
+    closeVendingPanel();
+  };
+}
 
 function closeTransientMenus() {
   // Keep floating overlays in sync with browser chrome focus changes so
@@ -15898,6 +16002,7 @@ function closeTransientMenus() {
   closeLockerInventoryPanel();
   closeInventoryPanel();
   closeTradePanel();
+  closeVendingPanel();
   closeSchoolMap();
   if (entityTooltipEl) entityTooltipEl.hidden = true;
 
